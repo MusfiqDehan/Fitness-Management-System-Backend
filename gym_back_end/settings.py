@@ -25,8 +25,7 @@ SECRET_KEY = 'django-insecure-s5gp6lsw-mzturp2^ku5$th^q#f0-^dk7za2a#u^)a)62y@8=j
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = ["185.202.223.12", "localhost", "127.0.0.1", "https://gym-app-geekssort.vercel.app/"]
-
+ALLOWED_HOSTS = ['*']
 
 # Application definition
 
