@@ -18,4 +18,7 @@ urlpatterns = [
     path('api/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 ]
 
+urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+# remove the DEBUG check for media, optional now
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
