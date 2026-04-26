@@ -5,14 +5,20 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .models import User, StudentProfile, InstructorProfile
 from .serializers import (
     RegisterSerializer,
     StudentProfileSerializer,
     InstructorProfileSerializer,
-    UserSerializer
+    UserSerializer,
+    EmailOrPhoneTokenObtainPairSerializer,
 )
+
+
+class EmailOrPhoneTokenObtainPairView(TokenObtainPairView):
+    serializer_class = EmailOrPhoneTokenObtainPairSerializer
 
 
 # -------------------------------
@@ -68,13 +74,26 @@ class InstructorProfileCreateView(generics.CreateAPIView):
 # -------------------------------
 # Current Logged-in User
 # -------------------------------
-@api_view(['GET'])
+@api_view(['GET', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def current_user(request):
     """
     Returns the currently logged-in user with role and full_name (from profile if exists)
     """
     user = request.user
+
+    if request.method == 'PATCH':
+        # Allow limited self-service updates on core user fields.
+        allowed_fields = ['email', 'phone']
+        updated = False
+
+        for field in allowed_fields:
+            if field in request.data:
+                setattr(user, field, request.data.get(field))
+                updated = True
+
+        if updated:
+            user.save(update_fields=allowed_fields)
 
     # Get full name from profile if exists
     full_name = None
