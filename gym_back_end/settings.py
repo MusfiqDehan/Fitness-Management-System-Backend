@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     #third party
     'rest_framework',
     'corsheaders',
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -199,6 +200,7 @@ JAZZMIN_UI_TWEAKS = {
 }
 # REST_FRAMEWORK
 REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     "DEFAULT_AUTHENTICATION_CLASSES": [
         # "rest_framework.authentication.SessionAuthentication",
         # "rest_framework.authentication.TokenAuthentication",
@@ -222,3 +224,16 @@ SIMPLE_JWT = {
 }
 # user model
 AUTH_USER_MODEL = 'accounts.User'
+
+# drf-spectacular settings
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Gym Management System API',
+    'DESCRIPTION': 'API documentation for the GeeksSort Gym Management System',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SECURITY': [{'bearerAuth': []}],
+    'SWAGGER_UI_SETTINGS': {
+        'persistAuthorization': True,
+    },
+}
