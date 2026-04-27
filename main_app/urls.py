@@ -7,18 +7,22 @@ from .views import (
     ScheduleListCreateView,
     GymClassListCreateView,
     GymClassDetailView,
-    PublicBlogListView, 
+    PublicBlogListView,
     PublicBlogDetailView,
     BlogCategoryViewSet,
     ContactCreateAPIView,
     FitHiveSupportCreateAPIView,
-    PublicPackageViewSet
+    PublicPackageViewSet,
+    PublicSiteBannerListView,
+    PublicPromoBannerListView,
+    PublicSiteSettingsView,
+    PublicPageContentListView,
 )
 
 router = DefaultRouter()
 router.register('banners', BannerViewSet, basename='banner')
 router.register(r'gym-club', GymClubViewSet, basename='gym-club')
-router.register('blog-categories', BlogCategoryViewSet, basename='blog-category')  # 
+router.register('blog-categories', BlogCategoryViewSet, basename='blog-category')
 router.register('packages', PublicPackageViewSet, basename='public-packages')
 
 urlpatterns = [
@@ -31,4 +35,9 @@ urlpatterns = [
     path('blogs/<slug:slug>/', PublicBlogDetailView.as_view()),
     path("contact/", ContactCreateAPIView.as_view(), name="contact-create"),
     path("fithive-support/", FitHiveSupportCreateAPIView.as_view(), name="fithive-support-create"),
+    # Public read-only endpoints (no auth required)
+    path('site-banners/', PublicSiteBannerListView.as_view(), name='public-site-banners'),
+    path('promo-banners/', PublicPromoBannerListView.as_view(), name='public-promo-banners'),
+    path('site-settings/', PublicSiteSettingsView.as_view(), name='public-site-settings'),
+    path('page-contents/', PublicPageContentListView.as_view(), name='public-page-contents'),
 ]
