@@ -1,4 +1,5 @@
 from rest_framework.routers import DefaultRouter
+from django.urls import path
 from .views import (
     DashboardBlogViewSet, 
     DashboardBlogCategoryViewSet, 
@@ -12,7 +13,12 @@ from .views import (
     PackageDashboardViewSet,
     MemberDashboardViewSet,
     PaymentDashboardViewSet,
-    AttendanceDashboardViewSet
+    AttendanceDashboardViewSet,
+    SiteBannerViewSet,
+    PromoBannerViewSet,
+    SiteSettingsAPIView,
+    PageContentViewSet,
+    FileUploadView,
 )
 from accounts.views import InstructorViewSet
 
@@ -31,5 +37,11 @@ router.register(r'members', MemberDashboardViewSet, basename='dashboard-members'
 router.register(r'member-packages', PackageDashboardViewSet, basename='member-packages')
 router.register(r'payments', PaymentDashboardViewSet, basename='dashboard-payments')
 router.register(r'attendance', AttendanceDashboardViewSet, basename='dashboard-attendance')
+router.register(r'site-banners', SiteBannerViewSet, basename='site-banners')
+router.register(r'promo-banners', PromoBannerViewSet, basename='promo-banners')
+router.register(r'page-content', PageContentViewSet, basename='page-content')
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path('site-settings/', SiteSettingsAPIView.as_view(), name='site-settings'),
+    path('upload/', FileUploadView.as_view(), name='file-upload'),
+]
