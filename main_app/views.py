@@ -13,6 +13,7 @@ from .models import(
     GymClass,
     Category,
     ClassSchedule,
+    GymSchedule,
     Blog,
     BlogCategory,
     Contact,
@@ -30,6 +31,7 @@ from .serializers import (
     ClassBookingSerializer,
     CategorySerializer,
     ClassScheduleSerializer,
+    GymScheduleSerializer,
     BlogListSerializer,
     BlogDetailSerializer,
     BlogCategorySerializer,
@@ -159,3 +161,12 @@ class PublicPageContentListView(generics.ListAPIView):
 
     def get_queryset(self):
         return PageContent.objects.filter(is_active=True).order_by('page_name')
+
+
+class PublicGymScheduleListView(generics.ListAPIView):
+    """GET /api/gym-schedules/ — active gym schedules for the homepage."""
+    serializer_class = GymScheduleSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        return GymSchedule.objects.filter(is_active=True).order_by('display_order', 'day', 'time')
