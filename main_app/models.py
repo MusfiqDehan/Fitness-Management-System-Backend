@@ -504,3 +504,53 @@ class PageContent(models.Model):
 
     def __str__(self):
         return self.page_name
+
+
+# ---- Gym Schedule Manager ----
+
+class GymSchedule(models.Model):
+    """
+    Represents a gym class/session schedule entry manageable from the admin dashboard.
+    Displayed dynamically on the homepage ScheduleSection.
+    """
+    DAYS_OF_WEEK = [
+        ("Monday", "Monday"),
+        ("Tuesday", "Tuesday"),
+        ("Wednesday", "Wednesday"),
+        ("Thursday", "Thursday"),
+        ("Friday", "Friday"),
+        ("Saturday", "Saturday"),
+        ("Sunday", "Sunday"),
+    ]
+
+    DIFFICULTY_CHOICES = [
+        ("All Levels", "All Levels"),
+        ("Beginner", "Beginner"),
+        ("Intermediate", "Intermediate"),
+        ("Advanced", "Advanced"),
+    ]
+
+    class_name = models.CharField(max_length=200)
+    instructor = models.CharField(max_length=200, blank=True)
+    day = models.CharField(max_length=10, choices=DAYS_OF_WEEK)
+    time = models.TimeField(help_text="Start time, e.g. 06:30")
+    duration_minutes = models.PositiveIntegerField(null=True, blank=True)
+    location = models.CharField(max_length=200, blank=True)
+    capacity = models.PositiveIntegerField(null=True, blank=True)
+    difficulty_level = models.CharField(
+        max_length=20,
+        choices=DIFFICULTY_CHOICES,
+        default="All Levels"
+    )
+    category = models.CharField(max_length=100, blank=True)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['display_order', 'day', 'time']
+
+    def __str__(self):
+        return f"{self.class_name} - {self.day} {self.time.strftime('%H:%M')}"
