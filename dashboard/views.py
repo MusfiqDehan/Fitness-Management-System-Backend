@@ -15,6 +15,7 @@ from main_app.models import (
     PromoBanner,
     SiteSettings,
     PageContent,
+    GymSchedule,
 )
 from main_app.serializers import (
     BlogDetailSerializer, 
@@ -31,6 +32,7 @@ from main_app.serializers import (
     PromoBannerSerializer,
     SiteSettingsSerializer,
     PageContentSerializer,
+    GymScheduleSerializer,
 )
 from membership_management.serializers import (
     MemberSerializer,
@@ -527,3 +529,31 @@ class PageContentViewSet(ModelViewSet):
     filterset_fields = ['page_name', 'is_active']
     search_fields = ['page_name', 'title', 'subtitle']
     ordering = ['-check_in_time']
+
+
+# -------------------------------------------------------
+# Gym Schedule (Class Schedule Manager)
+# -------------------------------------------------------
+
+class GymScheduleDashboardViewSet(ModelViewSet):
+    """
+    CRUD ViewSet for GymSchedule — admin-managed class/session schedules
+    that are displayed dynamically on the homepage ScheduleSection.
+
+    Endpoints (all under /api/dashboard/gym-schedules/):
+      GET    /            – list all schedules
+      POST   /            – create a new schedule entry
+      GET    /{id}/       – retrieve a single entry
+      PUT    /{id}/       – full update
+      PATCH  /{id}/       – partial update (e.g. toggle is_active)
+      DELETE /{id}/       – delete
+
+    Permission: admin/staff only.
+    """
+
+    queryset = GymSchedule.objects.all().order_by('display_order', 'day', 'time')
+    serializer_class = GymScheduleSerializer
+    permission_classes = [IsAdminStaffOrSuperuser]
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ['day', 'is_active', 'difficulty_level']
+    search_fields = ['class_name', 'instructor', 'location', 'category']

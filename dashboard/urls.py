@@ -19,6 +19,7 @@ from .views import (
     SiteSettingsAPIView,
     PageContentViewSet,
     FileUploadView,
+    GymScheduleDashboardViewSet,
 )
 from accounts.views import InstructorViewSet
 
@@ -40,6 +41,7 @@ router.register(r'attendance', AttendanceDashboardViewSet, basename='dashboard-a
 router.register(r'site-banners', SiteBannerViewSet, basename='site-banners')
 router.register(r'promo-banners', PromoBannerViewSet, basename='promo-banners')
 router.register(r'page-content', PageContentViewSet, basename='page-content')
+router.register(r'gym-schedules', GymScheduleDashboardViewSet, basename='gym-schedules')
 
 urlpatterns = router.urls + [
     path('site-settings/', SiteSettingsAPIView.as_view(), name='site-settings'),
