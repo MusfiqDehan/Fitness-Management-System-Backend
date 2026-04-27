@@ -109,7 +109,11 @@ def current_user(request):
         "email": user.email,
         "phone": user.phone,
         "role": user.role,
-        "full_name": full_name or user.email
+        "full_name": full_name or user.email,
+        "is_staff": user.is_staff,
+        "is_superuser": user.is_superuser,
+        # Optional permission list; can be extended later with a DB-backed role-permission model.
+        "permissions": []
     })
 
 class InstructorViewSet(ReadOnlyModelViewSet):
