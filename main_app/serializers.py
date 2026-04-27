@@ -19,6 +19,7 @@ from .models import (
     PromoBanner,
     SiteSettings,
     PageContent,
+    GymSchedule,
 )
 from django.utils import timezone
 from accounts.models import InstructorProfile
@@ -147,6 +148,20 @@ class ClassScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ClassSchedule
         fields = ["id", "day", "time"]
+
+
+class GymScheduleSerializer(serializers.ModelSerializer):
+    time = serializers.TimeField(format='%H:%M', input_formats=['%H:%M', '%H:%M:%S'])
+
+    class Meta:
+        model = GymSchedule
+        fields = [
+            'id', 'class_name', 'instructor', 'day', 'time',
+            'duration_minutes', 'location', 'capacity',
+            'difficulty_level', 'category', 'description',
+            'is_active', 'display_order', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
 
 
 class GymClassSerializer(serializers.ModelSerializer):
