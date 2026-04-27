@@ -26,15 +26,9 @@ urlpatterns = [
 ]
 
 urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
-# remove the DEBUG check for media, optional now
-# urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-# Dynamic mapping for all top-level media folders
-media_folders = ['gym_clubs', 'blogs', 'banners','gym_classes']
 
-for folder in media_folders:
-    urlpatterns += [
-        re_path(rf'^{folder}/(?P<path>.*)$', serve, {
-            'document_root': settings.STATIC_ROOT / folder,
-        })
-    ]
+# Serve media files (works even when DEBUG=False for local development)
+urlpatterns += [
+    re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+]
 
