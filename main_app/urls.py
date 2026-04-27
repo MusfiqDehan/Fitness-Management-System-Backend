@@ -17,6 +17,7 @@ from .views import (
     PublicPromoBannerListView,
     PublicSiteSettingsView,
     PublicPageContentListView,
+    PublicGymScheduleListView,
 )
 
 router = DefaultRouter()
@@ -40,4 +41,5 @@ urlpatterns = [
     path('promo-banners/', PublicPromoBannerListView.as_view(), name='public-promo-banners'),
     path('site-settings/', PublicSiteSettingsView.as_view(), name='public-site-settings'),
     path('page-contents/', PublicPageContentListView.as_view(), name='public-page-contents'),
+    path('gym-schedules/', PublicGymScheduleListView.as_view(), name='public-gym-schedules'),
 ]
