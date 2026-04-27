@@ -11,7 +11,10 @@ from main_app.models import (
     FitHiveSupport,
     Package,
     GymClub,
-    
+    SiteBanner,
+    PromoBanner,
+    SiteSettings,
+    PageContent,
 )
 from main_app.serializers import (
     BlogDetailSerializer, 
@@ -24,7 +27,10 @@ from main_app.serializers import (
     FitHiveSupportDashboardSerializer,
     PackageSerializer,
     GymClubSerializer,
-    
+    SiteBannerSerializer,
+    PromoBannerSerializer,
+    SiteSettingsSerializer,
+    PageContentSerializer,
 )
 from membership_management.serializers import (
     MemberSerializer,
@@ -286,4 +292,238 @@ class AttendanceDashboardViewSet(ModelViewSet):
     filterset_fields = ['entry_method', 'member']
     search_fields = ['member__full_name', 'device_id']
     ordering_fields = ['check_in_time', 'check_out_time', 'member__full_name']
+    ordering = ['-check_in_time']
+
+
+# -------------------------------------------------------
+# File Upload
+# -------------------------------------------------------
+
+import os
+import uuid
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
+from django.conf import settings
+from rest_framework.parsers import MultiPartParser, FormParser
+
+ALLOWED_MIME_TYPES = {
+    # Images
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+    # Videos
+    'video/mp4', 'video/webm', 'video/ogg',
+}
+MAX_UPLOAD_SIZE_MB = 50
+
+
+class FileUploadView(APIView):
+    """
+    POST /api/dashboard/upload/
+
+    Accepts a single file via multipart/form-data (field name: ``file``).
+    Validates MIME type (images and common web video formats) and file size
+    (max 50 MB). Saves the file under MEDIA_ROOT/uploads/ with a UUID-based
+    name to prevent collisions. Returns the publicly accessible URL.
+
+    Permission: admin/staff only.
+    """
+
+    permission_classes = [IsAdminStaffOrSuperuser]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        """
+        Handle file upload and return the resulting media URL.
+
+        Expected form field: ``file``
+        Returns: ``{ "file_url": "<absolute URL>" }``
+        """
+        from rest_framework.response import Response
+        from rest_framework import status
+
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            return Response(
+                {"error": "No file provided. Send a multipart field named 'file'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- MIME type validation ---
+        if uploaded.content_type not in ALLOWED_MIME_TYPES:
+            return Response(
+                {
+                    "error": (
+                        f"Unsupported file type '{uploaded.content_type}'. "
+                        "Allowed: images (jpeg, png, gif, webp, svg) and "
+                        "videos (mp4, webm, ogg)."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- File size validation ---
+        max_bytes = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        if uploaded.size > max_bytes:
+            return Response(
+                {"error": f"File too large. Maximum allowed size is {MAX_UPLOAD_SIZE_MB} MB."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- Generate a unique filename preserving the original extension ---
+        original_ext = os.path.splitext(uploaded.name)[-1].lower()
+        unique_name = f"{uuid.uuid4().hex}{original_ext}"
+        save_path = os.path.join('uploads', unique_name)
+
+        # --- Persist file ---
+        saved_name = default_storage.save(save_path, ContentFile(uploaded.read()))
+
+        # --- Build URL ---
+        # default_storage.url() returns the Cloudinary CDN URL in production
+        # and a relative /media/... path locally. Build absolute for local only.
+        storage_url = default_storage.url(saved_name)
+        if storage_url.startswith('http://') or storage_url.startswith('https://'):
+            # Cloudinary (or any remote storage) already returns a full URL
+            file_url = storage_url
+        else:
+            file_url = request.build_absolute_uri(storage_url)
+
+        return Response({"file_url": file_url}, status=status.HTTP_201_CREATED)
+
+
+# -------------------------------------------------------
+# Site Banner (Hero Banner)
+# -------------------------------------------------------
+
+class SiteBannerViewSet(ModelViewSet):
+    """
+    CRUD ViewSet for SiteBanner (hero / slider banners).
+
+    Endpoints (all under /api/dashboard/site-banners/):
+      GET    /            – list all banners ordered by position
+      POST   /            – create a new banner
+      GET    /{id}/       – retrieve a single banner
+      PUT    /{id}/       – full update
+      PATCH  /{id}/       – partial update (e.g. toggle is_active, reorder)
+      DELETE /{id}/       – delete
+
+    Permission: admin/staff only.
+    """
+
+    queryset = SiteBanner.objects.all().order_by('position', 'created_at')
+    serializer_class = SiteBannerSerializer
+    permission_classes = [IsAdminStaffOrSuperuser]
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ['is_active', 'media_type']
+    search_fields = ['title', 'subtitle']
+
+
+# -------------------------------------------------------
+# Promo Banner (Top Bar / Popup Modal)
+# -------------------------------------------------------
+
+class PromoBannerViewSet(ModelViewSet):
+    """
+    CRUD ViewSet for PromoBanner.
+
+    Banners are grouped by `banner_type` on the frontend:
+      - ``top_bar``     – shown as a sticky announcement bar
+      - ``popup_modal`` – shown as a full-screen or centred overlay
+
+    Endpoints (all under /api/dashboard/promo-banners/):
+      GET    /            – list all promo banners
+      POST   /            – create a new promo banner
+      GET    /{id}/       – retrieve a single promo banner
+      PUT    /{id}/       – full update
+      PATCH  /{id}/       – partial update
+      DELETE /{id}/       – delete
+
+    Permission: admin/staff only.
+    """
+
+    queryset = PromoBanner.objects.all().order_by('-created_at')
+    serializer_class = PromoBannerSerializer
+    permission_classes = [IsAdminStaffOrSuperuser]
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ['banner_type', 'is_active']
+    search_fields = ['link_url']
+
+
+# -------------------------------------------------------
+# Site Settings (Singleton)
+# -------------------------------------------------------
+
+class SiteSettingsAPIView(APIView):
+    """
+    Manage the single SiteSettings record.
+
+    GET  /api/dashboard/site-settings/
+        Returns the settings object if it exists, or HTTP 204 No Content.
+
+    POST /api/dashboard/site-settings/
+        Creates the record on first call; updates it on subsequent calls
+        (upsert / get_or_create pattern). All fields are optional on update.
+
+    Permission: admin/staff only.
+    """
+
+    permission_classes = [IsAdminStaffOrSuperuser]
+
+    def get(self, request):
+        """
+        Return the current site settings, or 204 if none have been saved yet.
+        """
+        from rest_framework.response import Response
+        from rest_framework import status
+
+        instance = SiteSettings.objects.first()
+        if instance is None:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = SiteSettingsSerializer(instance)
+        return Response(serializer.data)
+
+    def post(self, request):
+        """
+        Create or update the singleton site settings record.
+
+        Uses get_or_create so a second POST updates rather than duplicates.
+        """
+        from rest_framework.response import Response
+        from rest_framework import status
+
+        instance, _ = SiteSettings.objects.get_or_create(pk=1)
+        serializer = SiteSettingsSerializer(instance, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# -------------------------------------------------------
+# Page Content (CMS)
+# -------------------------------------------------------
+
+class PageContentViewSet(ModelViewSet):
+    """
+    CRUD ViewSet for PageContent.
+
+    Each record maps to a named site page (e.g. 'Home', 'About').
+    `page_name` is unique – the serializer enforces this including during
+    partial updates.
+
+    Endpoints (all under /api/dashboard/page-content/):
+      GET    /            – list all page content records
+      POST   /            – create content for a new page
+      GET    /{id}/       – retrieve a single page content record
+      PUT    /{id}/       – full update
+      PATCH  /{id}/       – partial update (e.g. toggle is_active)
+      DELETE /{id}/       – delete
+
+    Permission: admin/staff only.
+    """
+
+    queryset = PageContent.objects.all().order_by('page_name')
+    serializer_class = PageContentSerializer
+    permission_classes = [IsAdminStaffOrSuperuser]
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ['page_name', 'is_active']
+    search_fields = ['page_name', 'title', 'subtitle']
     ordering = ['-check_in_time']
