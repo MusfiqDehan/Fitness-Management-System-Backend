@@ -7,6 +7,7 @@ from .models import (
     GymClass, 
     Category, 
     ClassSchedule,
+    GymSchedule,
     Blog,
     BlogCategory,
     Contact,
@@ -254,3 +255,11 @@ class PackageAdmin(admin.ModelAdmin):
     search_fields = ("name", "description")
     ordering = ("display_order", "name")
     inlines = [PackageFeatureInline, PackageAddOnInline]
+
+@admin.register(GymSchedule)
+class GymScheduleAdmin(admin.ModelAdmin):
+    list_display = ('class_name', 'instructor', 'day', 'time', 'duration_minutes', 'location', 'difficulty_level', 'is_active', 'display_order')
+    list_filter = ('day', 'difficulty_level', 'is_active')
+    search_fields = ('class_name', 'instructor', 'location', 'category')
+    ordering = ('display_order', 'day', 'time')
+    list_editable = ('is_active', 'display_order')
