@@ -7,6 +7,13 @@ from rest_framework_simplejwt.settings import api_settings
 from .models import User, StudentProfile, InstructorProfile
 
 
+def is_valid_phone_number(value):
+    import re
+
+    # Accept common local or international digit-only phone formats.
+    return bool(re.match(r'^\+?\d{8,15}$', value or ''))
+
+
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True, required=False)
@@ -35,9 +42,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def validate_phone(self, value):
         if value:
-            # Phone number validation (basic format check)
-            import re
-            if not re.match(r'^\+?[1-9]\d{1,14}$', value):
+            if not is_valid_phone_number(value):
                 raise serializers.ValidationError("Please enter a valid phone number.")
             
             # Check if phone already exists
@@ -180,8 +185,7 @@ class EmailOrPhoneTokenObtainPairSerializer(TokenObtainPairSerializer):
             except DjangoValidationError:
                 raise AuthenticationFailed("Please enter a valid email address.")
         else:
-            # Phone format validation
-            if not re.match(r'^\+?[1-9]\d{1,14}$', identifier):
+            if not is_valid_phone_number(identifier):
                 raise AuthenticationFailed("Please enter a valid phone number.")
 
         # Validate password
