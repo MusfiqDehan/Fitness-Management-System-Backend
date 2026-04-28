@@ -46,6 +46,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     email = models.EmailField(unique=True, null=True, blank=True)
     phone = models.CharField(max_length=15, unique=True, null=True, blank=True)
+    full_name = models.CharField(max_length=100, blank=True, default='')
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
 
     is_active = models.BooleanField(default=True)
