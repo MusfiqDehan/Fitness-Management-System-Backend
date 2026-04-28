@@ -215,10 +215,19 @@ class GymClassSerializer(serializers.ModelSerializer):
 
 class ClassBookingSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source="gym_class.title", read_only=True)
-    instructor = serializers.CharField(source="gym_class.instructor.full_name", read_only=True)
+    instructor = serializers.SerializerMethodField()
     class_duration = serializers.CharField(source="gym_class.class_duration", read_only=True)
-    user_name = serializers.CharField(source="user.full_name", read_only=True)
+    user_name = serializers.SerializerMethodField()
     user_email = serializers.CharField(source="user.email", read_only=True)
+
+    selected_schedule = ClassScheduleSerializer(read_only=True)
+    selected_schedule_id = serializers.PrimaryKeyRelatedField(
+        queryset=ClassSchedule.objects.all(),
+        source="selected_schedule",
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
 
     schedules = serializers.SerializerMethodField()
 
@@ -227,9 +236,25 @@ class ClassBookingSerializer(serializers.ModelSerializer):
         fields = "__all__"
         read_only_fields = ("user", "created_at")
 
+    def get_instructor(self, obj):
+        instructor = getattr(obj.gym_class, 'instructor', None)
+        if instructor is None:
+            return None
+        profile = getattr(instructor, 'instructor_profile', None)
+        if profile:
+            return profile.full_name
+        return instructor.email
+
+    def get_user_name(self, obj):
+        profile = getattr(obj.user, 'student_profile', None)
+        if profile:
+            return profile.full_name
+        return obj.user.email
+
     def get_schedules(self, obj):
         return [
             {
+                "id": schedule.id,
                 "day": schedule.day,
                 "time": schedule.time
             }

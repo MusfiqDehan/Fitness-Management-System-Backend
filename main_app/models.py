@@ -254,6 +254,15 @@ class ClassBooking(models.Model):
         on_delete=models.CASCADE,
         related_name="bookings"
     )
+    selected_schedule = models.ForeignKey(
+        "ClassSchedule",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bookings",
+        help_text="Which schedule slot the user booked"
+    )
+    booking_date = models.DateField(null=True, blank=True, help_text="Computed next occurrence date for the selected schedule")
     phone = models.CharField(max_length=20, blank=True)
     notes = models.TextField(blank=True)
 
