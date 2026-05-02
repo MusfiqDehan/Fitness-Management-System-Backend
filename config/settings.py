@@ -45,6 +45,8 @@ INSTALLED_APPS = [
     'apps.accounts.apps.AccountsConfig',
     'apps.dashboard.apps.DashboardConfig',
     'apps.membership_management.apps.MembershipManagementConfig',
+    'apps.tenancy.apps.TenancyConfig',
+    'apps.cms.apps.CmsConfig',
 
     #third party
     'rest_framework',

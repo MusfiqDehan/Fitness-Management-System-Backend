@@ -16,6 +16,7 @@ urlpatterns = [
     path('api/accounts/', include(('apps.accounts.urls', 'accounts'), namespace='accounts')),
     path('api/dashboard/', include(('apps.dashboard.urls', 'dashboard'), namespace='dashboard')),
     path('api/membership/', include('apps.membership_management.urls')),
+    path('api/tenancy/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy')),
     path('api/login/', EmailOrPhoneTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 
