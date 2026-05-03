@@ -25,7 +25,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik_proxy"
-      - "traefik.http.routers.gym-backend.rule=Host(`your-api-domain.com`)"
+      - "traefik.http.routers.gym-backend.rule=Host(`gym-ms-api.musfiqdehan.com`)"
       - "traefik.http.routers.gym-backend.entrypoints=websecure"
       - "traefik.http.routers.gym-backend.tls=true"
       - "traefik.http.services.gym-backend.loadbalancer.server.port=8021"
