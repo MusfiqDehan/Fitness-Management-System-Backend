@@ -32,7 +32,6 @@ ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
     # external apps
-    'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -166,56 +165,6 @@ else:
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# JAZZMIN_SETTINGS
-
-JAZZMIN_SETTINGS = {
-    "site_title": "GeeksSort Admin",
-    "site_header": "GeeksSort Gym Admin",
-    "site_brand": "GeeksSort",
-    "use_select2": True,
-    # "site_logo": "images/logo.png",
-    # "login_logo": "images/login-logo.png",
-    "welcome_sign": "Welcome to GeeksSort Gym App Dashboard",
-    "copyright": "GeeksSort Ltd",
-
-    # Top Menu
-    "topmenu_links": [
-        {"name": "Home", "url": "admin:index", "permissions": ["auth.view_user"]},
-        {"model": "auth.User"},
-    ],
-
-    # Icons
-    "icons": {
-        "auth": "fas fa-users-cog",
-        "auth.user": "fas fa-user",
-        "auth.Group": "fas fa-users",
-    },
-
-    # UI Tweaks
-    "show_sidebar": True,
-    "navigation_expanded": True,
-    "hide_apps": [],
-    "hide_models": [],
-}
-
-# JAZZMIN_UI_TWEAKS = {
-#     "theme": "darkly",
-#     "dark_mode_theme": "darkly",
-#     "navbar": "navbar-dark",
-#     "sidebar": "sidebar-dark-primary",
-#     "accent": "accent-primary",
-#     "brand_colour": "navbar-primary",
-# }
-JAZZMIN_UI_TWEAKS = {
-    # "theme": "cyborg",          # 🔥 best contrast
-    # "dark_mode_theme": "cyborg",
-    # "navbar": "navbar-dark",
-    # "sidebar": "sidebar-dark",
-    # "accent": "accent-info",
-    # "brand_colour": "navbar-info",
-    "theme": "flatly",
-    "dark_mode_theme": None,
-}
 # REST_FRAMEWORK
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
