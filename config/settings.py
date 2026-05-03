@@ -62,11 +62,6 @@ INSTALLED_APPS = [
     'drf_spectacular',
 ]
 
-# Cloudinary storage is only active in production (when CLOUDINARY_URL is set).
-CLOUDINARY_URL = os.environ.get('CLOUDINARY_URL', '')
-if CLOUDINARY_URL:
-    INSTALLED_APPS += ['cloudinary_storage', 'cloudinary']
-
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # must be first
     'django.middleware.security.SecurityMiddleware',
@@ -164,7 +159,7 @@ USE_TZ = True
 
 
 # -------------------
-# Static files
+# Static files (served by whitenoise)
 # -------------------
 STATIC_URL = '/static/'
 
@@ -174,21 +169,15 @@ STATICFILES_DIRS = [
 
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-# -------------------
-# Media files (for banner image/video uploads)
-# -------------------
-MEDIA_ROOT = BASE_DIR / 'media'
 
-if CLOUDINARY_URL:
-    # --- Production: Cloudinary ---
-    # Files are uploaded to and served directly from Cloudinary CDN.
-    # MEDIA_URL is not used for serving but Django still requires it.
-    MEDIA_URL = '/media/'
-    DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
-else:
-    # --- Local development: filesystem ---
-    MEDIA_URL = '/media/'
-    DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
+# -------------------
+# Media files (local filesystem — works on both dev PC and cloud server)
+# Uploaded files are stored in /app/media inside the container,
+# which is bind-mounted or backed by a named Docker volume.
+# -------------------
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
