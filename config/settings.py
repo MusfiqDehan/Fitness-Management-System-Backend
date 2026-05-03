@@ -37,33 +37,63 @@ ALLOWED_HOSTS = [
     if h.strip()
 ]
 
-# Application definition
+# ---------------------------------------------------------------
+# Application definition — django-tenants split
+#
+# SHARED_APPS  → tables created once in the public (shared) schema.
+# TENANT_APPS  → tables created inside every tenant's own schema.
+# INSTALLED_APPS is derived automatically (union, no duplicates).
+# ---------------------------------------------------------------
 
-INSTALLED_APPS = [
-    # external apps
-    'django.contrib.admin',
-    'django.contrib.auth',
+# Apps that live in the PUBLIC (shared) PostgreSQL schema
+SHARED_APPS = [
+    'django_tenants',               # must be first
+    'apps.tenancy',                  # Tenant + Domain models
+
     'django.contrib.contenttypes',
+    'django.contrib.auth',
+    'django.contrib.admin',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    # project apps
-    'apps.quick_action.apps.QuickActionConfig',
-    'apps.identity.apps.IdentityConfig',
-    'apps.dashboard.apps.DashboardConfig',
-    'apps.membership.apps.MembershipConfig',
-    'apps.tenancy.apps.TenancyConfig',
-    'apps.cms.apps.CmsConfig',
-
-    #third party
     'rest_framework',
     'corsheaders',
     'drf_spectacular',
 ]
 
+# Apps whose tables are replicated inside EACH tenant schema
+TENANT_APPS = [
+    'django.contrib.contenttypes',   # needed for permissions in tenant schema
+    'apps.identity.apps.IdentityConfig',
+    'apps.dashboard.apps.DashboardConfig',
+    'apps.membership.apps.MembershipConfig',
+    'apps.quick_action.apps.QuickActionConfig',
+    'apps.cms.apps.CmsConfig',
+]
+
+# Django requires a flat INSTALLED_APPS list; django-tenants merges both lists
+INSTALLED_APPS = list(SHARED_APPS) + [
+    app for app in TENANT_APPS if app not in SHARED_APPS
+]
+
+# django-tenants settings
+TENANT_MODEL = 'tenancy.Tenant'
+TENANT_DOMAIN_MODEL = 'tenancy.Domain'
+# URL conf used when the request resolves to the public (shared) schema
+PUBLIC_SCHEMA_URLCONF = 'config.public_urls'
+# Route tenant-app migrations to the correct schema
+DATABASE_ROUTERS = ['django_tenants.routers.TenantSyncRouter']
+# Let localhost healthchecks and unknown hosts resolve to the public schema
+# instead of failing inside TenantMainMiddleware.
+SHOW_PUBLIC_IF_NO_TENANT_FOUND = True
+
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  # must be first
+    # TenantMainMiddleware resolves the tenant from the request hostname
+    # and activates the correct PostgreSQL schema before any view runs.
+    # It must be the very first middleware in the stack.
+    'django_tenants.middleware.main.TenantMainMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -82,6 +112,19 @@ if not _cors_allow_all:
         for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
         if o.strip()
     ]
+
+CSRF_TRUSTED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')
+    if o.strip()
+]
+
+# Trust HTTPS termination at the reverse proxy so CSRF referer/origin
+# validation and secure cookie behavior work correctly in production.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
 
 ROOT_URLCONF = 'config.urls'
 
@@ -109,20 +152,27 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # When DATABASE_URL is set (e.g. from Docker env), PostgreSQL is used.
 # Falls back to SQLite for development without Docker.
 
+# django-tenants requires PostgreSQL with a schema-aware backend.
+# When DATABASE_URL is set (e.g. via Docker), it takes priority.
+# Otherwise fall back to explicit env vars for local dev with PostgreSQL.
 _database_url = os.environ.get('DATABASE_URL', '')
 if _database_url:
-    DATABASES = {
-        'default': dj_database_url.parse(
-            _database_url,
-            conn_max_age=600,
-            conn_health_checks=True,
-        )
-    }
+    _db_cfg = dj_database_url.parse(
+        _database_url,
+        conn_max_age=600,
+        conn_health_checks=True,
+    )
+    _db_cfg['ENGINE'] = 'django_tenants.postgresql_backend'
+    DATABASES = {'default': _db_cfg}
 else:
     DATABASES = {
         'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'ENGINE': 'django_tenants.postgresql_backend',
+            'NAME': os.environ.get('DB_NAME', 'gymapp_db'),
+            'USER': os.environ.get('DB_USER', 'postgres'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', 'postgres'),
+            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
         }
     }
 
