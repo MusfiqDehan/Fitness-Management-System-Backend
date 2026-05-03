@@ -17,7 +17,7 @@ services:
       - app_network
       - traefik_proxy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8021/api/schema/')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8021/api/v1/schema/')"]
       interval: 30s
       timeout: 10s
       retries: 5
