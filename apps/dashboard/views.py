@@ -35,13 +35,13 @@ from apps.quick_action.serializers import (
     PageContentSerializer,
     GymScheduleSerializer,
 )
-from apps.membership_management.serializers import (
+from apps.membership.serializers import (
     MemberSerializer,
     MemberPackageSerializer,
     PaymentSerializer,
     AttendanceSerializer,
 )
-from apps.membership_management.models import (
+from apps.membership.models import (
     MemberPackage,
     Member,
     Payment, 
