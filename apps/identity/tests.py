@@ -100,10 +100,10 @@ class EmailOrPhoneJWTLoginTests(APITestCase):
 		self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
-class AccountsAPIViewTests(APITestCase):
+class identityAPIViewTests(APITestCase):
 	def setUp(self):
-		self.current_user_url = reverse("accounts:current-user")
-		self.instructor_list_url = reverse("accounts:instructor-list")
+		self.current_user_url = reverse("identity:current-user")
+		self.instructor_list_url = reverse("identity:instructor-list")
 
 		self.student_user = User.objects.create_user(
 			email="student@example.com",

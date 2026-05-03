@@ -1,4 +1,4 @@
-# accounts/views.py
+# identity/views.py
 from rest_framework import generics, status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
