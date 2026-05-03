@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 from datetime import timedelta
+import dj_database_url
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -21,12 +23,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-s5gp6lsw-mzturp2^ku5$th^q#f0-^dk7za2a#u^)a)62y@8=j'
+SECRET_KEY = os.environ.get(
+    'SECRET_KEY',
+    'django-insecure-s5gp6lsw-mzturp2^ku5$th^q#f0-^dk7za2a#u^)a)62y@8=j',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = os.environ.get('DEBUG', 'false').lower() in ('true', '1')
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.environ.get('ALLOWED_HOSTS', '*').split(',')
+    if h.strip()
+]
 
 # Application definition
 
@@ -70,7 +79,14 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
+_cors_allow_all = os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'true').lower() in ('true', '1')
+CORS_ALLOW_ALL_ORIGINS = _cors_allow_all
+if not _cors_allow_all:
+    CORS_ALLOWED_ORIGINS = [
+        o.strip()
+        for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+        if o.strip()
+    ]
 
 ROOT_URLCONF = 'config.urls'
 
@@ -94,13 +110,26 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+#
+# When DATABASE_URL is set (e.g. from Docker env), PostgreSQL is used.
+# Falls back to SQLite for development without Docker.
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+_database_url = os.environ.get('DATABASE_URL', '')
+if _database_url:
+    DATABASES = {
+        'default': dj_database_url.parse(
+            _database_url,
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation
