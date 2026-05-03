@@ -22,7 +22,7 @@ from .models import (
     GymSchedule,
 )
 from django.utils import timezone
-from apps.accounts.models import InstructorProfile
+from apps.identity.models import InstructorProfile
 
 # banner serializer
 class BannerSerializer(serializers.ModelSerializer):
