@@ -101,16 +101,41 @@ from apps.identity.views import InstructorListAPIView
 app_name = 'dashboard'
 
 urlpatterns = [
+    #===============CMS Endpoints================
     path('blogs/', DashboardBlogListAPIView.as_view(), name='blog-list'),
     path('blogs/create/', DashboardBlogCreateAPIView.as_view(), name='blog-create'),
     path('blogs/<int:pk>/', DashboardBlogRetrieveAPIView.as_view(), name='blog-detail'),
     path('blogs/<int:pk>/update/', DashboardBlogUpdateAPIView.as_view(), name='blog-update'),
     path('blogs/<int:pk>/delete/', DashboardBlogDeleteAPIView.as_view(), name='blog-delete'),
+    
     path('blog-categories/', DashboardBlogCategoryListAPIView.as_view(), name='blog-category-list'),
     path('blog-categories/create/', DashboardBlogCategoryCreateAPIView.as_view(), name='blog-category-create'),
     path('blog-categories/<int:pk>/', DashboardBlogCategoryRetrieveAPIView.as_view(), name='blog-category-detail'),
     path('blog-categories/<int:pk>/update/', DashboardBlogCategoryUpdateAPIView.as_view(), name='blog-category-update'),
     path('blog-categories/<int:pk>/delete/', DashboardBlogCategoryDeleteAPIView.as_view(), name='blog-category-delete'),
+    
+    path('site-banners/', SiteBannerListAPIView.as_view(), name='site-banner-list'),
+    path('site-banners/create/', SiteBannerCreateAPIView.as_view(), name='site-banner-create'),
+    path('site-banners/<int:pk>/', SiteBannerRetrieveAPIView.as_view(), name='site-banner-detail'),
+    path('site-banners/<int:pk>/update/', SiteBannerUpdateAPIView.as_view(), name='site-banner-update'),
+    path('site-banners/<int:pk>/delete/', SiteBannerDeleteAPIView.as_view(), name='site-banner-delete'),
+    
+    path('promo-banners/', PromoBannerListAPIView.as_view(), name='promo-banner-list'),
+    path('promo-banners/create/', PromoBannerCreateAPIView.as_view(), name='promo-banner-create'),
+    path('promo-banners/<int:pk>/', PromoBannerRetrieveAPIView.as_view(), name='promo-banner-detail'),
+    path('promo-banners/<int:pk>/update/', PromoBannerUpdateAPIView.as_view(), name='promo-banner-update'),
+    path('promo-banners/<int:pk>/delete/', PromoBannerDeleteAPIView.as_view(), name='promo-banner-delete'),
+    
+    path('site-settings/', SiteSettingsAPIView.as_view(), name='site-settings'),
+    
+    path('page-content/', PageContentListAPIView.as_view(), name='page-content-list'),
+    path('page-content/create/', PageContentCreateAPIView.as_view(), name='page-content-create'),
+    path('page-content/<int:pk>/', PageContentRetrieveAPIView.as_view(), name='page-content-detail'),
+    path('page-content/<int:pk>/update/', PageContentUpdateAPIView.as_view(), name='page-content-update'),
+    path('page-content/<int:pk>/delete/', PageContentDeleteAPIView.as_view(), name='page-content-delete'),
+    #===============End of CMS Endpoints================
+
+    
     path('gym-classes/', GymClassDashboardListAPIView.as_view(), name='gym-class-list'),
     path('gym-classes/create/', GymClassDashboardCreateAPIView.as_view(), name='gym-class-create'),
     path('gym-classes/levels/', GymClassLevelsAPIView.as_view(), name='gym-class-levels'),
@@ -175,22 +200,6 @@ urlpatterns = [
     path('attendance/<int:pk>/', AttendanceDashboardRetrieveAPIView.as_view(), name='attendance-detail'),
     path('attendance/<int:pk>/update/', AttendanceDashboardUpdateAPIView.as_view(), name='attendance-update'),
     path('attendance/<int:pk>/delete/', AttendanceDashboardDeleteAPIView.as_view(), name='attendance-delete'),
-    path('site-banners/', SiteBannerListAPIView.as_view(), name='site-banner-list'),
-    path('site-banners/create/', SiteBannerCreateAPIView.as_view(), name='site-banner-create'),
-    path('site-banners/<int:pk>/', SiteBannerRetrieveAPIView.as_view(), name='site-banner-detail'),
-    path('site-banners/<int:pk>/update/', SiteBannerUpdateAPIView.as_view(), name='site-banner-update'),
-    path('site-banners/<int:pk>/delete/', SiteBannerDeleteAPIView.as_view(), name='site-banner-delete'),
-    path('promo-banners/', PromoBannerListAPIView.as_view(), name='promo-banner-list'),
-    path('promo-banners/create/', PromoBannerCreateAPIView.as_view(), name='promo-banner-create'),
-    path('promo-banners/<int:pk>/', PromoBannerRetrieveAPIView.as_view(), name='promo-banner-detail'),
-    path('promo-banners/<int:pk>/update/', PromoBannerUpdateAPIView.as_view(), name='promo-banner-update'),
-    path('promo-banners/<int:pk>/delete/', PromoBannerDeleteAPIView.as_view(), name='promo-banner-delete'),
-    path('site-settings/', SiteSettingsAPIView.as_view(), name='site-settings'),
-    path('page-content/', PageContentListAPIView.as_view(), name='page-content-list'),
-    path('page-content/create/', PageContentCreateAPIView.as_view(), name='page-content-create'),
-    path('page-content/<int:pk>/', PageContentRetrieveAPIView.as_view(), name='page-content-detail'),
-    path('page-content/<int:pk>/update/', PageContentUpdateAPIView.as_view(), name='page-content-update'),
-    path('page-content/<int:pk>/delete/', PageContentDeleteAPIView.as_view(), name='page-content-delete'),
     path('gym-schedules/', GymScheduleDashboardListAPIView.as_view(), name='gym-schedule-list'),
     path('gym-schedules/create/', GymScheduleDashboardCreateAPIView.as_view(), name='gym-schedule-create'),
     path('gym-schedules/<int:pk>/', GymScheduleDashboardRetrieveAPIView.as_view(), name='gym-schedule-detail'),
