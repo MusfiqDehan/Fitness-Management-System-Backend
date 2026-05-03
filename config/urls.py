@@ -3,27 +3,23 @@ from django.urls import path, include,re_path
 from django.views.static import serve
 from django.conf import settings
 from django.conf.urls.static import static
-from rest_framework_simplejwt.views import (
-    TokenRefreshView,
-)
-from apps.accounts.views import EmailOrPhoneTokenObtainPairView
+
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/', include(('apps.quick_action.urls', 'quick_action'), namespace='quick_action')),
-    path('api/accounts/', include(('apps.accounts.urls', 'accounts'), namespace='accounts')),
-    path('api/dashboard/', include(('apps.dashboard.urls', 'dashboard'), namespace='dashboard')),
-    path('api/membership/', include('apps.membership_management.urls')),
-    path('api/tenancy/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy')),
-    path('api/login/', EmailOrPhoneTokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('api/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-
+    path('api/v1/', include(('apps.quick_action.urls', 'quick_action'), namespace='quick_action')),
+    path('api/v1/identity/', include(('apps.identity.urls', 'identity'), namespace='identity')),
+    path('api/v1/dashboard/', include(('apps.dashboard.urls', 'dashboard'), namespace='dashboard')),
+    path('api/v1/membership/', include(('apps.membership_management.urls', 'membership_management'), namespace='membership_management')),
+    path('api/v1/tenancy/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy')),
+    
     # API Schema & Docs
-    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
-    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    path('api/v1/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/v1/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('api/v1/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 ]
 
 urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

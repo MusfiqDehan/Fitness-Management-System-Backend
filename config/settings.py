@@ -42,7 +42,7 @@ INSTALLED_APPS = [
 
     # project apps
     'apps.quick_action.apps.QuickActionConfig',
-    'apps.accounts.apps.AccountsConfig',
+    'apps.identity.apps.IdentityConfig',
     'apps.dashboard.apps.DashboardConfig',
     'apps.membership_management.apps.MembershipManagementConfig',
     'apps.tenancy.apps.TenancyConfig',
@@ -241,7 +241,7 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 # user model
-AUTH_USER_MODEL = 'accounts.User'
+AUTH_USER_MODEL = 'identity.User'
 
 # drf-spectacular settings
 SPECTACULAR_SETTINGS = {
