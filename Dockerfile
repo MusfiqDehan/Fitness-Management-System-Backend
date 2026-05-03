@@ -8,19 +8,16 @@ ENV UV_SYSTEM_PYTHON=1
 
 WORKDIR /app
 
-# System deps required for psycopg2 (PostgreSQL adapter)
-RUN apt-get update && apt-get install -y \
-    libpq-dev \
-    gcc \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv (fast Python package installer)
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-
-# Install Python dependencies first (Docker layer cache)
+# Install system deps, uv (via install script), and Python dependencies
 COPY requirements.txt .
-RUN uv pip install -r requirements.txt
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libpq-dev gcc curl build-essential \
+ && curl -LsSf https://astral.sh/uv/install.sh | sh \
+ && export PATH="/root/.local/bin:$PATH" \
+ && uv pip install --system --no-cache -r requirements.txt \
+ && apt-get purge -y build-essential \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
 
 # Copy project source
 COPY . .
