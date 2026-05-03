@@ -1,0 +1,59 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gym-backend
+    env_file: env.prod
+    expose:
+      - "8021"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - backend_static:/app/staticfiles
+      - backend_media:/app/media
+    networks:
+      - app_network
+      - traefik_proxy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8021/api/schema/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
+      - "traefik.http.routers.gym-backend.rule=Host(`your-api-domain.com`)"
+      - "traefik.http.routers.gym-backend.entrypoints=websecure"
+      - "traefik.http.routers.gym-backend.tls=true"
+      - "traefik.http.services.gym-backend.loadbalancer.server.port=8021"
+    restart: unless-stopped
+
+  db:
+    image: postgres:17.9-alpine
+    container_name: gym-db
+    env_file: env.prod
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  backend_static:
+  backend_media:
+
+networks:
+  app_network:
+    name: gym_app_network
+    driver: bridge
+  traefik_proxy:
+    external: true
