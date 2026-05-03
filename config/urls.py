@@ -13,7 +13,7 @@ urlpatterns = [
     path('api/v1/', include(('apps.quick_action.urls', 'quick_action'), namespace='quick_action')),
     path('api/v1/identity/', include(('apps.identity.urls', 'identity'), namespace='identity')),
     path('api/v1/dashboard/', include(('apps.dashboard.urls', 'dashboard'), namespace='dashboard')),
-    path('api/v1/membership/', include(('apps.membership_management.urls', 'membership_management'), namespace='membership_management')),
+    path('api/v1/membership/', include(('apps.membership.urls', 'membership'), namespace='membership')),
     path('api/v1/tenancy/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy')),
     
     # API Schema & Docs

@@ -43,7 +43,7 @@ INSTALLED_APPS = [
     'apps.quick_action.apps.QuickActionConfig',
     'apps.identity.apps.IdentityConfig',
     'apps.dashboard.apps.DashboardConfig',
-    'apps.membership_management.apps.MembershipManagementConfig',
+    'apps.membership.apps.MembershipConfig',
     'apps.tenancy.apps.TenancyConfig',
     'apps.cms.apps.CmsConfig',
 
