@@ -96,7 +96,7 @@ from .views import (
     GymScheduleDashboardUpdateAPIView,
     GymScheduleDashboardDeleteAPIView,
 )
-from apps.accounts.views import InstructorListAPIView
+from apps.identity.views import InstructorListAPIView
 
 app_name = 'dashboard'
 

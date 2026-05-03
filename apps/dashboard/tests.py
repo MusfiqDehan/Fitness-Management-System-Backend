@@ -4,7 +4,7 @@ from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.accounts.models import User
+from apps.identity.models import User
 from apps.quick_action.models import BlogCategory, Category, ClassSchedule, Contact, GymClass
 from apps.membership_management.models import Member, MemberPackage
 
