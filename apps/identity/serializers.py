@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
+from django.db import connection
 from django.db.models import Q
 from django.contrib.auth.models import update_last_login
 from django.core.validators import validate_email
@@ -225,7 +226,22 @@ class EmailOrPhoneTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
     Accept email/phone/identifier with password and issue JWT tokens.
     Keeps backward compatibility with current frontend payload that uses `email`.
+
+    The issued JWT contains two extra claims so the frontend can identify
+    the tenant context:
+      - tenant_schema: the PostgreSQL schema name of the active tenant
+      - tenant_name:   the human-readable name of the active tenant
     """
+
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        # Embed tenant context so the frontend can read it from the JWT
+        # without an extra API call.
+        token['tenant_schema'] = connection.schema_name
+        tenant = getattr(connection, 'tenant', None)
+        token['tenant_name'] = tenant.name if tenant is not None else None
+        return token
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
