@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: gym-backend-local
-    env_file: env.local
+    image: gym-backend-local:latest
+    env_file: .env.local
     environment:
       - DEBUG=true
     ports:
@@ -23,7 +24,7 @@ services:
   db:
     image: postgres:17.9-alpine
     container_name: gym-db-local
-    env_file: env.local
+    env_file: .env.local
     ports:
       - "5451:5432"    # expose to host for local DB tools (e.g. pgAdmin, DBeaver)
     volumes:

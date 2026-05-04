@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: gym-backend
+    image: gym-backend:latest
     env_file: .env.prod
     expose:
       - "8021"
@@ -25,9 +26,15 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik_proxy"
-      - "traefik.http.routers.gym-backend.rule=Host(`gym-ms-api.musfiqdehan.com`)"
-      - "traefik.http.routers.gym-backend.entrypoints=websecure"
-      - "traefik.http.routers.gym-backend.tls=true"
+      - "traefik.http.routers.gym-backend-api.rule=Host(`gym-ms-api.musfiqdehan.com`)"
+      - "traefik.http.routers.gym-backend-api.entrypoints=websecure"
+      - "traefik.http.routers.gym-backend-api.tls=true"
+      - "traefik.http.routers.gym-backend-api.service=gym-backend"
+      - "traefik.http.routers.gym-backend-app.rule=Host(`gym-ms.musfiqdehan.com`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`))"
+      - "traefik.http.routers.gym-backend-app.entrypoints=websecure"
+      - "traefik.http.routers.gym-backend-app.tls=true"
+      - "traefik.http.routers.gym-backend-app.priority=100"
+      - "traefik.http.routers.gym-backend-app.service=gym-backend"
       - "traefik.http.services.gym-backend.loadbalancer.server.port=8021"
     restart: unless-stopped
 
