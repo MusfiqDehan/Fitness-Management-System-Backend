@@ -56,6 +56,7 @@ SHARED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'apps.identity.apps.IdentityConfig',
 
     'rest_framework',
     'corsheaders',
@@ -65,6 +66,7 @@ SHARED_APPS = [
 # Apps whose tables are replicated inside EACH tenant schema
 TENANT_APPS = [
     'django.contrib.contenttypes',   # needed for permissions in tenant schema
+    'django.contrib.auth',
     'apps.identity.apps.IdentityConfig',
     'apps.dashboard.apps.DashboardConfig',
     'apps.membership.apps.MembershipConfig',
@@ -112,6 +114,27 @@ if not _cors_allow_all:
         for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
         if o.strip()
     ]
+
+    # Keep local frontend ports working when CORS is restricted but no explicit
+    # local origins were provided in env.
+    if DEBUG and not CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS = [
+            'http://localhost:5173',
+            'http://localhost:5174',
+            'http://127.0.0.1:5173',
+            'http://127.0.0.1:5174',
+        ]
+
+# Support cookie/session-based auth flows across origins when needed.
+CORS_ALLOW_CREDENTIALS = os.environ.get('CORS_ALLOW_CREDENTIALS', 'true').lower() in ('true', '1')
+
+_cors_allowed_origin_regexes = [
+    o.strip()
+    for o in os.environ.get('CORS_ALLOWED_ORIGIN_REGEXES', '').split(',')
+    if o.strip()
+]
+if _cors_allowed_origin_regexes:
+    CORS_ALLOWED_ORIGIN_REGEXES = _cors_allowed_origin_regexes
 
 CSRF_TRUSTED_ORIGINS = [
     o.strip()
