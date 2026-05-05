@@ -39,6 +39,8 @@ services:
       - "traefik.http.routers.gym-backend-tenant-app.rule=HostRegexp(`{subdomain:[a-z0-9-]+}.musfiqdehan.com`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`))"
       - "traefik.http.routers.gym-backend-tenant-app.entrypoints=websecure"
       - "traefik.http.routers.gym-backend-tenant-app.tls=true"
+      - "traefik.http.routers.gym-backend-tenant-app.tls.domains[0].main=musfiqdehan.com"
+      - "traefik.http.routers.gym-backend-tenant-app.tls.domains[0].sans=*.musfiqdehan.com"
       - "traefik.http.routers.gym-backend-tenant-app.priority=90"
       - "traefik.http.routers.gym-backend-tenant-app.service=gym-backend"
       - "traefik.http.services.gym-backend.loadbalancer.server.port=8021"
