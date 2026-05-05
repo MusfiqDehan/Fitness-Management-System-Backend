@@ -4,6 +4,7 @@ from django.db import connection
 from django.db.models import Q
 from django.contrib.auth.models import update_last_login
 from django.core.validators import validate_email
+from django_tenants.utils import get_public_schema_name
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.settings import api_settings
@@ -32,45 +33,45 @@ class RegisterSerializer(serializers.ModelSerializer):
                 validate_email(value)
             except DjangoValidationError:
                 raise serializers.ValidationError("Please enter a valid email address.")
-            
+
             # Check if email already exists
             if User.objects.filter(email__iexact=value).exists():
                 raise serializers.ValidationError("This email is already registered.")
-        
+
         return value
 
     def validate_phone(self, value):
         if value:
             if not is_valid_phone_number(value):
                 raise serializers.ValidationError("Please enter a valid phone number.")
-            
+
             # Check if phone already exists
             if User.objects.filter(phone=value).exists():
                 raise serializers.ValidationError("This phone number is already registered.")
-        
+
         return value
 
     def validate_password(self, value):
         if not value:
             raise serializers.ValidationError("Password is required.")
-        
+
         # Password strength validation
         if len(value) < 8:
             raise serializers.ValidationError("Password must be at least 8 characters long.")
-        
+
         import re
         if not re.search(r'[a-z]', value):
             raise serializers.ValidationError("Password must contain at least one lowercase letter.")
-        
+
         if not re.search(r'[A-Z]', value):
             raise serializers.ValidationError("Password must contain at least one uppercase letter.")
-        
+
         if not re.search(r'\d', value):
             raise serializers.ValidationError("Password must contain at least one number.")
-        
+
         if not re.search(r'[@$!%*?&]', value):
             raise serializers.ValidationError("Password must contain at least one special character (@$!%*?&).")
-        
+
         return value
 
     def validate(self, attrs):
@@ -85,11 +86,11 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "Either email or phone must be provided."
             )
-        
+
         # Validate full name if provided
         if full_name and len(full_name.strip()) < 2:
             raise serializers.ValidationError("Full name must be at least 2 characters long.")
-        
+
         # Validate password confirmation
         if confirm_password and password != confirm_password:
             raise serializers.ValidationError("Passwords do not match.")
@@ -101,15 +102,19 @@ class RegisterSerializer(serializers.ModelSerializer):
         validated_data.pop('confirm_password', None)  # Remove confirm_password if present
         full_name = validated_data.pop('full_name', None)
 
+        tenant = getattr(connection, 'tenant', None)
+        if tenant is not None and connection.schema_name != get_public_schema_name():
+            validated_data.setdefault('tenant', tenant)
+
         user = User.objects.create_user(
+            password=password,
             **validated_data
         )
-        user.set_password(password)
-        
+
         # Set full_name if provided
         if full_name:
             user.full_name = full_name
-        
+
         user.save()
 
         return user
@@ -141,6 +146,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 class CurrentUserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
+    tenant_id = serializers.IntegerField(read_only=True)
     permissions = serializers.SerializerMethodField()
 
     class Meta:
@@ -151,8 +157,11 @@ class CurrentUserSerializer(serializers.ModelSerializer):
             'phone',
             'role',
             'full_name',
+            'tenant_id',
             'is_staff',
             'is_superuser',
+            'email_verified',
+            'password_set_at',
             'permissions',
         ]
 
@@ -265,11 +274,12 @@ class EmailOrPhoneTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         identifier = self._resolve_identifier()
         password = self.initial_data.get("password")
+        tenant = getattr(connection, 'tenant', None)
 
         # Validate identifier (email/phone)
         if not identifier:
             raise AuthenticationFailed("Email or phone number is required.")
-        
+
         # Validate identifier format
         import re
         if '@' in identifier:
@@ -285,7 +295,7 @@ class EmailOrPhoneTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Validate password
         if not password:
             raise AuthenticationFailed("Password is required.")
-        
+
         # Basic password validation (same as registration)
         if len(password) < 8:
             raise AuthenticationFailed("Password must be at least 8 characters long.")
@@ -297,6 +307,13 @@ class EmailOrPhoneTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         if not user.is_active:
             raise AuthenticationFailed("User account is disabled.")
+
+        if tenant is not None and not tenant.allows_user_entry():
+            raise AuthenticationFailed("Tenant workspace is suspended.")
+
+        if tenant is not None and connection.schema_name != get_public_schema_name() and user.tenant_id is None:
+            user.tenant = tenant
+            user.save(update_fields=['tenant'])
 
         refresh = self.get_token(user)
         data = {
