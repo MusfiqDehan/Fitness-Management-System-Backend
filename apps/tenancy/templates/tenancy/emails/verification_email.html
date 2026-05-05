@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+  <body style="font-family: Arial, sans-serif; color: #1f2937;">
+    <h2 style="margin-bottom: 8px;">Verify Your Tenant Registration</h2>
+    <p>Hello,</p>
+    <p>Your workspace <strong>{{ company_name }}</strong> has been created in pending mode.</p>
+    <p>Subdomain: <strong>{{ subdomain }}</strong></p>
+    <p>
+      Please verify your email and set your password using this link:<br/>
+      <a href="{{ verification_url }}">{{ verification_url }}</a>
+    </p>
+    <p>This link expires at {{ expires_at }}.</p>
+    <p>If you did not start this registration, you can ignore this email.</p>
+  </body>
+</html>
