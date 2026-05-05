@@ -70,3 +70,4 @@ networks:
     driver: bridge
   traefik_proxy:
     external: true
+    name: traefik_proxy
