@@ -449,3 +449,28 @@ class TenancyApiTests(APITestCase):
 		self.assertEqual(res.status_code, status.HTTP_200_OK)
 		self.assertEqual(res.data["tenant_domain"], "verifygym.testserver")
 		self.assertTrue(res.data["password_setup_url"].startswith("http://verifygym.localhost:5173/SetTenantPassword?token="))
+
+	def test_password_setup_returns_tenant_specific_login_url(self):
+		raw_token, _ = Invitation.issue_token(
+			token_type=Invitation.TOKEN_TYPE_VERIFICATION,
+			email="owner@login.test",
+			subdomain="logingym",
+			company_name="Login Gym",
+			ttl_minutes=30,
+			metadata={"domain": "logingym.testserver"},
+		)
+
+		res = self.client.post(
+			"/api/v1/tenancy/password/setup/",
+			{
+				"token": raw_token,
+				"password": "Test@1234",
+				"confirm_password": "Test@1234",
+			},
+			format="json",
+			HTTP_HOST="testserver",
+		)
+
+		self.assertEqual(res.status_code, status.HTTP_200_OK)
+		self.assertEqual(res.data["tenant_domain"], "logingym.testserver")
+		self.assertEqual(res.data["login_url"], "http://logingym.localhost:5173/Login")

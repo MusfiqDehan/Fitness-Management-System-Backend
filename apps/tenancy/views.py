@@ -240,6 +240,10 @@ def _build_frontend_url(path_suffix, *, subdomain="", domain="", prefer_public=F
 	return path
 
 
+def _build_login_url(*, subdomain="", domain=""):
+	return _build_frontend_url("/Login", subdomain=subdomain, domain=domain)
+
+
 def _prefer_public_onboarding_links():
 	return bool(getattr(settings, "TENANT_ONBOARDING_LINKS_PUBLIC", False))
 
@@ -595,6 +599,7 @@ class PasswordSetupAPIView(APIView):
 				"message": "Password configured successfully.",
 				"tenant_schema": tenant.schema_name,
 				"tenant_domain": domain,
+				"login_url": _build_login_url(subdomain=invitation.subdomain, domain=domain),
 			}
 		)
 
