@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django_tenants.admin import TenantAdminMixin
 
-from .models import Tenant, Domain
+from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog
 
 
 class DomainInline(admin.TabularInline):
@@ -23,3 +23,25 @@ class DomainAdmin(admin.ModelAdmin):
     list_display = ['domain', 'tenant', 'is_primary']
     list_filter = ['is_primary']
     search_fields = ['domain', 'tenant__name']
+
+
+@admin.register(Invitation)
+class InvitationAdmin(admin.ModelAdmin):
+    list_display = ['email', 'invitee_full_name', 'tenant', 'token_type', 'expires_at', 'used_at', 'created_at']
+    list_filter = ['token_type', 'created_at']
+    search_fields = ['email', 'invitee_full_name', 'tenant__name', 'subdomain', 'company_name']
+    readonly_fields = ['token_hash', 'created_at']
+
+
+@admin.register(EmailQueue)
+class EmailQueueAdmin(admin.ModelAdmin):
+    list_display = ['to_email', 'purpose', 'status', 'attempts', 'sent_at', 'created_at']
+    list_filter = ['purpose', 'status']
+    search_fields = ['to_email', 'subject', 'tenant__name']
+
+
+@admin.register(TenantAuditLog)
+class TenantAuditLogAdmin(admin.ModelAdmin):
+    list_display = ['action', 'tenant', 'actor_email', 'target_type', 'target_id', 'created_at']
+    list_filter = ['action', 'created_at']
+    search_fields = ['actor_email', 'target_type', 'target_id', 'tenant__name']
