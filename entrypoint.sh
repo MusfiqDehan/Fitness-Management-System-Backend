@@ -23,6 +23,29 @@ TenantModel = get_tenant_model()
 DomainModel = get_tenant_domain_model()
 public_domain = os.environ.get('PUBLIC_DOMAIN', 'localhost').strip()
 
+
+def ensure_domain(domain, tenant, *, is_primary=False, label='domain'):
+    existing_domain = DomainModel.objects.filter(domain=domain).first()
+    if existing_domain is None:
+        DomainModel.objects.create(domain=domain, tenant=tenant, is_primary=is_primary)
+        print(f'Added {label}: {domain}')
+        return
+
+    changed_fields = []
+    if existing_domain.tenant_id != tenant.id:
+        existing_domain.tenant = tenant
+        changed_fields.append('tenant')
+
+    if existing_domain.is_primary != is_primary:
+        existing_domain.is_primary = is_primary
+        changed_fields.append('is_primary')
+
+    if changed_fields:
+        existing_domain.save(update_fields=changed_fields)
+        print(f'Reassigned {label}: {domain} -> {tenant.schema_name}')
+    else:
+        print(f'{label.capitalize()} already mapped: {domain}')
+
 public_tenant, public_created = TenantModel.objects.get_or_create(
     schema_name='public',
     defaults={
@@ -41,20 +64,7 @@ else:
     print('Public tenant already exists.')
 
 if public_domain:
-    existing_public_domain = DomainModel.objects.filter(domain=public_domain).first()
-    if existing_public_domain is None:
-        DomainModel.objects.create(domain=public_domain, tenant=public_tenant, is_primary=True)
-        print(f'Added public domain: {public_domain}')
-    elif existing_public_domain.tenant_id == public_tenant.id:
-        if not existing_public_domain.is_primary:
-            existing_public_domain.is_primary = True
-            existing_public_domain.save(update_fields=['is_primary'])
-        print(f'Public domain already mapped: {public_domain}')
-    else:
-        print(
-            f'Skipping public domain {public_domain}: already mapped to schema '
-            f'{existing_public_domain.tenant.schema_name}'
-        )
+    ensure_domain(public_domain, public_tenant, is_primary=True, label='public domain')
 
 auto_create_default_tenant = to_bool(os.environ.get('AUTO_CREATE_DEFAULT_TENANT'), default=False)
 
@@ -87,24 +97,12 @@ if auto_create_default_tenant:
             print(f'Default tenant already exists: schema={default_schema}')
 
         for idx, domain in enumerate(default_domains):
-            existing_domain = DomainModel.objects.filter(domain=domain).first()
-            if existing_domain is None:
-                DomainModel.objects.create(
-                    domain=domain,
-                    tenant=default_tenant,
-                    is_primary=(idx == 0),
-                )
-                print(f'Added default tenant domain: {domain}')
-            elif existing_domain.tenant_id == default_tenant.id:
-                if idx == 0 and not existing_domain.is_primary:
-                    existing_domain.is_primary = True
-                    existing_domain.save(update_fields=['is_primary'])
-                print(f'Default tenant domain already mapped: {domain}')
-            else:
-                print(
-                    f'Skipping default tenant domain {domain}: already mapped to schema '
-                    f'{existing_domain.tenant.schema_name}'
-                )
+            ensure_domain(
+                domain,
+                default_tenant,
+                is_primary=(idx == 0),
+                label='default tenant domain',
+            )
 else:
     print('Default tenant bootstrap is disabled (AUTO_CREATE_DEFAULT_TENANT=false).')
 "
