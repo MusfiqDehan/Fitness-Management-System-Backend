@@ -165,6 +165,7 @@ PUBLIC_FRONTEND_URL = os.environ.get('PUBLIC_FRONTEND_URL', FRONTEND_BASE_URL).s
 TENANT_FRONTEND_BASE_DOMAIN = os.environ.get('TENANT_FRONTEND_BASE_DOMAIN', TENANT_BASE_DOMAIN).strip().lower()
 TENANT_FRONTEND_SCHEME = os.environ.get('TENANT_FRONTEND_SCHEME', 'http' if DEBUG else 'https').strip().lower() or ('http' if DEBUG else 'https')
 TENANT_FRONTEND_PORT = os.environ.get('TENANT_FRONTEND_PORT', '').strip()
+TENANT_ONBOARDING_LINKS_PUBLIC = os.environ.get('TENANT_ONBOARDING_LINKS_PUBLIC', 'false').lower() in ('true', '1')
 
 ROOT_URLCONF = 'config.urls'
 

@@ -240,6 +240,10 @@ def _build_frontend_url(path_suffix, *, subdomain="", domain="", prefer_public=F
 	return path
 
 
+def _prefer_public_onboarding_links():
+	return bool(getattr(settings, "TENANT_ONBOARDING_LINKS_PUBLIC", False))
+
+
 def _tenant_entry_is_allowed(tenant):
 	return tenant is None or tenant.allows_user_entry()
 
@@ -292,6 +296,7 @@ class TenantSelfRegistrationAPIView(APIView):
 			f"/SetTenantPassword?token={quote(raw_token)}",
 			subdomain=payload["subdomain"],
 			domain=domain,
+			prefer_public=_prefer_public_onboarding_links(),
 		)
 		_issue_email(
 			tenant=None,
@@ -369,6 +374,7 @@ class SuperadminInvitationAPIView(APIView):
 					f"/AcceptTenantInvite?token={quote(raw_token)}",
 					subdomain=payload["subdomain"],
 					domain=domain_name,
+					prefer_public=_prefer_public_onboarding_links(),
 				)
 				_issue_email(
 					tenant=tenant,
@@ -426,6 +432,7 @@ class SuperadminInvitationAPIView(APIView):
 				f"/AcceptTenantInvite?token={quote(raw_token)}",
 				subdomain=payload["subdomain"],
 				domain=domain,
+				prefer_public=_prefer_public_onboarding_links(),
 			)
 			_issue_email(
 				tenant=None,
@@ -489,6 +496,7 @@ class InvitationValidationAPIView(APIView):
 					f"/SetTenantPassword?token={quote(serializer.validated_data['token'])}",
 					subdomain=invitation.subdomain,
 					domain=domain,
+					prefer_public=_prefer_public_onboarding_links(),
 				),
 			}
 		)
