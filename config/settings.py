@@ -135,6 +135,12 @@ _cors_allowed_origin_regexes = [
 ]
 if _cors_allowed_origin_regexes:
     CORS_ALLOWED_ORIGIN_REGEXES = _cors_allowed_origin_regexes
+elif not DEBUG:
+    # Production-friendly default to allow wildcard tenant subdomains.
+    root_domain = os.environ.get('TENANT_ROOT_DOMAIN', 'musfiqdehan.com').strip().replace('.', r'\.')
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        rf'^https://([a-z0-9-]+\.)?{root_domain}$',
+    ]
 
 CSRF_TRUSTED_ORIGINS = [
     o.strip()
@@ -148,6 +154,17 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_SECURE = not DEBUG
+SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'false').lower() in ('true', '1')
+
+# Tenant auth helper settings
+PUBLIC_DOMAIN = os.environ.get('PUBLIC_DOMAIN', '').strip().lower()
+TENANT_BASE_DOMAIN = os.environ.get('TENANT_BASE_DOMAIN', '').strip().lower()
+TENANT_POST_LOGIN_PATH = os.environ.get('TENANT_POST_LOGIN_PATH', '/AdminDashboard').strip() or '/AdminDashboard'
+FRONTEND_BASE_URL = os.environ.get('FRONTEND_BASE_URL', '').strip()
+PUBLIC_FRONTEND_URL = os.environ.get('PUBLIC_FRONTEND_URL', FRONTEND_BASE_URL).strip()
+TENANT_FRONTEND_BASE_DOMAIN = os.environ.get('TENANT_FRONTEND_BASE_DOMAIN', TENANT_BASE_DOMAIN).strip().lower()
+TENANT_FRONTEND_SCHEME = os.environ.get('TENANT_FRONTEND_SCHEME', 'http' if DEBUG else 'https').strip().lower() or ('http' if DEBUG else 'https')
+TENANT_FRONTEND_PORT = os.environ.get('TENANT_FRONTEND_PORT', '').strip()
 
 ROOT_URLCONF = 'config.urls'
 
@@ -268,6 +285,16 @@ REST_FRAMEWORK = {
         # "rest_framework.permissions.IsAuthenticated",
         "rest_framework.permissions.AllowAny",
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'tenant_registration': '10/hour',
+        'tenant_auth': '30/minute',
+        'tenant_password_reset': '10/hour',
+        'tenant_password_setup': '20/hour',
+        'superadmin_invitation': '60/hour',
+    },
     'DEFAULT_FILTER_BACKENDS': [
         'django_filters.rest_framework.DjangoFilterBackend',
         'rest_framework.filters.SearchFilter',
@@ -295,3 +322,14 @@ SPECTACULAR_SETTINGS = {
         'persistAuthorization': True,
     },
 }
+
+# Email Configuration
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'False') == 'True'
+EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False') == 'True'
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', 15))
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', os.environ.get('EMAIL_HOST_USER', 'noreply@example.com'))
