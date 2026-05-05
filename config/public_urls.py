@@ -27,7 +27,11 @@ urlpatterns = [
     # Tenant routing health check
     path('api/v1/health/tenant/', tenant_health, name='tenant-health'),
 
+    # Public control-plane authentication
+    path('api/v1/identity/', include(('apps.identity.urls', 'identity'), namespace='public-identity')),
+
     # Tenant provisioning / management API
+    path('api/v1/tenancy/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy-v1')),
     path('api/v1/tenants/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy')),
 
     # API Schema & Docs (shared)
