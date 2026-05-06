@@ -256,6 +256,18 @@ def _tenant_entry_blocked_response():
 	return Response({"detail": "Tenant workspace is suspended."}, status=status.HTTP_403_FORBIDDEN)
 
 
+def _password_setup_success_response(invitation, *, domain, message="Password configured successfully."):
+	tenant = invitation.tenant
+	return Response(
+		{
+			"message": message,
+			"tenant_schema": tenant.schema_name if tenant else "",
+			"tenant_domain": domain,
+			"login_url": _build_login_url(subdomain=invitation.subdomain, domain=domain),
+		}
+	)
+
+
 def _count_tenant_admin_users():
 	count = 0
 	public_schema = get_public_schema_name()
@@ -516,12 +528,36 @@ class PasswordSetupAPIView(APIView):
 		serializer.is_valid(raise_exception=True)
 		payload = serializer.validated_data
 
+		existing_invitation = Invitation.from_raw_token(payload["token"])
+		if existing_invitation is None:
+			return Response({"detail": "Invalid or expired token."}, status=status.HTTP_400_BAD_REQUEST)
+		if not _tenant_entry_is_allowed(existing_invitation.tenant):
+			return _tenant_entry_blocked_response()
+		if existing_invitation.used_at is not None:
+			domain = _assert_token_request_scope(request, existing_invitation)
+			return _password_setup_success_response(
+				existing_invitation,
+				domain=domain,
+				message="Password was already configured successfully.",
+			)
+		if existing_invitation.is_expired:
+			return Response({"detail": "Invalid or expired token."}, status=status.HTTP_400_BAD_REQUEST)
+
 		with transaction.atomic():
 			invitation = Invitation.from_raw_token(payload["token"], for_update=True)
-			if invitation is None or not invitation.is_usable:
+			if invitation is None:
 				return Response({"detail": "Invalid or expired token."}, status=status.HTTP_400_BAD_REQUEST)
 			if not _tenant_entry_is_allowed(invitation.tenant):
 				return _tenant_entry_blocked_response()
+			if invitation.used_at is not None:
+				domain = _assert_token_request_scope(request, invitation)
+				return _password_setup_success_response(
+					invitation,
+					domain=domain,
+					message="Password was already configured successfully.",
+				)
+			if invitation.is_expired:
+				return Response({"detail": "Invalid or expired token."}, status=status.HTTP_400_BAD_REQUEST)
 
 			domain = _assert_token_request_scope(request, invitation)
 
@@ -594,14 +630,7 @@ class PasswordSetupAPIView(APIView):
 			invitation.used_at = setup_time
 			invitation.save(update_fields=["used_at"])
 
-		return Response(
-			{
-				"message": "Password configured successfully.",
-				"tenant_schema": tenant.schema_name,
-				"tenant_domain": domain,
-				"login_url": _build_login_url(subdomain=invitation.subdomain, domain=domain),
-			}
-		)
+		return _password_setup_success_response(invitation, domain=domain)
 
 
 class TenantAuthenticationAPIView(APIView):

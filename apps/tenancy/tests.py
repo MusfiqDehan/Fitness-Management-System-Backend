@@ -3,10 +3,11 @@ from django.test import override_settings
 from django.utils import timezone
 from django_tenants.utils import schema_context
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APITestCase, APIRequestFactory
 
 from apps.identity.models import User
 from .models import Tenant, Domain, Invitation, EmailQueue
+from .views import PasswordSetupAPIView
 
 
 class TenancyModelTests(APITestCase):
@@ -474,3 +475,44 @@ class TenancyApiTests(APITestCase):
 		self.assertEqual(res.status_code, status.HTTP_200_OK)
 		self.assertEqual(res.data["tenant_domain"], "logingym.testserver")
 		self.assertEqual(res.data["login_url"], "http://logingym.localhost:5173/Login")
+
+	def test_password_setup_retry_returns_success_for_already_used_token(self):
+		factory = APIRequestFactory()
+		view = PasswordSetupAPIView.as_view()
+		raw_token, _ = Invitation.issue_token(
+			token_type=Invitation.TOKEN_TYPE_VERIFICATION,
+			email="owner@retry.test",
+			subdomain="retrygym",
+			company_name="Retry Gym",
+			ttl_minutes=30,
+			metadata={"domain": "retrygym.testserver"},
+		)
+
+		first_request = factory.post(
+			"/api/v1/tenancy/password/setup/",
+			{
+				"token": raw_token,
+				"password": "Test@1234",
+				"confirm_password": "Test@1234",
+			},
+			format="json",
+			HTTP_HOST="testserver",
+		)
+		second_request = factory.post(
+			"/api/v1/tenancy/password/setup/",
+			{
+				"token": raw_token,
+				"password": "Test@1234",
+				"confirm_password": "Test@1234",
+			},
+			format="json",
+			HTTP_HOST="testserver",
+		)
+		first_res = view(first_request)
+		second_res = view(second_request)
+
+		self.assertEqual(first_res.status_code, status.HTTP_200_OK)
+		self.assertEqual(second_res.status_code, status.HTTP_200_OK)
+		self.assertEqual(second_res.data["message"], "Password was already configured successfully.")
+		self.assertEqual(second_res.data["tenant_domain"], "retrygym.testserver")
+		self.assertEqual(second_res.data["login_url"], "http://retrygym.localhost:5173/Login")

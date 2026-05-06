@@ -18,7 +18,11 @@ services:
       - app_network
       - traefik_proxy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8021/api/v1/schema/')"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-gym-ms.musfiqdehan.com}\" -H \"X-Forwarded-Proto: https\" http://127.0.0.1:8021/api/v1/health/tenant/ > /dev/null",
+        ]
       interval: 30s
       timeout: 10s
       retries: 5
