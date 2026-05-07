@@ -19,14 +19,23 @@ from config.health import tenant_health
 
 
 urlpatterns = [
+    # Django Admin
     path('admin/', admin.site.urls),
+
+    # Health Check
     path('api/v1/health/tenant/', tenant_health, name='tenant-health'),
+
+    # App-specific API routes
     path('api/v1/', include(('apps.quick_action.urls', 'quick_action'), namespace='quick_action')),
+    path('api/v1/dashboard/', include(('apps.dashboard.urls', 'dashboard'), namespace='dashboard')),
+
     path('api/v1/tenancy/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy')),
     path('api/v1/identity/', include(('apps.identity.urls', 'identity'), namespace='identity')),
-    path('api/v1/dashboard/', include(('apps.dashboard.urls', 'dashboard'), namespace='dashboard')),
     path('api/v1/cms/', include(('apps.cms.urls', 'cms'), namespace='cms')),
+    path('api/v1/crm/', include(('apps.crm.urls', 'crm'), namespace='crm')),
     path('api/v1/membership/', include(('apps.membership.urls', 'membership'), namespace='membership')),
+    path('api/v1/billing/', include(('apps.billing.urls', 'billing'), namespace='billing')),
+    path('api/v1/attendance/', include(('apps.attendance.urls', 'attendance'), namespace='attendance')),
 
     # API Schema & Docs (tenant-scoped)
     path('api/v1/schema/', SpectacularAPIView.as_view(), name='schema'),
