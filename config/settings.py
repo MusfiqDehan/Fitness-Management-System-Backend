@@ -72,6 +72,9 @@ TENANT_APPS = [
     'apps.membership.apps.MembershipConfig',
     'apps.quick_action.apps.QuickActionConfig',
     'apps.cms.apps.CmsConfig',
+    'apps.crm.apps.CrmConfig',
+    'apps.billing.apps.BillingConfig',
+    'apps.attendance.apps.AttendanceConfig'
 ]
 
 # Django requires a flat INSTALLED_APPS list; django-tenants merges both lists
