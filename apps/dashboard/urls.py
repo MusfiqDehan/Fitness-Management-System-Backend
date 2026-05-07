@@ -1,15 +1,5 @@
 from django.urls import path
 from .views import (
-    DashboardBlogListAPIView,
-    DashboardBlogCreateAPIView,
-    DashboardBlogRetrieveAPIView,
-    DashboardBlogUpdateAPIView,
-    DashboardBlogDeleteAPIView,
-    DashboardBlogCategoryListAPIView,
-    DashboardBlogCategoryCreateAPIView,
-    DashboardBlogCategoryRetrieveAPIView,
-    DashboardBlogCategoryUpdateAPIView,
-    DashboardBlogCategoryDeleteAPIView,
     GymClassDashboardListAPIView,
     GymClassDashboardCreateAPIView,
     GymClassDashboardRetrieveAPIView,
@@ -73,22 +63,6 @@ from .views import (
     AttendanceDashboardRetrieveAPIView,
     AttendanceDashboardUpdateAPIView,
     AttendanceDashboardDeleteAPIView,
-    SiteBannerListAPIView,
-    SiteBannerCreateAPIView,
-    SiteBannerRetrieveAPIView,
-    SiteBannerUpdateAPIView,
-    SiteBannerDeleteAPIView,
-    PromoBannerListAPIView,
-    PromoBannerCreateAPIView,
-    PromoBannerRetrieveAPIView,
-    PromoBannerUpdateAPIView,
-    PromoBannerDeleteAPIView,
-    SiteSettingsAPIView,
-    PageContentListAPIView,
-    PageContentCreateAPIView,
-    PageContentRetrieveAPIView,
-    PageContentUpdateAPIView,
-    PageContentDeleteAPIView,
     FileUploadView,
     GymScheduleDashboardListAPIView,
     GymScheduleDashboardCreateAPIView,
@@ -101,58 +75,7 @@ from apps.identity.views import InstructorListAPIView
 app_name = 'dashboard'
 
 urlpatterns = [
-    #===============CMS Endpoints================
-    path('blogs/', DashboardBlogListAPIView.as_view(), name='blog-list'),
-    path('blogs/create/', DashboardBlogCreateAPIView.as_view(), name='blog-create'),
-    path('blogs/<int:pk>/', DashboardBlogRetrieveAPIView.as_view(), name='blog-detail'),
-    path('blogs/<int:pk>/update/', DashboardBlogUpdateAPIView.as_view(), name='blog-update'),
-    path('blogs/<int:pk>/delete/', DashboardBlogDeleteAPIView.as_view(), name='blog-delete'),
-    
-    path('blog-categories/', DashboardBlogCategoryListAPIView.as_view(), name='blog-category-list'),
-    path('blog-categories/create/', DashboardBlogCategoryCreateAPIView.as_view(), name='blog-category-create'),
-    path('blog-categories/<int:pk>/', DashboardBlogCategoryRetrieveAPIView.as_view(), name='blog-category-detail'),
-    path('blog-categories/<int:pk>/update/', DashboardBlogCategoryUpdateAPIView.as_view(), name='blog-category-update'),
-    path('blog-categories/<int:pk>/delete/', DashboardBlogCategoryDeleteAPIView.as_view(), name='blog-category-delete'),
-    
-    path('site-banners/', SiteBannerListAPIView.as_view(), name='site-banner-list'),
-    path('site-banners/create/', SiteBannerCreateAPIView.as_view(), name='site-banner-create'),
-    path('site-banners/<int:pk>/', SiteBannerRetrieveAPIView.as_view(), name='site-banner-detail'),
-    path('site-banners/<int:pk>/update/', SiteBannerUpdateAPIView.as_view(), name='site-banner-update'),
-    path('site-banners/<int:pk>/delete/', SiteBannerDeleteAPIView.as_view(), name='site-banner-delete'),
-    
-    path('promo-banners/', PromoBannerListAPIView.as_view(), name='promo-banner-list'),
-    path('promo-banners/create/', PromoBannerCreateAPIView.as_view(), name='promo-banner-create'),
-    path('promo-banners/<int:pk>/', PromoBannerRetrieveAPIView.as_view(), name='promo-banner-detail'),
-    path('promo-banners/<int:pk>/update/', PromoBannerUpdateAPIView.as_view(), name='promo-banner-update'),
-    path('promo-banners/<int:pk>/delete/', PromoBannerDeleteAPIView.as_view(), name='promo-banner-delete'),
-    
-    path('site-settings/', SiteSettingsAPIView.as_view(), name='site-settings'),
-    
-    path('page-content/', PageContentListAPIView.as_view(), name='page-content-list'),
-    path('page-content/create/', PageContentCreateAPIView.as_view(), name='page-content-create'),
-    path('page-content/<int:pk>/', PageContentRetrieveAPIView.as_view(), name='page-content-detail'),
-    path('page-content/<int:pk>/update/', PageContentUpdateAPIView.as_view(), name='page-content-update'),
-    path('page-content/<int:pk>/delete/', PageContentDeleteAPIView.as_view(), name='page-content-delete'),
-    #===============End of CMS Endpoints================
-
-    
-    path('gym-classes/', GymClassDashboardListAPIView.as_view(), name='gym-class-list'),
-    path('gym-classes/create/', GymClassDashboardCreateAPIView.as_view(), name='gym-class-create'),
-    path('gym-classes/levels/', GymClassLevelsAPIView.as_view(), name='gym-class-levels'),
-    path('gym-classes/<int:pk>/', GymClassDashboardRetrieveAPIView.as_view(), name='gym-class-detail'),
-    path('gym-classes/<int:pk>/update/', GymClassDashboardUpdateAPIView.as_view(), name='gym-class-update'),
-    path('gym-classes/<int:pk>/delete/', GymClassDashboardDeleteAPIView.as_view(), name='gym-class-delete'),
-    path('class-bookings/', ClassBookingListAPIView.as_view(), name='class-booking-list'),
-    path('class-bookings/create/', ClassBookingCreateAPIView.as_view(), name='class-booking-create'),
-    path('class-bookings/<int:pk>/', ClassBookingRetrieveAPIView.as_view(), name='class-booking-detail'),
-    path('class-bookings/<int:pk>/update/', ClassBookingUpdateAPIView.as_view(), name='class-booking-update'),
-    path('class-bookings/<int:pk>/delete/', ClassBookingDeleteAPIView.as_view(), name='class-booking-delete'),
-    path('gym-class-categories/', GymClassCategoryDashboardListAPIView.as_view(), name='gym-class-category-list'),
-    path('gym-class-categories/create/', GymClassCategoryDashboardCreateAPIView.as_view(), name='gym-class-category-create'),
-    path('gym-class-categories/<int:pk>/', GymClassCategoryDashboardRetrieveAPIView.as_view(), name='gym-class-category-detail'),
-    path('gym-class-categories/<int:pk>/update/', GymClassCategoryDashboardUpdateAPIView.as_view(), name='gym-class-category-update'),
-    path('gym-class-categories/<int:pk>/delete/', GymClassCategoryDashboardDeleteAPIView.as_view(), name='gym-class-category-delete'),
-    path('instructors/', InstructorListAPIView.as_view(), name='instructor-list'),
+    # ==== CRM related endpoints ====
     path('contacts/', DashboardContactListAPIView.as_view(), name='contact-list'),
     path('contacts/create/', DashboardContactCreateAPIView.as_view(), name='contact-create'),
     path('contacts/new/', DashboardContactNewListAPIView.as_view(), name='contact-new-list'),
@@ -170,6 +93,34 @@ urlpatterns = [
     path('fithive-support/<int:pk>/delete/', DashboardFitHiveSupportDeleteAPIView.as_view(), name='fithive-support-delete'),
     path('fithive-support/<int:pk>/mark-as-read/', DashboardFitHiveSupportMarkAsReadAPIView.as_view(), name='fithive-support-mark-as-read'),
     path('fithive-support/<int:pk>/mark-as-responded/', DashboardFitHiveSupportMarkAsRespondedAPIView.as_view(), name='fithive-support-mark-as-responded'),
+    # ==== End of CRM related endpoints ====
+    
+    #==== Gym Class related endpoints ====
+    path('gym-classes/', GymClassDashboardListAPIView.as_view(), name='gym-class-list'),
+    path('gym-classes/create/', GymClassDashboardCreateAPIView.as_view(), name='gym-class-create'),
+    path('gym-classes/levels/', GymClassLevelsAPIView.as_view(), name='gym-class-levels'),
+    path('gym-classes/<int:pk>/', GymClassDashboardRetrieveAPIView.as_view(), name='gym-class-detail'),
+    path('gym-classes/<int:pk>/update/', GymClassDashboardUpdateAPIView.as_view(), name='gym-class-update'),
+    path('gym-classes/<int:pk>/delete/', GymClassDashboardDeleteAPIView.as_view(), name='gym-class-delete'),
+    path('class-bookings/', ClassBookingListAPIView.as_view(), name='class-booking-list'),
+    path('class-bookings/create/', ClassBookingCreateAPIView.as_view(), name='class-booking-create'),
+    path('class-bookings/<int:pk>/', ClassBookingRetrieveAPIView.as_view(), name='class-booking-detail'),
+    path('class-bookings/<int:pk>/update/', ClassBookingUpdateAPIView.as_view(), name='class-booking-update'),
+    path('class-bookings/<int:pk>/delete/', ClassBookingDeleteAPIView.as_view(), name='class-booking-delete'),
+    path('gym-class-categories/', GymClassCategoryDashboardListAPIView.as_view(), name='gym-class-category-list'),
+    path('gym-class-categories/create/', GymClassCategoryDashboardCreateAPIView.as_view(), name='gym-class-category-create'),
+    path('gym-class-categories/<int:pk>/', GymClassCategoryDashboardRetrieveAPIView.as_view(), name='gym-class-category-detail'),
+    path('gym-class-categories/<int:pk>/update/', GymClassCategoryDashboardUpdateAPIView.as_view(), name='gym-class-category-update'),
+    path('gym-class-categories/<int:pk>/delete/', GymClassCategoryDashboardDeleteAPIView.as_view(), name='gym-class-category-delete'),
+    path('gym-schedules/', GymScheduleDashboardListAPIView.as_view(), name='gym-schedule-list'),
+    path('gym-schedules/create/', GymScheduleDashboardCreateAPIView.as_view(), name='gym-schedule-create'),
+    path('gym-schedules/<int:pk>/', GymScheduleDashboardRetrieveAPIView.as_view(), name='gym-schedule-detail'),
+    path('gym-schedules/<int:pk>/update/', GymScheduleDashboardUpdateAPIView.as_view(), name='gym-schedule-update'),
+    path('gym-schedules/<int:pk>/delete/', GymScheduleDashboardDeleteAPIView.as_view(), name='gym-schedule-delete'),
+    path('instructors/', InstructorListAPIView.as_view(), name='instructor-list'),
+    #==== End of Gym Class related endpoints ====
+    
+    #==== Membership related endpoints ====
     path('packages/', PackageListAPIView.as_view(), name='package-list'),
     path('packages/create/', PackageCreateAPIView.as_view(), name='package-create'),
     path('packages/<int:pk>/', PackageRetrieveAPIView.as_view(), name='package-detail'),
@@ -195,15 +146,15 @@ urlpatterns = [
     path('payments/<int:pk>/', PaymentDashboardRetrieveAPIView.as_view(), name='payment-detail'),
     path('payments/<int:pk>/update/', PaymentDashboardUpdateAPIView.as_view(), name='payment-update'),
     path('payments/<int:pk>/delete/', PaymentDashboardDeleteAPIView.as_view(), name='payment-delete'),
+    # === End of Membership related endpoints ====
+
+    # ==== Attendance related endpoints ====
     path('attendance/', AttendanceDashboardListAPIView.as_view(), name='attendance-list'),
     path('attendance/create/', AttendanceDashboardCreateAPIView.as_view(), name='attendance-create'),
     path('attendance/<int:pk>/', AttendanceDashboardRetrieveAPIView.as_view(), name='attendance-detail'),
     path('attendance/<int:pk>/update/', AttendanceDashboardUpdateAPIView.as_view(), name='attendance-update'),
     path('attendance/<int:pk>/delete/', AttendanceDashboardDeleteAPIView.as_view(), name='attendance-delete'),
-    path('gym-schedules/', GymScheduleDashboardListAPIView.as_view(), name='gym-schedule-list'),
-    path('gym-schedules/create/', GymScheduleDashboardCreateAPIView.as_view(), name='gym-schedule-create'),
-    path('gym-schedules/<int:pk>/', GymScheduleDashboardRetrieveAPIView.as_view(), name='gym-schedule-detail'),
-    path('gym-schedules/<int:pk>/update/', GymScheduleDashboardUpdateAPIView.as_view(), name='gym-schedule-update'),
-    path('gym-schedules/<int:pk>/delete/', GymScheduleDashboardDeleteAPIView.as_view(), name='gym-schedule-delete'),
+    # ==== End of Attendance related endpoints ====
+
     path('upload/', FileUploadView.as_view(), name='file-upload'),
 ]
