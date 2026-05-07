@@ -20,11 +20,12 @@ from config.health import tenant_health
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/v1/', include(('apps.quick_action.urls', 'quick_action'), namespace='quick_action')),
     path('api/v1/health/tenant/', tenant_health, name='tenant-health'),
+    path('api/v1/', include(('apps.quick_action.urls', 'quick_action'), namespace='quick_action')),
     path('api/v1/tenancy/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy')),
     path('api/v1/identity/', include(('apps.identity.urls', 'identity'), namespace='identity')),
     path('api/v1/dashboard/', include(('apps.dashboard.urls', 'dashboard'), namespace='dashboard')),
+    path('api/v1/cms/', include(('apps.cms.urls', 'cms'), namespace='cms')),
     path('api/v1/membership/', include(('apps.membership.urls', 'membership'), namespace='membership')),
 
     # API Schema & Docs (tenant-scoped)
