@@ -126,11 +126,6 @@ urlpatterns = [
     path('packages/<int:pk>/', PackageRetrieveAPIView.as_view(), name='package-detail'),
     path('packages/<int:pk>/update/', PackageUpdateAPIView.as_view(), name='package-update'),
     path('packages/<int:pk>/delete/', PackageDeleteAPIView.as_view(), name='package-delete'),
-    path('gym-club/', GymClubDashboardListAPIView.as_view(), name='gym-club-list'),
-    path('gym-club/create/', GymClubDashboardCreateAPIView.as_view(), name='gym-club-create'),
-    path('gym-club/<int:pk>/', GymClubDashboardRetrieveAPIView.as_view(), name='gym-club-detail'),
-    path('gym-club/<int:pk>/update/', GymClubDashboardUpdateAPIView.as_view(), name='gym-club-update'),
-    path('gym-club/<int:pk>/delete/', GymClubDashboardDeleteAPIView.as_view(), name='gym-club-delete'),
     path('members/', MemberDashboardListAPIView.as_view(), name='member-list'),
     path('members/create/', MemberDashboardCreateAPIView.as_view(), name='member-create'),
     path('members/<int:pk>/', MemberDashboardRetrieveAPIView.as_view(), name='member-detail'),
@@ -141,12 +136,23 @@ urlpatterns = [
     path('member-packages/<int:pk>/', PackageDashboardRetrieveAPIView.as_view(), name='member-package-detail'),
     path('member-packages/<int:pk>/update/', PackageDashboardUpdateAPIView.as_view(), name='member-package-update'),
     path('member-packages/<int:pk>/delete/', PackageDashboardDeleteAPIView.as_view(), name='member-package-delete'),
+    # ==== End of Membership related endpoints ====
+
+    #==== Gym Club related endpoints ====
+    path('gym-club/', GymClubDashboardListAPIView.as_view(), name='gym-club-list'),
+    path('gym-club/create/', GymClubDashboardCreateAPIView.as_view(), name='gym-club-create'),
+    path('gym-club/<int:pk>/', GymClubDashboardRetrieveAPIView.as_view(), name='gym-club-detail'),
+    path('gym-club/<int:pk>/update/', GymClubDashboardUpdateAPIView.as_view(), name='gym-club-update'),
+    path('gym-club/<int:pk>/delete/', GymClubDashboardDeleteAPIView.as_view(), name='gym-club-delete'),
+    # ==== End of Gym Club related endpoints ====
+
+    # ==== Payment related endpoints ====
     path('payments/', PaymentDashboardListAPIView.as_view(), name='payment-list'),
     path('payments/create/', PaymentDashboardCreateAPIView.as_view(), name='payment-create'),
     path('payments/<int:pk>/', PaymentDashboardRetrieveAPIView.as_view(), name='payment-detail'),
     path('payments/<int:pk>/update/', PaymentDashboardUpdateAPIView.as_view(), name='payment-update'),
     path('payments/<int:pk>/delete/', PaymentDashboardDeleteAPIView.as_view(), name='payment-delete'),
-    # === End of Membership related endpoints ====
+    # ==== End of Payment related endpoints ====
 
     # ==== Attendance related endpoints ====
     path('attendance/', AttendanceDashboardListAPIView.as_view(), name='attendance-list'),
