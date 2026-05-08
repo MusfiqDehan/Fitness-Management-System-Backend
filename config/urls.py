@@ -34,6 +34,7 @@ urlpatterns = [
     path('api/v1/cms/', include(('apps.cms.urls', 'cms'), namespace='cms')),
     path('api/v1/crm/', include(('apps.crm.urls', 'crm'), namespace='crm')),
     path('api/v1/membership/', include(('apps.membership.urls', 'membership'), namespace='membership')),
+    path('api/v1/access/', include(('apps.access.urls', 'access'), namespace='access')),
     path('api/v1/billing/', include(('apps.billing.urls', 'billing'), namespace='billing')),
     path('api/v1/attendance/', include(('apps.attendance.urls', 'attendance'), namespace='attendance')),
 
