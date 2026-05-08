@@ -68,6 +68,7 @@ TENANT_APPS = [
     'django.contrib.contenttypes',   # needed for permissions in tenant schema
     'django.contrib.auth',
     'apps.identity.apps.IdentityConfig',
+    'apps.access.apps.AccessConfig',
     'apps.dashboard.apps.DashboardConfig',
     'apps.membership.apps.MembershipConfig',
     'apps.quick_action.apps.QuickActionConfig',
