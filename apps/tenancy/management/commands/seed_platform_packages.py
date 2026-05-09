@@ -34,7 +34,6 @@ CORE_FEATURES = [
     ("clubs", "Gym Clubs / Branches", None),
     ("reports", "Reports & Analytics", None),
     ("reminders", "Reminders & Notifications", None),
-    ("quick_actions", "Quick Actions", None),
     ("settings", "Settings", None),
     ("permissions", "Roles & Permissions", None),
 ]
@@ -56,7 +55,7 @@ PACKAGES = {
             "dashboard", "members", "members.attendance", "members.packages",
             "instructors", "classes", "classes.bookings",
             "payments", "crm.contacts", "crm.inquiries",
-            "reminders", "quick_actions", "settings",
+            "reminders", "settings",
         ],
     },
     "starter": {
@@ -76,7 +75,7 @@ PACKAGES = {
             "payments", "payments.invoices",
             "crm.contacts", "crm.inquiries",
             "cms.banners", "cms.blogs",
-            "reports", "reminders", "quick_actions", "settings", "permissions",
+            "reports", "reminders", "settings", "permissions",
         ],
     },
     "enterprise": {

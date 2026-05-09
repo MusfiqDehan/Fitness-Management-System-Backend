@@ -8,9 +8,10 @@ What it does:
   * For every key in `TENANT_REGISTRY` + `SHARED_FEATURES`, upsert a Feature row
     in the public schema.
   * The first registry entry to mention a key wins for `name` / `sort_order`.
-  * Keys that no longer exist in the registry are NOT deleted (might still be
-    referenced by RolePermission rows in tenant schemas) but are flagged via
-    stdout so an operator can decide.
+  * Keys that no longer exist in the registry are NOT deleted unless --prune is
+    passed.  Without --prune they are flagged via stdout so an operator can decide.
+  * Pass --prune to delete orphaned Feature rows (and their TenantFeatureFlag
+    children via ON DELETE CASCADE) instead of just warning.
 """
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -26,7 +27,16 @@ from apps.tenancy.models import Feature
 class Command(BaseCommand):
     help = "Upsert tenant Feature rows from the canonical feature registry."
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--prune",
+            action="store_true",
+            default=False,
+            help="Delete Feature rows whose key is no longer in the registry.",
+        )
+
     def handle(self, *args, **options):
+        prune = options["prune"]
         sort_order = 0
         seen_keys: set[str] = set()
         with schema_context("public"), transaction.atomic():
@@ -70,12 +80,21 @@ class Command(BaseCommand):
                     ("+ " if created else "= ") + f"{key} ({item['name']}) [shared]"
                 )
 
-            # Detect orphans (rows in DB not present in registry).
+            # Detect (and optionally delete) orphans.
             orphan_qs = Feature.objects.exclude(key__in=seen_keys)
             for orphan in orphan_qs:
-                self.stdout.write(
-                    self.style.WARNING(
-                        f"! orphan: '{orphan.key}' is in DB but missing from registry"
+                if prune:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"- pruned orphan: '{orphan.key}' deleted from DB"
+                        )
                     )
-                )
+                    orphan.delete()
+                else:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"! orphan: '{orphan.key}' is in DB but missing from registry"
+                            " (run with --prune to delete)"
+                        )
+                    )
         self.stdout.write(self.style.SUCCESS(f"Synced {len(seen_keys)} feature(s)."))
