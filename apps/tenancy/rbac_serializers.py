@@ -126,7 +126,7 @@ class PlatformPackageSerializer(serializers.ModelSerializer):
 
 class PublicPlatformPackageSerializer(serializers.ModelSerializer):
     """Public-facing package serializer used on the landing page."""
-    feature_keys = serializers.SerializerMethodField()
+    feature_names = serializers.SerializerMethodField()
 
     class Meta:
         model = PlatformPackage
@@ -135,13 +135,14 @@ class PublicPlatformPackageSerializer(serializers.ModelSerializer):
             "price_monthly", "price_yearly",
             "max_users", "max_branches", "trial_days",
             "highlight", "sort_order",
-            "feature_keys",
+            "feature_names",
         ]
 
-    def get_feature_keys(self, obj):
+    def get_feature_names(self, obj):
         return list(
             obj.package_features.filter(is_enabled=True)
-            .values_list("feature__key", flat=True)
+            .order_by("feature__sort_order")
+            .values_list("feature__name", flat=True)
         )
 
 
