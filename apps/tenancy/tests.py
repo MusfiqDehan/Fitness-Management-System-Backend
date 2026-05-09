@@ -166,9 +166,9 @@ class TenancyApiTests(APITestCase):
 
 		email_log = EmailQueue.objects.get(to_email="admin@managed.test", purpose=EmailQueue.PURPOSE_INVITATION)
 		self.assertEqual(email_log.status, EmailQueue.STATUS_SENT)
-		self.assertTrue(email_log.context["invitation_url"].startswith("http://managed.localhost:5173/AcceptTenantInvite?token="))
-		self.assertIn("http://managed.localhost:5173/AcceptTenantInvite?token=", email_log.text_body)
-		self.assertIn("http://managed.localhost:5173/AcceptTenantInvite?token=", mail.outbox[-1].body)
+		self.assertTrue(email_log.context["invitation_url"].startswith("http://managed.localhost:5173/accept-invite?token="))
+		self.assertIn("http://managed.localhost:5173/accept-invite?token=", email_log.text_body)
+		self.assertIn("http://managed.localhost:5173/accept-invite?token=", mail.outbox[-1].body)
 
 	def test_tenant_schema_superuser_cannot_use_tenant_management(self):
 		self.client.force_authenticate(user=self.user)
@@ -407,7 +407,7 @@ class TenancyApiTests(APITestCase):
 
 		self.assertEqual(res.status_code, status.HTTP_201_CREATED)
 		email_log = EmailQueue.objects.get(to_email="admin@prodinvite.test", purpose=EmailQueue.PURPOSE_INVITATION)
-		self.assertTrue(email_log.context["invitation_url"].startswith("https://prodinvite.musfiqdehan.com/AcceptTenantInvite?token="))
+		self.assertTrue(email_log.context["invitation_url"].startswith("https://prodinvite.musfiqdehan.com/accept-invite?token="))
 
 	def test_token_validation_rejects_wrong_tenant_host(self):
 		raw_token, _ = Invitation.issue_token(
