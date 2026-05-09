@@ -163,7 +163,7 @@ SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'false').lower() in 
 # Tenant auth helper settings
 PUBLIC_DOMAIN = os.environ.get('PUBLIC_DOMAIN', '').strip().lower()
 TENANT_BASE_DOMAIN = os.environ.get('TENANT_BASE_DOMAIN', '').strip().lower()
-TENANT_POST_LOGIN_PATH = os.environ.get('TENANT_POST_LOGIN_PATH', '/AdminDashboard').strip() or '/AdminDashboard'
+TENANT_POST_LOGIN_PATH = os.environ.get('TENANT_POST_LOGIN_PATH', '/dashboard').strip() or '/dashboard'
 FRONTEND_BASE_URL = os.environ.get('FRONTEND_BASE_URL', '').strip()
 PUBLIC_FRONTEND_URL = os.environ.get('PUBLIC_FRONTEND_URL', FRONTEND_BASE_URL).strip()
 TENANT_FRONTEND_BASE_DOMAIN = os.environ.get('TENANT_FRONTEND_BASE_DOMAIN', TENANT_BASE_DOMAIN).strip().lower()

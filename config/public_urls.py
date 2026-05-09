@@ -34,6 +34,9 @@ urlpatterns = [
     path('api/v1/tenancy/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy-v1')),
     path('api/v1/tenants/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy')),
 
+    # Platform-admin billing & package management
+    path('api/v1/billing/', include(('apps.billing.urls', 'billing'), namespace='billing')),
+
     # API Schema & Docs (shared)
     path('api/v1/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/v1/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
