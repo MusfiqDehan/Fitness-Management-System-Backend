@@ -25,7 +25,7 @@ from .serializers import (
     DashboardBlogSerializer,
 )
 
-from apps.dashboard.permissions import IsAdminStaffOrSuperuser
+from apps.access.permissions import HasFeatureMethodPermission
 
 
 class ListModelAPIView(GenericAPIView):
@@ -81,9 +81,10 @@ class DestroyModelAPIView(GenericAPIView):
 # -------------------------------------------------------
 
 class SiteBannerBaseAPIView(GenericAPIView):
+    feature_key = 'cms.banners'
     queryset = SiteBanner.objects.all().order_by('position', 'created_at')
     serializer_class = SiteBannerSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
     filter_backends = [SearchFilter]
     search_fields = ['title', 'subtitle']
 
@@ -126,9 +127,10 @@ class PublicSiteBannerListView(generics.ListAPIView):
 # -------------------------------------------------------
 
 class PromoBannerBaseAPIView(GenericAPIView):
+    feature_key = 'cms.banners'
     queryset = PromoBanner.objects.all().order_by('-created_at')
     serializer_class = PromoBannerSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
     filter_backends = [SearchFilter]
     search_fields = ['link_url']
 
@@ -181,6 +183,7 @@ class PublicPromoBannerListView(generics.ListAPIView):
 # -------------------------------------------------------
 
 class SiteSettingsAPIView(APIView):
+    feature_key = 'settings'
     """
     Manage the single SiteSettings record.
 
@@ -193,7 +196,7 @@ class SiteSettingsAPIView(APIView):
 
     Permission: admin/staff only.
     """
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
     def get(self, request):
         instance = SiteSettings.objects.first()
@@ -232,9 +235,10 @@ class PublicSiteSettingsView(APIView):
 # -------------------------------------------------------
 
 class PageContentBaseAPIView(GenericAPIView):
+    feature_key = 'cms.blogs'
     queryset = PageContent.objects.all().order_by('page_name')
     serializer_class = PageContentSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
     filter_backends = [SearchFilter]
     search_fields = ['page_name', 'title', 'subtitle']
 
@@ -277,9 +281,10 @@ class PublicPageContentListView(generics.ListAPIView):
 # -------------------------------------------------------
 
 class BlogCategoryBaseAPIView(GenericAPIView):
+    feature_key = 'cms.blogs'
     queryset = BlogCategory.objects.order_by('id')
     serializer_class = BlogCategorySerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class BlogCategoryListAPIView(ListModelAPIView, BlogCategoryBaseAPIView):
@@ -307,9 +312,10 @@ class BlogCategoryDeleteAPIView(DestroyModelAPIView, BlogCategoryBaseAPIView):
 # -------------------------------------------------------
 
 class DashboardBlogBaseAPIView(GenericAPIView):
+    feature_key = 'cms.blogs'
     queryset = Blog.objects.all().order_by('-created_at')
     serializer_class = DashboardBlogSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
     filter_backends = [SearchFilter]
     filterset_fields = ['status', 'category']
     search_fields = ['title', 'description']
