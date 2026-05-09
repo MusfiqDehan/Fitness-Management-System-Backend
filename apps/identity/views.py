@@ -8,6 +8,8 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from apps.access.permissions import HasFeatureMethodPermission
+
 from .models import User, StudentProfile, InstructorProfile
 from .serializers import (
     RegisterSerializer,
@@ -110,9 +112,10 @@ class CurrentUserAPIView(APIView):
 
 
 class InstructorListAPIView(GenericAPIView):
+    feature_key = 'instructors'
     queryset = User.objects.filter(role='instructor', is_active=True)
     serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasFeatureMethodPermission]
 
     def get(self, request, *args, **kwargs):
         queryset = self.get_queryset()
