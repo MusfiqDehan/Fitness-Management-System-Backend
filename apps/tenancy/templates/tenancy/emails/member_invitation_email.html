@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+  <body style="font-family: Arial, sans-serif; color: #1f2937;">
+    <h2 style="margin-bottom: 8px;">You're invited to join {{ company_name }}</h2>
+    <p>Hello{% if invitee_full_name %} {{ invitee_full_name }}{% endif %},</p>
+    <p>
+      <strong>{{ invited_by }}</strong> has invited you to join the
+      <strong>{{ company_name }}</strong> workspace on Fithive as a
+      <strong>{{ role_name }}</strong>.
+    </p>
+    <p>
+      Click the link below to set your password and access the dashboard:<br/>
+      <a href="{{ invitation_url }}">{{ invitation_url }}</a>
+    </p>
+    <p>This invitation expires at {{ expires_at }}. If you did not expect this email, you can safely ignore it.</p>
+  </body>
+</html>
