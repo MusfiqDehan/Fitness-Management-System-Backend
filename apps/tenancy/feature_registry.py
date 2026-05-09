@@ -58,7 +58,7 @@ PLATFORM_REGISTRY: list[RegistryItem] = [
             {
                 "key": "platform.packages",
                 "name": "Platform Packages",
-                "route": None,
+                "route": "/platform/packages",
                 "icon": "Boxes",
             },
             {
@@ -147,7 +147,6 @@ TENANT_REGISTRY: list[RegistryItem] = [
         "group": "Access Control",
         "children": [
             {"key": "permissions",   "name": "Rules & Permission", "route": "/permissions", "icon": "ShieldCheck"},
-            {"key": "quick_actions", "name": "Quick Actions",      "route": None,           "icon": "Zap"},
         ],
     },
 ]
