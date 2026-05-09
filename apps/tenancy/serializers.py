@@ -9,7 +9,7 @@ from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework import serializers
 
 from apps.identity.models import User
-from .models import Tenant, Domain, Invitation
+from .models import Tenant, Domain, Invitation, PlatformRole, PlatformUserRole
 
 SUBDOMAIN_RE = re.compile(r"^(?!-)[a-z0-9-]{3,63}(?<!-)$")
 
@@ -256,3 +256,72 @@ class TenantUpdateSerializer(serializers.ModelSerializer):
             "features",
             "metadata",
         ]
+
+
+class PlatformInvitationCreateSerializer(serializers.Serializer):
+    """Superadmin invites a new (or existing) public-schema user to the platform team."""
+
+    email = serializers.EmailField()
+    full_name = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    role = serializers.PrimaryKeyRelatedField(queryset=PlatformRole.objects.all())
+
+    def validate_email(self, value):
+        return value.lower().strip()
+
+    def validate(self, attrs):
+        email = attrs["email"]
+        role = attrs["role"]
+        with schema_context(get_public_schema_name()):
+            existing_user = User.objects.filter(email__iexact=email, tenant__isnull=True).first()
+            if existing_user is not None:
+                already = PlatformUserRole.objects.filter(user=existing_user, role=role).exists()
+                if already:
+                    raise serializers.ValidationError(
+                        {"email": "This user already has that platform role."}
+                    )
+            pending = Invitation.objects.filter(
+                token_type=Invitation.TOKEN_TYPE_PLATFORM_INVITE,
+                email__iexact=email,
+                used_at__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).exists()
+            if pending:
+                raise serializers.ValidationError(
+                    {"email": "This email already has a pending platform invitation."}
+                )
+        return attrs
+
+
+class PlatformInvitationListSerializer(serializers.ModelSerializer):
+    role_id = serializers.IntegerField(source="platform_role_id", read_only=True)
+    role_name = serializers.CharField(source="platform_role.name", read_only=True, default="")
+    role_slug = serializers.CharField(source="platform_role.slug", read_only=True, default="")
+    is_expired = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Invitation
+        fields = [
+            "id",
+            "email",
+            "invitee_full_name",
+            "role_id",
+            "role_name",
+            "role_slug",
+            "invited_by_email",
+            "expires_at",
+            "is_expired",
+            "used_at",
+            "created_at",
+        ]
+
+
+class PlatformInviteAcceptSerializer(serializers.Serializer):
+    token = serializers.CharField(max_length=255)
+    full_name = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True, min_length=8)
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+        return attrs
