@@ -1,13 +1,20 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import BasePermission
 from django.utils import timezone
 from datetime import timedelta
 from django.conf import settings
 from .models import Member, Attendance
 
 
+class DeviceAPIKeyPermission(BasePermission):
+    def has_permission(self, request, view):
+        return request.headers.get("X-API-KEY") == settings.GYM_DEVICE_API_KEY
+
+
 class CheckAccessAPIView(APIView):
+    permission_classes = [DeviceAPIKeyPermission]
 
     def post(self, request):
 
@@ -87,6 +94,7 @@ class CheckAccessAPIView(APIView):
 
 
 class MembersInsideAPIView(APIView):
+    permission_classes = [DeviceAPIKeyPermission]
 
     def get(self, request):
 
