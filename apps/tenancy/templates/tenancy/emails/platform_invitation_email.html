@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+  <body style="font-family: Arial, sans-serif; color: #1f2937;">
+    <h2 style="margin-bottom: 8px;">Platform Team Invitation</h2>
+    <p>Hello {{ full_name }},</p>
+    <p>
+      <strong>{{ invited_by }}</strong> has invited you to join the Fithive
+      <strong>Platform Team</strong> with the role
+      <strong>{{ role_name }}</strong>.
+    </p>
+    <p>
+      Accept the invitation and set your password:<br/>
+      <a href="{{ invitation_url }}">{{ invitation_url }}</a>
+    </p>
+    <p style="color:#6b7280;font-size:12px;">
+      This invitation expires at {{ expires_at }}. If you did not expect this email, you can ignore it.
+    </p>
+  </body>
+</html>
