@@ -609,22 +609,38 @@ class PasswordSetupAPIView(APIView):
 			else:
 				domain = tenant.domains.filter(is_primary=True).values_list("domain", flat=True).first() or domain
 
+			metadata = invitation.metadata or {}
+			is_member_invite = is_owner_setup and bool(metadata.get("member_invite"))
+
 			with schema_context(tenant.schema_name):
 				user = User.objects.filter(email__iexact=email).first()
 				if user is None:
 					if not is_owner_setup:
 						return Response({"detail": "User account not found."}, status=status.HTTP_400_BAD_REQUEST)
-					user = User.objects.create_user(
-						email=email,
-						password=payload["password"],
-						role="superuser",
-						full_name=invitation.invitee_full_name,
-						tenant=tenant,
-						is_staff=True,
-						is_superuser=True,
-						email_verified=True,
-						password_set_at=setup_time,
-					)
+					if is_member_invite:
+						user = User.objects.create_user(
+							email=email,
+							password=payload["password"],
+							role="staff",
+							full_name=invitation.invitee_full_name,
+							tenant=tenant,
+							is_staff=False,
+							is_superuser=False,
+							email_verified=True,
+							password_set_at=setup_time,
+						)
+					else:
+						user = User.objects.create_user(
+							email=email,
+							password=payload["password"],
+							role="superuser",
+							full_name=invitation.invitee_full_name,
+							tenant=tenant,
+							is_staff=True,
+							is_superuser=True,
+							email_verified=True,
+							password_set_at=setup_time,
+						)
 				else:
 					user.set_password(payload["password"])
 					user.is_active = True
@@ -634,11 +650,29 @@ class PasswordSetupAPIView(APIView):
 					user.password_set_at = setup_time
 					if invitation.invitee_full_name and not user.full_name:
 						user.full_name = invitation.invitee_full_name
-					if is_owner_setup:
+					if is_owner_setup and not is_member_invite:
 						user.role = "superuser"
 						user.is_staff = True
 						user.is_superuser = True
 					user.save()
+
+				# Assign the tenant RBAC role for member invitations.
+				if is_member_invite:
+					role_slug = metadata.get("role_slug", "")
+					if role_slug:
+						from apps.access.models import Role, UserRole as TenantUserRole
+						try:
+							role_obj = Role.objects.get(slug=role_slug)
+							TenantUserRole.objects.get_or_create(
+								user_id=user.id,
+								role=role_obj,
+								defaults={
+									"user_email": user.email,
+									"assigned_by_email": invitation.invited_by_email,
+								},
+							)
+						except Role.DoesNotExist:
+							pass  # Role deleted since invite was sent; user can still log in
 
 			invitation.used_at = setup_time
 			invitation.save(update_fields=["used_at"])
@@ -923,3 +957,133 @@ class TenantAuditLogListAPIView(generics.ListAPIView):
 			for item in logs
 		]
 		return Response(payload)
+
+
+class TenantMemberInviteAPIView(APIView):
+	"""Invite a staff member into the current tenant workspace.
+
+	Only accessible from a tenant schema by a user with role-admin privileges.
+	Creates an Invitation token, stores the target role slug in metadata, and
+	sends a password-setup email.  When the invitee clicks the link and sets
+	their password (via PasswordSetupAPIView), the UserRole is automatically
+	assigned.
+	"""
+
+	permission_classes = [IsAuthenticated]
+
+	def _assert_role_admin(self, user):
+		from apps.access.permissions import IsRoleAdmin
+		return (
+			user.is_superuser
+			or user.is_staff
+			or getattr(user, "role", "") == "admin"
+			or IsRoleAdmin().has_permission(type("_R", (), {"user": user})(), None)
+		)
+
+	def post(self, request):
+		if _is_public_schema_request(request):
+			return Response(
+				{"detail": "Member invitations are only available inside a tenant workspace."},
+				status=status.HTTP_403_FORBIDDEN,
+			)
+
+		if not self._assert_role_admin(request.user):
+			return Response({"detail": "You do not have permission to invite members."}, status=status.HTTP_403_FORBIDDEN)
+
+		email = (request.data.get("email") or "").strip().lower()
+		full_name = (request.data.get("full_name") or "").strip()
+		role_slug = (request.data.get("role_slug") or "").strip()
+
+		if not email:
+			return Response({"detail": "email is required."}, status=status.HTTP_400_BAD_REQUEST)
+		if not role_slug:
+			return Response({"detail": "role_slug is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+		# Validate the role exists in this tenant schema.
+		from apps.access.models import Role
+		try:
+			role_obj = Role.objects.get(slug=role_slug)
+		except Role.DoesNotExist:
+			return Response(
+				{"detail": f"Role '{role_slug}' does not exist in this workspace."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		# Get the tenant from the current request.
+		tenant = getattr(request, "tenant", None)
+		if tenant is None:
+			return Response({"detail": "Tenant context not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+		# Resolve the primary domain for this tenant (from the public schema).
+		with schema_context(get_public_schema_name()):
+			primary_domain = (
+				tenant.domains.filter(is_primary=True).values_list("domain", flat=True).first()
+				or full_domain_for_subdomain(tenant.schema_name.replace("_", "-"), request=request)
+			)
+
+		subdomain = tenant.schema_name.replace("_", "-")
+		company_name = tenant.name
+
+		# Revoke any open (unused, non-expired) invitation for this email in this tenant.
+		with schema_context(get_public_schema_name()):
+			Invitation.objects.filter(
+				email__iexact=email,
+				tenant=tenant,
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				used_at__isnull=True,
+			).update(expires_at=timezone.now())
+
+			raw_token, invitation = Invitation.issue_token(
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				tenant=tenant,
+				email=email,
+				invitee_full_name=full_name,
+				subdomain=subdomain,
+				company_name=company_name,
+				invited_by_email=getattr(request.user, "email", ""),
+				ttl_minutes=60 * 48,  # 48 hours
+				metadata={
+					"member_invite": True,
+					"role_slug": role_slug,
+					"role_name": role_obj.name,
+					"domain": primary_domain,
+				},
+			)
+
+		setup_url = _build_frontend_url(
+			f"/accept-invite?token={quote(raw_token)}",
+			subdomain=subdomain,
+			domain=primary_domain,
+			prefer_public=False,
+		)
+
+		_issue_email(
+			tenant=tenant,
+			to_email=email,
+			purpose=EmailQueue.PURPOSE_INVITATION,
+			subject=f"You've been invited to {company_name} on Fithive",
+			template_name="tenancy/emails/member_invitation_email.html",
+			context={
+				"company_name": company_name,
+				"invitee_full_name": full_name,
+				"invited_by": getattr(request.user, "email", ""),
+				"role_name": role_obj.name,
+				"invitation_url": setup_url,
+				"expires_at": invitation.expires_at,
+			},
+			fallback_text=f"You have been invited to {company_name}. Set your password: {setup_url}",
+		)
+
+		_record_audit(
+			request,
+			action="tenant.member.invited",
+			tenant=tenant,
+			target_type="invitation",
+			target_id=invitation.id,
+			metadata={"email": email, "role_slug": role_slug, "domain": primary_domain},
+		)
+
+		return Response(
+			{"message": f"Invitation sent to {email}.", "email": email, "role": role_slug},
+			status=status.HTTP_201_CREATED,
+		)

@@ -12,6 +12,7 @@ from .views import (
 	TenantAdminDetailAPIView,
 	TenantAdminActivationAPIView,
 	TenantAuditLogListAPIView,
+	TenantMemberInviteAPIView,
 )
 from .rbac_views import (
 	PlatformModuleListView,
@@ -53,6 +54,9 @@ urlpatterns = [
 
 	# Authenticated tenant feature lookup (used by frontend to know which features to show)
 	path('me/features/', CurrentTenantFeatureListView.as_view(), name='current-tenant-features'),
+
+	# Tenant staff member invitations (from Permissions page)
+	path('members/invite/', TenantMemberInviteAPIView.as_view(), name='tenant-member-invite'),
 
 	# Authenticated platform permission lookup (used by frontend to filter Platform Admin sidebar)
 	path('admin/me/platform-permissions/', MyPlatformPermissionsView.as_view(), name='me-platform-permissions'),
