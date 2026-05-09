@@ -2,6 +2,7 @@ from rest_framework import generics, permissions, status
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework.filters import SearchFilter
+from apps.access.permissions import HasFeatureMethodPermission
 from .models import (
     GymClub,
     GymClass,
@@ -74,69 +75,89 @@ class DestroyModelAPIView(GenericAPIView):
 
 
 class GymClubListAPIView(ListModelAPIView):
+    feature_key = 'clubs'
     queryset = GymClub.objects.prefetch_related('facilities').all()
     serializer_class = GymClubSerializer
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class GymClubCreateAPIView(CreateModelAPIView):
+    feature_key = 'clubs'
     queryset = GymClub.objects.prefetch_related('facilities').all()
     serializer_class = GymClubSerializer
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class GymClubRetrieveAPIView(RetrieveModelAPIView):
+    feature_key = 'clubs'
     queryset = GymClub.objects.prefetch_related('facilities').all()
     serializer_class = GymClubSerializer
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class GymClubUpdateAPIView(UpdateModelAPIView):
+    feature_key = 'clubs'
     queryset = GymClub.objects.prefetch_related('facilities').all()
     serializer_class = GymClubSerializer
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class GymClubDeleteAPIView(DestroyModelAPIView):
+    feature_key = 'clubs'
     queryset = GymClub.objects.prefetch_related('facilities').all()
     serializer_class = GymClubSerializer
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class CategoryListCreateView(generics.ListCreateAPIView):
+    feature_key = 'classes'
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class ScheduleListCreateView(generics.ListCreateAPIView):
+    feature_key = 'classes'
     queryset = ClassSchedule.objects.all()
     serializer_class = ClassScheduleSerializer
+    permission_classes = [HasFeatureMethodPermission]
 
 
 # gym class
 class GymClassListCreateView(generics.ListCreateAPIView):
+    feature_key = 'classes'
     queryset = GymClass.objects.prefetch_related("class_schedule").select_related(
         "category",
         "instructor",
         "instructor__instructor_profile",
     ).order_by('-created_at', '-id')
     serializer_class = GymClassSerializer
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class GymClassDetailView(generics.RetrieveUpdateDestroyAPIView):
+    feature_key = 'classes'
     queryset = GymClass.objects.prefetch_related("class_schedule").select_related(
         "category",
         "instructor",
         "instructor__instructor_profile",
     ).order_by('-created_at', '-id')
     serializer_class = GymClassSerializer
+    permission_classes = [HasFeatureMethodPermission]
 
 
 # Contact
 class ContactCreateAPIView(generics.CreateAPIView):
     queryset = Contact.objects.all()
     serializer_class = ContactCreateSerializer
+    permission_classes = [permissions.AllowAny]
 
 
 # Fithive support
 class FitHiveSupportCreateAPIView(generics.CreateAPIView):
     queryset = FitHiveSupport.objects.all()
     serializer_class = FitHiveSupportCreateSerializer
+    permission_classes = [permissions.AllowAny]
 
 
 # package
