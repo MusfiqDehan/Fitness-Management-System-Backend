@@ -113,6 +113,12 @@ python manage.py migrate_schemas --noinput
 echo "Seeding predefined roles for all tenant schemas (idempotent)..."
 python manage.py all_tenants_command seed_tenant_roles
 
+echo "Syncing canonical feature registry into Feature table..."
+python manage.py sync_features
+
+echo "Seeding default Trial package with bundled features..."
+python manage.py seed_trial_package --resync-tenants
+
 echo "Ensuring superadmin account exists..."
 python manage.py create_superadmin
 
