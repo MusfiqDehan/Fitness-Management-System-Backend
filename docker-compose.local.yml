@@ -16,8 +16,6 @@ services:
     volumes:
       - .:/app                         # bind-mount source for hot reload
       - backend_media_local:/app/media # persist uploaded media
-    networks:
-      - gym_local_network
     command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8021", "--workers", "2", "--reload", "--timeout", "120"]
     restart: unless-stopped
 
@@ -34,15 +32,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    networks:
-      - gym_local_network
     restart: unless-stopped
 
 volumes:
   postgres_data_local:
   backend_media_local:
-
-networks:
-  gym_local_network:
-    name: gym_local_network
-    driver: bridge
