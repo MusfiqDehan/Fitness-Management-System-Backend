@@ -25,9 +25,10 @@ from .utils import get_user_permission_map
 
 
 class RoleListCreateView(generics.ListCreateAPIView):
-    queryset = Role.objects.all().prefetch_related("permissions", "user_assignments")
+    queryset = Role.objects.all().prefetch_related("permissions", "user_assignments").order_by("id")
     serializer_class = RoleSerializer
     permission_classes = [IsRoleAdmin]
+    pagination_class = None  # role list is small; return a plain array
 
 
 class RoleDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -81,9 +82,10 @@ class RolePermissionsView(APIView):
 
 
 class UserRoleListCreateView(generics.ListCreateAPIView):
-    queryset = UserRole.objects.select_related("role").all()
+    queryset = UserRole.objects.select_related("role").all().order_by("id")
     serializer_class = UserRoleSerializer
     permission_classes = [IsRoleAdmin]
+    pagination_class = None  # user-role list is small; return a plain array
 
     def perform_create(self, serializer):
         actor_email = getattr(self.request.user, "email", "") or ""
