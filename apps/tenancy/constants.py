@@ -14,6 +14,7 @@ PLATFORM_MODULE_AUDIT_LOGS = "platform.audit_logs"
 PLATFORM_MODULE_SUPPORT = "platform.support"
 PLATFORM_MODULE_PLATFORM_USERS = "platform.platform_users"
 PLATFORM_MODULE_BILLING = "platform.billing"
+PLATFORM_MODULE_SETTINGS = "platform.settings"
 
 PLATFORM_MODULES = {
     PLATFORM_MODULE_TENANTS: "Tenants",
@@ -24,6 +25,7 @@ PLATFORM_MODULES = {
     PLATFORM_MODULE_SUPPORT: "Support Tickets",
     PLATFORM_MODULE_PLATFORM_USERS: "Platform Users",
     PLATFORM_MODULE_BILLING: "Platform Billing",
+    PLATFORM_MODULE_SETTINGS: "Settings",
 }
 
 PLATFORM_MODULE_KEYS = list(PLATFORM_MODULES.keys())
