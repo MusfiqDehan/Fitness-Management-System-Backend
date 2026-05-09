@@ -1,7 +1,7 @@
 """Single source of truth for sidebar / RBAC features.
 
-Two scopes (PLATFORM vs TENANT) plus a SHARED bucket (e.g. Settings) that is
-visible to everyone authenticated, regardless of schema.
+Two scopes (PLATFORM vs TENANT) plus a SHARED bucket reserved for future routes
+that should be visible to every authenticated user regardless of schema.
 
 Anything that needs to render the sidebar, gate a route, or seed RolePermission
 rows must derive from THIS file. Drift is detected by tests in
@@ -60,6 +60,12 @@ PLATFORM_REGISTRY: list[RegistryItem] = [
                 "name": "Platform Packages",
                 "route": "/platform/packages",
                 "icon": "Boxes",
+            },
+            {
+                "key": "platform.settings",
+                "name": "Settings",
+                "route": "/settings",
+                "icon": "Settings",
             },
             {
                 "key": "platform.features",
@@ -147,15 +153,14 @@ TENANT_REGISTRY: list[RegistryItem] = [
         "group": "Access Control",
         "children": [
             {"key": "permissions",   "name": "Rules & Permission", "route": "/permissions", "icon": "ShieldCheck"},
+            {"key": "settings",      "name": "Settings",           "route": "/settings",    "icon": "Settings"},
         ],
     },
 ]
 
 
-# ─── Shared (always shown to authenticated users) ────────────────────────────
-SHARED_FEATURES: list[RegistryItem] = [
-    {"key": "settings", "name": "Settings", "route": "/settings", "icon": "Settings"},
-]
+# ─── Shared (reserved for always-authenticated routes) ───────────────────────
+SHARED_FEATURES: list[RegistryItem] = []
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
