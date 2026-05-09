@@ -110,6 +110,9 @@ else:
 echo "Running tenant schema migrations (identity, dashboard, membership, etc.)..."
 python manage.py migrate_schemas --noinput
 
+echo "Seeding predefined roles for all tenant schemas (idempotent)..."
+python manage.py all_tenants_command seed_tenant_roles
+
 echo "Ensuring superadmin account exists..."
 python manage.py create_superadmin
 
