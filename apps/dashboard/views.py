@@ -1,6 +1,5 @@
 from rest_framework import filters, status
 from rest_framework.generics import GenericAPIView
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from apps.quick_action.models import (
     GymClass,
@@ -34,7 +33,7 @@ from apps.membership.models import (
     Payment,
     Attendance
 )
-from .permissions import IsAdminStaffOrSuperuser
+from apps.access.permissions import HasFeatureMethodPermission
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.response import Response
@@ -114,13 +113,14 @@ class StatusTransitionAPIView(GenericAPIView):
 
 
 class GymClassDashboardBaseAPIView(GenericAPIView):
+    feature_key = 'classes'
     queryset = GymClass.objects.prefetch_related("class_schedule").select_related(
         "category",
         "instructor",
         "instructor__instructor_profile",
     )
     serializer_class = GymClassSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
     def perform_create(self, serializer):
         return serializer.save(instructor=self.request.user)
@@ -147,7 +147,8 @@ class GymClassDashboardDeleteAPIView(DestroyModelAPIView, GymClassDashboardBaseA
 
 
 class GymClassLevelsAPIView(APIView):
-    permission_classes = [IsAdminStaffOrSuperuser]
+    feature_key = 'classes'
+    permission_classes = [HasFeatureMethodPermission]
 
     def get(self, request):
         levels = [choice[0] for choice in GymClass.LEVEL_CHOICES]
@@ -155,9 +156,10 @@ class GymClassLevelsAPIView(APIView):
 
 
 class GymClassCategoryDashboardBaseAPIView(GenericAPIView):
+    feature_key = 'classes'
     queryset = Category.objects.order_by('id')
     serializer_class = CategorySerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class GymClassCategoryDashboardListAPIView(ListModelAPIView, GymClassCategoryDashboardBaseAPIView):
@@ -181,8 +183,9 @@ class GymClassCategoryDashboardDeleteAPIView(DestroyModelAPIView, GymClassCatego
 
 
 class ClassBookingBaseAPIView(GenericAPIView):
+    feature_key = 'classes.bookings'
     serializer_class = ClassBookingSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasFeatureMethodPermission]
 
     def get_queryset(self):
         user = self.request.user
@@ -234,9 +237,10 @@ class ClassBookingDeleteAPIView(DestroyModelAPIView, ClassBookingBaseAPIView):
 
 # Contact
 class DashboardContactBaseAPIView(GenericAPIView):
+    feature_key = 'crm.contacts'
     queryset = Contact.objects.all().order_by("-created_at")
     serializer_class = ContactDashboardSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
     filter_backends = [
         DjangoFilterBackend,
@@ -312,9 +316,10 @@ class DashboardContactRespondedListAPIView(UnpaginatedListModelAPIView, Dashboar
 
 # Fithive Support
 class DashboardFitHiveSupportBaseAPIView(GenericAPIView):
+    feature_key = 'crm.inquiries'
     queryset = FitHiveSupport.objects.all().order_by("-created_at")
     serializer_class = FitHiveSupportDashboardSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
     filter_backends = [
         DjangoFilterBackend,
@@ -367,9 +372,10 @@ class DashboardFitHiveSupportMarkAsRespondedAPIView(StatusTransitionAPIView, Das
 
 # Package
 class PackageDashboardBaseAPIView(GenericAPIView):
+    feature_key = 'members.packages'
     queryset = Package.objects.all().order_by('display_order', 'name')
     serializer_class = PackageSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class PackageListAPIView(ListModelAPIView, PackageDashboardBaseAPIView):
@@ -394,9 +400,10 @@ class PackageDeleteAPIView(DestroyModelAPIView, PackageDashboardBaseAPIView):
 
 # Gym Club
 class GymClubDashboardBaseAPIView(GenericAPIView):
+    feature_key = 'clubs'
     queryset = GymClub.objects.prefetch_related('facilities').all()
     serializer_class = GymClubSerializer
-    permission_classes = [IsAuthenticated, IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class GymClubDashboardListAPIView(ListModelAPIView, GymClubDashboardBaseAPIView):
@@ -421,9 +428,10 @@ class GymClubDashboardDeleteAPIView(DestroyModelAPIView, GymClubDashboardBaseAPI
 
 # MemberPackage
 class MemberPackageDashboardBaseAPIView(GenericAPIView):
+    feature_key = 'members.packages'
     queryset = MemberPackage.objects.all().order_by('name')
     serializer_class = MemberPackageSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
 
 class PackageDashboardListAPIView(ListModelAPIView, MemberPackageDashboardBaseAPIView):
@@ -448,9 +456,10 @@ class PackageDashboardDeleteAPIView(DestroyModelAPIView, MemberPackageDashboardB
 
 # Member
 class MemberDashboardBaseAPIView(GenericAPIView):
+    feature_key = 'members'
     queryset = Member.objects.select_related('member_package').all().order_by('-created_at')
     serializer_class = MemberSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['membership_type', 'member_package', 'is_active']
@@ -481,9 +490,10 @@ class MemberDashboardDeleteAPIView(DestroyModelAPIView, MemberDashboardBaseAPIVi
 
 # Payment
 class PaymentDashboardBaseAPIView(GenericAPIView):
+    feature_key = 'payments'
     queryset = Payment.objects.select_related('member').all().order_by('-payment_date')
     serializer_class = PaymentSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['payment_type', 'member']
@@ -514,9 +524,10 @@ class PaymentDashboardDeleteAPIView(DestroyModelAPIView, PaymentDashboardBaseAPI
 
 # Attendance
 class AttendanceDashboardBaseAPIView(GenericAPIView):
+    feature_key = 'members.attendance'
     queryset = Attendance.objects.select_related('member').all().order_by('-check_in_time')
     serializer_class = AttendanceSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
 
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['entry_method', 'member']
@@ -561,7 +572,8 @@ MAX_UPLOAD_SIZE_MB = 50
 
 
 class FileUploadView(APIView):
-    permission_classes = [IsAdminStaffOrSuperuser]
+    feature_keys = ['cms.banners', 'cms.blogs', 'clubs', 'classes']
+    permission_classes = [HasFeatureMethodPermission]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
@@ -602,9 +614,10 @@ class FileUploadView(APIView):
 
 # Gym Schedule
 class GymScheduleDashboardBaseAPIView(GenericAPIView):
+    feature_key = 'classes'
     queryset = GymSchedule.objects.all().order_by('display_order', 'day', 'time')
     serializer_class = GymScheduleSerializer
-    permission_classes = [IsAdminStaffOrSuperuser]
+    permission_classes = [HasFeatureMethodPermission]
     filter_backends = [DjangoFilterBackend, SearchFilter]
     filterset_fields = ['day', 'is_active', 'difficulty_level']
     search_fields = ['class_name', 'instructor', 'location', 'category']
