@@ -37,6 +37,39 @@ class HasFeaturePermission(BasePermission):
         return user_can(user, self.feature_key, self.required_level)
 
 
+class HasFeatureMethodPermission(BasePermission):
+    """Feature permission that maps HTTP methods to view/edit levels.
+
+    Views set ``feature_key``. Safe methods require ``view`` by default;
+    mutating methods require ``edit`` by default. A view can override
+    ``method_permission_map`` or ``write_level`` for special cases.
+    """
+
+    safe_methods = {"GET", "HEAD", "OPTIONS"}
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+
+        feature_key = getattr(view, "feature_key", "")
+        feature_keys = list(getattr(view, "feature_keys", []) or [])
+        if feature_key:
+            feature_keys.append(feature_key)
+        if not feature_keys:
+            return False
+
+        method_permission_map = getattr(view, "method_permission_map", {}) or {}
+        required_level = method_permission_map.get(request.method)
+        if required_level is None:
+            required_level = getattr(
+                view,
+                "read_level" if request.method in self.safe_methods else "write_level",
+                "view" if request.method in self.safe_methods else "edit",
+            )
+        return any(user_can(user, key, required_level) for key in feature_keys)
+
+
 class IsRoleAdmin(BasePermission):
     """Allow only users with `permissions` feature edit-level (manage roles)."""
 

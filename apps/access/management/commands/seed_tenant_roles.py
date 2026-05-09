@@ -46,8 +46,6 @@ PREDEFINED_TENANT_ROLES = {
             "crm.inquiries": "edit",
             "reports": "view",
             "reminders": "edit",
-            "quick_actions": "edit",
-            "settings": "view",
         },
     },
     "instructor": {
@@ -96,7 +94,7 @@ FULL_ACCESS_FEATURE_KEYS = [
     "crm.contacts", "crm.inquiries",
     "cms.banners", "cms.blogs",
     "clubs",
-    "reports", "reminders", "quick_actions",
+    "reports", "reminders",
     "settings", "permissions",
 ]
 
