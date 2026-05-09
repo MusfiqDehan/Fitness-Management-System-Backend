@@ -20,6 +20,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.identity.models import User
 from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog
+from .permissions import IsPlatformFeaturePermission
 from .serializers import (
 	TenantSelfRegistrationSerializer,
 	InvitationTokenSerializer,
@@ -343,7 +344,9 @@ class TenantSelfRegistrationAPIView(APIView):
 
 
 class SuperadminInvitationAPIView(APIView):
-	permission_classes = [IsAuthenticated, IsPlatformSuperAdmin]
+	permission_classes = [
+		IsPlatformFeaturePermission.require("platform.tenants", "edit"),
+	]
 	throttle_classes = [ScopedRateThrottle]
 	throttle_scope = "superadmin_invitation"
 
@@ -387,7 +390,7 @@ class SuperadminInvitationAPIView(APIView):
 				)
 
 				setup_url = _build_frontend_url(
-					f"/AcceptTenantInvite?token={quote(raw_token)}",
+						f"/accept-invite?token={quote(raw_token)}",
 					subdomain=payload["subdomain"],
 					domain=domain_name,
 					prefer_public=_prefer_public_onboarding_links(),
@@ -445,7 +448,7 @@ class SuperadminInvitationAPIView(APIView):
 			)
 
 			setup_url = _build_frontend_url(
-				f"/AcceptTenantInvite?token={quote(raw_token)}",
+				f"/accept-invite?token={quote(raw_token)}",
 				subdomain=payload["subdomain"],
 				domain=domain,
 				prefer_public=_prefer_public_onboarding_links(),
@@ -783,7 +786,9 @@ class PasswordResetConfirmAPIView(PasswordSetupAPIView):
 
 
 class TenantAdminOverviewAPIView(APIView):
-	permission_classes = [IsAuthenticated, IsPlatformSuperAdmin]
+	permission_classes = [
+		IsPlatformFeaturePermission.require("platform.tenants", "view"),
+	]
 
 	def get(self, request):
 		with schema_context(get_public_schema_name()):
@@ -808,7 +813,9 @@ class TenantAdminOverviewAPIView(APIView):
 
 
 class TenantAdminListAPIView(generics.ListAPIView):
-	permission_classes = [IsAuthenticated, IsPlatformSuperAdmin]
+	permission_classes = [
+		IsPlatformFeaturePermission.require("platform.tenants", "view"),
+	]
 	serializer_class = TenantListSerializer
 
 	def get_queryset(self):
@@ -818,7 +825,14 @@ class TenantAdminListAPIView(generics.ListAPIView):
 
 
 class TenantAdminDetailAPIView(generics.RetrieveUpdateAPIView):
-	permission_classes = [IsAuthenticated, IsPlatformSuperAdmin]
+	permission_classes = [
+		IsPlatformFeaturePermission.require("platform.tenants", "view"),
+	]
+
+	def get_permissions(self):
+		if self.request.method.lower() in {"patch", "put"}:
+			return [IsPlatformFeaturePermission.require("platform.tenants", "edit")()]
+		return super().get_permissions()
 
 	def get_queryset(self):
 		with schema_context(get_public_schema_name()):
@@ -844,7 +858,9 @@ class TenantAdminDetailAPIView(generics.RetrieveUpdateAPIView):
 
 
 class TenantAdminActivationAPIView(APIView):
-	permission_classes = [IsAuthenticated, IsPlatformSuperAdmin]
+	permission_classes = [
+		IsPlatformFeaturePermission.require("platform.tenants", "edit"),
+	]
 
 	def post(self, request, tenant_id):
 		serializer = TenantStatusSerializer(data=request.data)
@@ -875,7 +891,9 @@ class TenantAdminActivationAPIView(APIView):
 
 
 class TenantAuditLogListAPIView(generics.ListAPIView):
-	permission_classes = [IsAuthenticated, IsPlatformSuperAdmin]
+	permission_classes = [
+		IsPlatformFeaturePermission.require("platform.audit_logs", "view"),
+	]
 
 	def get(self, request):
 		with schema_context(get_public_schema_name()):
