@@ -51,6 +51,7 @@ class TenantSelfRegistrationSerializer(serializers.Serializer):
     admin_email = serializers.EmailField()
     admin_full_name = serializers.CharField(max_length=120, required=False, allow_blank=True)
     contact_phone = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    plan = serializers.CharField(max_length=50, required=False, allow_blank=True, default="trial")
 
     def validate_subdomain(self, value):
         normalized = normalize_subdomain(value)

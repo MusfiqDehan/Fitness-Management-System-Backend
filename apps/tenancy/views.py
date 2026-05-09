@@ -241,8 +241,18 @@ def _build_frontend_url(path_suffix, *, subdomain="", domain="", prefer_public=F
 	return path
 
 
+def _token_type_to_path(token_type):
+	"""Map an Invitation.token_type value to the correct new-frontend route path."""
+	return {
+		"verification": "verify-email",
+		"invitation": "accept-invite",
+		"password_reset": "reset-password",
+		"platform_invite": "accept-platform-invite",
+	}.get(token_type, "accept-invite")
+
+
 def _build_login_url(*, subdomain="", domain=""):
-	return _build_frontend_url("/Login", subdomain=subdomain, domain=domain)
+	return _build_frontend_url("/login", subdomain=subdomain, domain=domain)
 
 
 def _prefer_public_onboarding_links():
@@ -302,7 +312,7 @@ class TenantSelfRegistrationAPIView(APIView):
 				ttl_minutes=120,
 				metadata={
 					"domain": domain,
-					"plan": "free",
+					"plan": payload.get("plan", "trial") or "trial",
 					"max_users": 10,
 					"max_branches": 1,
 					"contact_phone": payload.get("contact_phone", ""),
@@ -310,7 +320,7 @@ class TenantSelfRegistrationAPIView(APIView):
 			)
 
 		setup_url = _build_frontend_url(
-			f"/SetTenantPassword?token={quote(raw_token)}",
+			f"/verify-email?token={quote(raw_token)}",
 			subdomain=payload["subdomain"],
 			domain=domain,
 			prefer_public=_prefer_public_onboarding_links(),
@@ -512,7 +522,7 @@ class InvitationValidationAPIView(APIView):
 				"tenant_domain": domain,
 				"expires_at": invitation.expires_at,
 				"password_setup_url": _build_frontend_url(
-					f"/SetTenantPassword?token={quote(serializer.validated_data['token'])}",
+					f"/{_token_type_to_path(invitation.token_type)}?token={quote(serializer.validated_data['token'])}",
 					subdomain=invitation.subdomain,
 					domain=domain,
 					prefer_public=_prefer_public_onboarding_links(),
@@ -592,7 +602,7 @@ class PasswordSetupAPIView(APIView):
 					primary_domain=metadata.get("domain", ""),
 					max_users=int(metadata.get("max_users", 10) or 10),
 					max_branches=int(metadata.get("max_branches", 1) or 1),
-					plan=metadata.get("plan", "free") or "free",
+					plan=metadata.get("plan", "trial") or "trial",
 				)
 				invitation.tenant = tenant
 				invitation.save(update_fields=["tenant"])
@@ -760,7 +770,7 @@ class PasswordResetRequestAPIView(APIView):
 		)
 
 		reset_url = _build_frontend_url(
-			f"/ResetTenantPassword?token={quote(raw_token)}",
+			f"/reset-password?token={quote(raw_token)}",
 			subdomain=payload.get("subdomain") or invitation.subdomain,
 			domain=domain_name,
 		)

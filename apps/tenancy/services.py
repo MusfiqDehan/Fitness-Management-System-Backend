@@ -33,7 +33,14 @@ def sync_tenant_features(tenant: Tenant, *, force_revoke: bool = False) -> dict:
     """
     summary = {"added": 0, "kept": 0, "graced": 0, "revoked": 0}
 
-    package = PlatformPackage.objects.filter(slug=tenant.plan, is_active=True).first()
+    plan_slug = tenant.plan or "trial"
+    # "free" is a legacy alias for the trial package used before the billing
+    # system was introduced.  Map it to "trial" so tenants created before the
+    # billing migration still get their features synced correctly.
+    if plan_slug == "free":
+        plan_slug = "trial"
+
+    package = PlatformPackage.objects.filter(slug=plan_slug, is_active=True).first()
     package_features = {}
     if package:
         package_features = {
