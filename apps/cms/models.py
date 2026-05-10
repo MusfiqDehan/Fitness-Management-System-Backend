@@ -27,6 +27,9 @@ class SiteBanner(models.Model):
     mobile_url = models.URLField(max_length=1000, blank=True, help_text="Media URL for mobile (375x667)")
     cta_text = models.CharField(max_length=100, blank=True, help_text="Call-to-action button label")
     cta_link = models.CharField(max_length=500, blank=True, help_text="Call-to-action URL or path")
+    alt_text = models.CharField(max_length=255, blank=True, default="", help_text="Accessible description for the banner media")
+    start_date = models.DateField(null=True, blank=True, help_text="Date from which the banner is visible")
+    end_date = models.DateField(null=True, blank=True, help_text="Date after which the banner is hidden")
     position = models.PositiveIntegerField(default=0, help_text="Display order; lower numbers appear first")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -55,18 +58,23 @@ class PromoBanner(models.Model):
         choices=BANNER_TYPE_CHOICES,
         default='top_bar',
     )
+    title = models.CharField(max_length=200, blank=True, default="", help_text="Primary text shown on the promo banner")
+    subtitle = models.CharField(max_length=200, blank=True, default="", help_text="Secondary text shown on the promo banner")
     image_url = models.URLField(max_length=1000, blank=True, help_text="Primary/fallback image URL")
     desktop_image_url = models.URLField(max_length=1000, blank=True)
     tablet_image_url = models.URLField(max_length=1000, blank=True)
     mobile_image_url = models.URLField(max_length=1000, blank=True)
+    cta_text = models.CharField(max_length=100, blank=True, default="", help_text="Optional call-to-action label")
     link_url = models.CharField(max_length=500, blank=True, help_text="Target URL when the banner is clicked")
+    alt_text = models.CharField(max_length=255, blank=True, default="", help_text="Accessible description for the promo image")
     is_active = models.BooleanField(default=True)
     start_date = models.DateField(null=True, blank=True, help_text="Date from which the banner is visible")
     end_date = models.DateField(null=True, blank=True, help_text="Date after which the banner is hidden")
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ['-updated_at', '-created_at']
 
     def __str__(self):
         return f"{self.get_banner_type_display()} banner (id={self.pk})"

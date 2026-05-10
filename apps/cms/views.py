@@ -119,7 +119,12 @@ class PublicSiteBannerListView(generics.ListAPIView):
     permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
-        return SiteBanner.objects.filter(is_active=True).order_by('position', 'created_at')
+        today = timezone.now().date()
+        return SiteBanner.objects.filter(is_active=True).filter(
+            Q(start_date__isnull=True) | Q(start_date__lte=today)
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=today)
+        ).order_by('position', 'created_at')
 
 
 # -------------------------------------------------------
@@ -128,11 +133,11 @@ class PublicSiteBannerListView(generics.ListAPIView):
 
 class PromoBannerBaseAPIView(GenericAPIView):
     feature_key = 'cms.banners'
-    queryset = PromoBanner.objects.all().order_by('-created_at')
+    queryset = PromoBanner.objects.all().order_by('-updated_at', '-created_at')
     serializer_class = PromoBannerSerializer
     permission_classes = [HasFeatureMethodPermission]
     filter_backends = [SearchFilter]
-    search_fields = ['link_url']
+    search_fields = ['title', 'subtitle', 'link_url', 'alt_text']
 
 
 class PromoBannerListAPIView(ListModelAPIView, PromoBannerBaseAPIView):
