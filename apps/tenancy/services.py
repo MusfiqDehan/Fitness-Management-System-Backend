@@ -19,6 +19,17 @@ from .models import (
 )
 
 
+PLAN_PACKAGE_ALIASES = {
+    "free": "trial",
+    "pro": "starter",
+}
+
+
+def normalize_plan_slug(plan: str | None) -> str:
+    plan_slug = (plan or "trial").strip().lower()
+    return PLAN_PACKAGE_ALIASES.get(plan_slug, plan_slug)
+
+
 def sync_tenant_features(tenant: Tenant, *, force_revoke: bool = False) -> dict:
     """Ensure TenantFeatureFlag rows match the tenant's current package.
 
@@ -33,12 +44,9 @@ def sync_tenant_features(tenant: Tenant, *, force_revoke: bool = False) -> dict:
     """
     summary = {"added": 0, "kept": 0, "graced": 0, "revoked": 0}
 
-    plan_slug = tenant.plan or "trial"
-    # "free" is a legacy alias for the trial package used before the billing
-    # system was introduced.  Map it to "trial" so tenants created before the
-    # billing migration still get their features synced correctly.
-    if plan_slug == "free":
-        plan_slug = "trial"
+    # Map legacy tenant plan slugs to the canonical package slugs used by the
+    # seeded feature packages.
+    plan_slug = normalize_plan_slug(tenant.plan)
 
     package = PlatformPackage.objects.filter(slug=plan_slug, is_active=True).first()
     package_features = {}

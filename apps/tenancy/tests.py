@@ -6,7 +6,17 @@ from rest_framework import status
 from rest_framework.test import APITestCase, APIRequestFactory
 
 from apps.identity.models import User
-from .models import Tenant, Domain, Invitation, EmailQueue
+from .models import (
+	Domain,
+	EmailQueue,
+	Feature,
+	Invitation,
+	PlatformPackage,
+	PlatformPackageFeature,
+	Tenant,
+	TenantFeatureFlag,
+)
+from .services import sync_tenant_features
 from .views import PasswordSetupAPIView
 
 
@@ -41,6 +51,43 @@ class TenancyModelTests(APITestCase):
 		self.assertIsNotNone(found)
 		self.assertEqual(found.id, invitation.id)
 		self.assertTrue(found.expires_at > timezone.now())
+
+	def test_sync_tenant_features_maps_legacy_pro_plan_to_starter_package(self):
+		with schema_context("public"):
+			feature = Feature.objects.create(
+				key="cms.banners",
+				name="Banners",
+				sort_order=10,
+				is_system=True,
+			)
+			package = PlatformPackage.objects.create(
+				slug="starter",
+				name="Starter",
+				description="Starter",
+				price_monthly="29.00",
+				price_yearly="290.00",
+				max_users=25,
+				max_branches=1,
+				trial_days=0,
+				is_active=True,
+				is_public=True,
+				highlight=True,
+				sort_order=2,
+			)
+			PlatformPackageFeature.objects.create(
+				package=package,
+				feature=feature,
+				is_enabled=True,
+			)
+			self.tenant.plan = "pro"
+			self.tenant.save(update_fields=["plan", "updated_at"])
+
+			summary = sync_tenant_features(self.tenant)
+			flag = TenantFeatureFlag.objects.get(tenant=self.tenant, feature=feature)
+
+		self.assertGreaterEqual(summary["added"] + summary["kept"], 1)
+		self.assertTrue(flag.is_enabled)
+		self.assertEqual(flag.source, TenantFeatureFlag.SOURCE_PACKAGE)
 
 
 @override_settings(
