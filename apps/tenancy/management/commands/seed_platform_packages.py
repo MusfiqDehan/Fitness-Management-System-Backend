@@ -25,6 +25,10 @@ CORE_FEATURES = [
     ("members", "Members", None),
     ("members.attendance", "Member Attendance", "members"),
     ("members.packages", "Member Packages", "members"),
+    ("attendance.devices", "Access Devices", None),
+    ("attendance.access_gate", "Access Gate", "attendance.devices"),
+    ("attendance.fingerprints", "Fingerprint Linking", "attendance.devices"),
+    ("attendance.iclock", "iClock Ingestion", "attendance.devices"),
     ("instructors", "Instructors", None),
     ("classes", "Classes & Schedule", None),
     ("classes.bookings", "Class Bookings", "classes"),
@@ -56,6 +60,7 @@ PACKAGES = {
         "sort_order": 1,
         "features": [
             "dashboard", "members", "members.attendance", "members.packages",
+            "attendance.devices", "attendance.access_gate", "attendance.fingerprints",
             "instructors", "classes", "classes.bookings",
             "payments", "crm.contacts", "crm.inquiries",
             "reminders", "settings",
@@ -74,6 +79,7 @@ PACKAGES = {
         "sort_order": 2,
         "features": [
             "dashboard", "members", "members.attendance", "members.packages",
+            "attendance.devices", "attendance.access_gate", "attendance.fingerprints", "attendance.iclock",
             "instructors", "classes", "classes.bookings",
             "payments", "payments.invoices",
             "crm.contacts", "crm.inquiries",

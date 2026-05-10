@@ -62,6 +62,12 @@ PLATFORM_REGISTRY: list[RegistryItem] = [
                 "icon": "Boxes",
             },
             {
+                "key": "platform.attendance",
+                "name": "Platform Attendance",
+                "route": "/platform/attendance",
+                "icon": "UserCheck",
+            },
+            {
                 "key": "platform.settings",
                 "name": "Settings",
                 "route": "/settings",
@@ -152,6 +158,10 @@ TENANT_REGISTRY: list[RegistryItem] = [
     {
         "group": "Access Control",
         "children": [
+            {"key": "attendance.devices",      "name": "Access Devices",     "route": "/devices",      "icon": "ShieldCheck"},
+            {"key": "attendance.fingerprints", "name": "Fingerprints",       "route": "/fingerprints", "icon": "UserCheck"},
+            {"key": "attendance.access_gate",  "name": "Access Gate",        "route": None,           "icon": "DoorOpen"},
+            {"key": "attendance.iclock",       "name": "iClock Ingestion",   "route": None,           "icon": "Cpu"},
             {"key": "permissions",   "name": "Rules & Permission", "route": "/permissions", "icon": "ShieldCheck"},
             {"key": "settings",      "name": "Settings",           "route": "/settings",    "icon": "Settings"},
         ],
