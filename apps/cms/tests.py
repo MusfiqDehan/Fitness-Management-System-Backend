@@ -179,6 +179,30 @@ class CMSBannerApiTests(APITestCase):
 		)
 		self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
 
+	def test_site_banner_create_accepts_local_media_paths(self):
+		create_response = self._call_tenant_view(
+			SiteBannerCreateAPIView.as_view(),
+			"post",
+			reverse("cms:site-banner-create"),
+			{
+				"title": "Hero with Local Media",
+				"subtitle": "Uploaded via dashboard",
+				"media_type": "image",
+				"desktop_url": "/media/uploads/hero-desktop.jpg",
+				"laptop_url": "/media/uploads/hero-laptop.jpg",
+				"tablet_url": "/media/uploads/hero-tablet.jpg",
+				"mobile_url": "/media/uploads/hero-mobile.jpg",
+				"cta_text": "Join Today",
+				"cta_link": "/hello",
+				"alt_text": "Hero banner",
+				"is_active": True,
+			},
+			user=self.user,
+		)
+
+		self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(create_response.data["desktop_url"], "/media/uploads/hero-desktop.jpg")
+
 	def test_promo_banner_admin_crud_cycle(self):
 		create_response = self._call_tenant_view(
 			PromoBannerCreateAPIView.as_view(),
@@ -250,6 +274,31 @@ class CMSBannerApiTests(APITestCase):
 			pk=banner_id,
 		)
 		self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+
+	def test_promo_banner_create_accepts_local_media_paths(self):
+		create_response = self._call_tenant_view(
+			PromoBannerCreateAPIView.as_view(),
+			"post",
+			reverse("cms:promo-banner-create"),
+			{
+				"banner_type": "popup_modal",
+				"title": "Website Top Banner",
+				"subtitle": "Local upload URL support",
+				"image_url": "/media/uploads/default-promo.jpg",
+				"desktop_image_url": "/media/uploads/desktop-promo.jpg",
+				"tablet_image_url": "/media/uploads/tablet-promo.jpg",
+				"mobile_image_url": "/media/uploads/mobile-promo.jpg",
+				"cta_text": "Join",
+				"link_url": "/hello",
+				"alt_text": "Promo banner image",
+				"is_active": True,
+			},
+			user=self.user,
+		)
+
+		self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(create_response.data["image_url"], "/media/uploads/default-promo.jpg")
+		self.assertEqual(create_response.data["desktop_image_url"], "/media/uploads/desktop-promo.jpg")
 
 	def test_public_banner_endpoints_filter_by_schedule(self):
 		today = timezone.now().date()

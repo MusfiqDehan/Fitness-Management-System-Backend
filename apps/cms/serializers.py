@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from django.core.validators import URLValidator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import (
     SiteBanner,
     PromoBanner,
@@ -18,6 +20,11 @@ class SiteBannerSerializer(serializers.ModelSerializer):
     Validates that `title` and `desktop_url` are non-empty on create/update,
     since desktop media is the minimum required for a functional hero banner.
     """
+
+    desktop_url = serializers.CharField(required=False, allow_blank=True)
+    laptop_url = serializers.CharField(required=False, allow_blank=True)
+    tablet_url = serializers.CharField(required=False, allow_blank=True)
+    mobile_url = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = SiteBanner
@@ -48,11 +55,37 @@ class SiteBannerSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Banner title is required.")
         return value.strip()
 
+    @staticmethod
+    def _validate_media_url(value: str, *, required: bool = False, field_label: str = "URL") -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            if required:
+                raise serializers.ValidationError(f"{field_label} is required for a hero banner.")
+            return ""
+
+        if normalized.startswith('/media/'):
+            return normalized
+
+        validator = URLValidator()
+        try:
+            validator(normalized)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError("Enter a valid URL.") from exc
+
+        return normalized
+
     def validate_desktop_url(self, value):
         """Ensure desktop media URL is provided; it is the fallback for all viewports."""
-        if not value or not value.strip():
-            raise serializers.ValidationError("Desktop URL is required for a hero banner.")
-        return value.strip()
+        return self._validate_media_url(value, required=True, field_label="Desktop URL")
+
+    def validate_laptop_url(self, value):
+        return self._validate_media_url(value)
+
+    def validate_tablet_url(self, value):
+        return self._validate_media_url(value)
+
+    def validate_mobile_url(self, value):
+        return self._validate_media_url(value)
 
     def validate(self, attrs):
         start = attrs.get('start_date', getattr(self.instance, 'start_date', None))
@@ -73,6 +106,11 @@ class PromoBannerSerializer(serializers.ModelSerializer):
     Validates that, when both `start_date` and `end_date` are supplied,
     `end_date` is strictly after `start_date`.
     """
+
+    image_url = serializers.CharField(required=False, allow_blank=True)
+    desktop_image_url = serializers.CharField(required=False, allow_blank=True)
+    tablet_image_url = serializers.CharField(required=False, allow_blank=True)
+    mobile_image_url = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = PromoBanner
@@ -107,6 +145,35 @@ class PromoBannerSerializer(serializers.ModelSerializer):
 
     def validate_alt_text(self, value):
         return value.strip()
+
+    @staticmethod
+    def _validate_media_url(value: str) -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            return ""
+
+        if normalized.startswith('/media/'):
+            return normalized
+
+        validator = URLValidator()
+        try:
+            validator(normalized)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError("Enter a valid URL.") from exc
+
+        return normalized
+
+    def validate_image_url(self, value):
+        return self._validate_media_url(value)
+
+    def validate_desktop_image_url(self, value):
+        return self._validate_media_url(value)
+
+    def validate_tablet_image_url(self, value):
+        return self._validate_media_url(value)
+
+    def validate_mobile_image_url(self, value):
+        return self._validate_media_url(value)
 
     def validate(self, attrs):
         """Cross-field validation: end_date must come after start_date when both are set."""
