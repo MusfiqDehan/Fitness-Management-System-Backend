@@ -8,15 +8,91 @@ services:
     env_file: .env.local
     environment:
       - DEBUG=true
+      - DJANGO_SETTINGS_MODULE=config.settings
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     ports:
       - "8021:8021"
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - .:/app                         # bind-mount source for hot reload
       - backend_media_local:/app/media # persist uploaded media
-    command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8021", "--workers", "2", "--reload", "--timeout", "120"]
+    command: ["daphne", "-b", "0.0.0.0", "-p", "8021", "config.asgi:application"]
+    restart: unless-stopped
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gym-celery-worker-local
+    image: gym-backend-local:latest
+    user: "app"
+    env_file: .env.local
+    environment:
+      - DEBUG=true
+      - DJANGO_SETTINGS_MODULE=config.settings
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: ["celery", "-A", "config.celery:app", "worker", "--loglevel=INFO", "--concurrency=2", "--prefetch-multiplier=1", "--max-tasks-per-child=200"]
+    volumes:
+      - .:/app
+      - backend_media_local:/app/media
+    restart: unless-stopped
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gym-celery-beat-local
+    image: gym-backend-local:latest
+    user: "app"
+    env_file: .env.local
+    environment:
+      - DEBUG=true
+      - DJANGO_SETTINGS_MODULE=config.settings
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: ["celery", "-A", "config.celery:app", "beat", "--loglevel=INFO", "--pidfile=/tmp/celerybeat.pid", "--schedule=/tmp/celerybeat-schedule"]
+    volumes:
+      - .:/app
+      - backend_media_local:/app/media
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: gym-redis-local
+    command: ["redis-server", "--save", "60", "1000", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   db:
