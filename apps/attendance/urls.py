@@ -1,8 +1,44 @@
 from django.urls import path
-from . import views
+from .views import (
+	AccessCheckAPIView,
+	AttendanceLogListAPIView,
+	DeviceActivateAPIView,
+	DeviceCredentialRotateAPIView,
+	DeviceDeactivateAPIView,
+	DeviceHealthAPIView,
+	DeviceRegistryDetailAPIView,
+	DeviceRegistryListCreateAPIView,
+	DeviceRotateSecretAPIView,
+	DeviceSyncNowAPIView,
+	DeviceTestConnectionAPIView,
+	FingerprintLinkAPIView,
+	FingerprintUnlinkAPIView,
+	FingerprintUnlinkedListAPIView,
+	IclockCdataAPIView,
+	IclockDeviceCmdAPIView,
+	IclockGetRequestAPIView,
+	MembersInsideAPIView,
+)
 
 app_name = 'attendance'
 
 urlpatterns = [
-
+	path('access/check/', AccessCheckAPIView.as_view(), name='access-check'),
+	path('access/members-inside/', MembersInsideAPIView.as_view(), name='access-members-inside'),
+	path('logs/', AttendanceLogListAPIView.as_view(), name='logs-list'),
+	path('fingerprints/unlinked/', FingerprintUnlinkedListAPIView.as_view(), name='fingerprints-unlinked'),
+	path('fingerprints/link/', FingerprintLinkAPIView.as_view(), name='fingerprints-link'),
+	path('fingerprints/unlink/', FingerprintUnlinkAPIView.as_view(), name='fingerprints-unlink'),
+	path('devices/', DeviceRegistryListCreateAPIView.as_view(), name='device-list-create'),
+	path('devices/<int:pk>/', DeviceRegistryDetailAPIView.as_view(), name='device-detail'),
+	path('devices/<int:pk>/activate/', DeviceActivateAPIView.as_view(), name='device-activate'),
+	path('devices/<int:pk>/deactivate/', DeviceDeactivateAPIView.as_view(), name='device-deactivate'),
+	path('devices/<int:pk>/rotate-secret/', DeviceRotateSecretAPIView.as_view(), name='device-rotate-secret'),
+	path('devices/<int:pk>/credentials/rotate/', DeviceCredentialRotateAPIView.as_view(), name='device-credential-rotate'),
+	path('devices/<int:pk>/test-connection/', DeviceTestConnectionAPIView.as_view(), name='device-test-connection'),
+	path('devices/<int:pk>/sync-now/', DeviceSyncNowAPIView.as_view(), name='device-sync-now'),
+	path('devices/<int:pk>/health/', DeviceHealthAPIView.as_view(), name='device-health'),
+	path('iclock/cdata/', IclockCdataAPIView.as_view(), name='iclock-cdata'),
+	path('iclock/getrequest/', IclockGetRequestAPIView.as_view(), name='iclock-getrequest'),
+	path('iclock/devicecmd/', IclockDeviceCmdAPIView.as_view(), name='iclock-devicecmd'),
 ]
