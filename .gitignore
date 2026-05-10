@@ -9,6 +9,8 @@ env/
 ENV/
 .venv/
 certs/
+celerybeat-schedule
+celerybeat.pid
 
 # Django stuff
 *.log
