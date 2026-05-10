@@ -15,6 +15,7 @@ from django.conf.urls.static import static
 
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 from config.health import tenant_health
+from apps.attendance.views import IclockCdataAPIView, IclockGetRequestAPIView, IclockDeviceCmdAPIView
 
 
 
@@ -37,6 +38,17 @@ urlpatterns = [
     path('api/v1/access/', include(('apps.access.urls', 'access'), namespace='access')),
     path('api/v1/billing/', include(('apps.billing.urls', 'billing'), namespace='billing')),
     path('api/v1/attendance/', include(('apps.attendance.urls', 'attendance'), namespace='attendance')),
+
+    # ZKTeco ADMS device paths.
+    # Accept both with and without a trailing slash because F18 firmware often
+    # calls /iclock/cdata (no slash) and will not follow Django's 301 redirect.
+    re_path(r'^iclock/cdata/?$', IclockCdataAPIView.as_view(), name='iclock-cdata-short'),
+    re_path(r'^iclock/getrequest/?$', IclockGetRequestAPIView.as_view(), name='iclock-getrequest-short'),
+    re_path(r'^iclock/devicecmd/?$', IclockDeviceCmdAPIView.as_view(), name='iclock-devicecmd-short'),
+    # Root-level fallback for firmware that does NOT prepend /iclock/
+    re_path(r'^cdata/?$', IclockCdataAPIView.as_view(), name='iclock-cdata-root'),
+    re_path(r'^getrequest/?$', IclockGetRequestAPIView.as_view(), name='iclock-getrequest-root'),
+    re_path(r'^devicecmd/?$', IclockDeviceCmdAPIView.as_view(), name='iclock-devicecmd-root'),
 
     # API Schema & Docs (tenant-scoped)
     path('api/v1/schema/', SpectacularAPIView.as_view(), name='schema'),
