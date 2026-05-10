@@ -32,6 +32,9 @@ class SiteBannerSerializer(serializers.ModelSerializer):
             'mobile_url',
             'cta_text',
             'cta_link',
+            'alt_text',
+            'start_date',
+            'end_date',
             'position',
             'is_active',
             'created_at',
@@ -51,6 +54,15 @@ class SiteBannerSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Desktop URL is required for a hero banner.")
         return value.strip()
 
+    def validate(self, attrs):
+        start = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        end = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        if start and end and end <= start:
+            raise serializers.ValidationError(
+                {"end_date": "End date must be after start date."}
+            )
+        return attrs
+
 
 # ---- Promo Banner Serializer ----
 
@@ -67,22 +79,39 @@ class PromoBannerSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'banner_type',
+            'title',
+            'subtitle',
             'image_url',
             'desktop_image_url',
             'tablet_image_url',
             'mobile_image_url',
+            'cta_text',
             'link_url',
+            'alt_text',
             'is_active',
             'start_date',
             'end_date',
             'created_at',
+            'updated_at',
         ]
-        read_only_fields = ['created_at']
+        read_only_fields = ['created_at', 'updated_at']
+
+    def validate_title(self, value):
+        return value.strip()
+
+    def validate_subtitle(self, value):
+        return value.strip()
+
+    def validate_cta_text(self, value):
+        return value.strip()
+
+    def validate_alt_text(self, value):
+        return value.strip()
 
     def validate(self, attrs):
         """Cross-field validation: end_date must come after start_date when both are set."""
-        start = attrs.get('start_date')
-        end = attrs.get('end_date')
+        start = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        end = attrs.get('end_date', getattr(self.instance, 'end_date', None))
         if start and end and end <= start:
             raise serializers.ValidationError(
                 {"end_date": "End date must be after start date."}
