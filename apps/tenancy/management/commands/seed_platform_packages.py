@@ -7,12 +7,15 @@ from decimal import Decimal
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django_tenants.utils import schema_context
 
 from apps.tenancy.models import (
     Feature,
     PlatformPackage,
     PlatformPackageFeature,
+    Tenant,
 )
+from apps.tenancy.services import sync_tenant_features
 
 
 # Top-level feature keys (mirrored in apps.access for tenant RBAC)
@@ -97,10 +100,19 @@ PACKAGES = {
 class Command(BaseCommand):
     help = "Seed core features and Trial/Starter/Enterprise packages."
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--resync-tenants",
+            action="store_true",
+            help="Also re-sync feature flags for all existing tenants.",
+        )
+
     def handle(self, *args, **options):
-        with transaction.atomic():
+        with schema_context("public"), transaction.atomic():
             self._seed_features()
             self._seed_packages()
+        if options.get("resync_tenants"):
+            self._resync_tenants()
         self.stdout.write(self.style.SUCCESS("Features & packages seeded."))
 
     def _seed_features(self):
@@ -170,3 +182,18 @@ class Command(BaseCommand):
                 if key not in wanted_keys and pf.is_enabled:
                     pf.is_enabled = False
                     pf.save(update_fields=["is_enabled"])
+
+    def _resync_tenants(self):
+        with schema_context("public"):
+            tenants = list(Tenant.objects.order_by("schema_name"))
+        if not tenants:
+            self.stdout.write("No tenants to re-sync.")
+            return
+        for tenant in tenants:
+            with schema_context("public"):
+                summary = sync_tenant_features(tenant)
+            self.stdout.write(
+                f"  resynced {tenant.schema_name} (plan={tenant.plan}): "
+                f"+{summary['added']} kept={summary['kept']} "
+                f"graced={summary['graced']} revoked={summary['revoked']}"
+            )
