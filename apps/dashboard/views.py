@@ -603,11 +603,15 @@ class FileUploadView(APIView):
 
         saved_name = default_storage.save(save_path, ContentFile(uploaded.read()))
 
+        # Return relative path for dev (Vite proxy will handle /media/), absolute for production
         storage_url = default_storage.url(saved_name)
         if storage_url.startswith('http://') or storage_url.startswith('https://'):
+            # Already absolute (S3, etc.) — use as-is
             file_url = storage_url
         else:
-            file_url = request.build_absolute_uri(storage_url)
+            # Local filesystem — return relative path so frontend proxy can handle it in dev
+            # Production (Nginx) will serve /media/ directly
+            file_url = storage_url
 
         return Response({"file_url": file_url}, status=status.HTTP_201_CREATED)
 
