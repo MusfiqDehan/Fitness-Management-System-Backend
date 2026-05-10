@@ -1,6 +1,6 @@
 from django.db import models
 from django.utils import timezone
-from datetime import timedelta
+from datetime import date, timedelta
 from django.db.models import Sum
 
 
@@ -43,7 +43,7 @@ class Member(models.Model):
         blank=True
     )
 
-    start_date = models.DateField(default=timezone.now)
+    start_date = models.DateField(default=date.today)
     end_date = models.DateField(blank=True, null=True)
 
     # Gym Access
