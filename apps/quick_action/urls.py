@@ -9,8 +9,6 @@ from .views import (
     ScheduleListCreateView,
     GymClassListCreateView,
     GymClassDetailView,
-    PublicPackageListAPIView,
-    PublicPackageRetrieveAPIView,
     PublicGymScheduleListView,
     ContactCreateAPIView,
     FitHiveSupportCreateAPIView,
@@ -29,12 +27,6 @@ urlpatterns = [
     path("schedules/", ScheduleListCreateView.as_view()),
     path("classes/", GymClassListCreateView.as_view()),
     path("classes/<int:pk>/", GymClassDetailView.as_view()),
-
-    # ======= Public Packages Related Endpoints =======
-    path('packages/', PublicPackageListAPIView.as_view(), name='public-packages-list'),
-    path('packages/<int:pk>/', PublicPackageRetrieveAPIView.as_view(), name='public-packages-detail'),
-    # ======= End of Public Packages Related Endpoints =======
-
     path("contact/", ContactCreateAPIView.as_view(), name="contact-create"),
     path("fithive-support/", FitHiveSupportCreateAPIView.as_view(), name="fithive-support-create"),
 ]
