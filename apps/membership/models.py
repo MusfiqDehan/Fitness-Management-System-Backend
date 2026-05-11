@@ -23,6 +23,7 @@ class MemberPackage(BaseModel):
     add_ons = models.JSONField(default=list, blank=True)
     display_order = models.PositiveIntegerField(default=0)
     is_highlighted = models.BooleanField(default=False)
+    # is_published from BaseModel controls landing page display
 
     class Meta:
         ordering = ['display_order', 'name']
@@ -80,6 +81,15 @@ class Member(BaseModel):
     payment_status = models.CharField(max_length=20, blank=True, default="unpaid")
 
     photo = models.ImageField(upload_to='members/photos/', blank=True, null=True)
+
+    # ---- Invitation system ----
+    invitation_token = models.CharField(max_length=64, blank=True, null=True, unique=True)
+    invitation_sent_at = models.DateTimeField(blank=True, null=True)
+    invitation_expires_at = models.DateTimeField(blank=True, null=True)
+    invited_by = models.ForeignKey(
+        'identity.User', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='invited_members',
+    )
 
     class Meta:
         ordering = ['-created_at']

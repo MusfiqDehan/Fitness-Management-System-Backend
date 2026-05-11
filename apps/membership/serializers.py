@@ -15,7 +15,7 @@ class MemberPackageSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'name', 'package_type', 'duration_in_days', 'price',
             'description', 'features', 'add_ons', 'display_order',
-            'is_active', 'is_highlighted', 'created_at', 'updated_at',
+            'is_active', 'is_highlighted', 'is_published', 'created_at', 'updated_at',
         )
         read_only_fields = ['created_at', 'updated_at']
 
@@ -77,7 +77,7 @@ class MemberSerializer(serializers.ModelSerializer):
 class MemberPublicSerializer(serializers.ModelSerializer):
     """For public registration from landing page."""
     member_package_id = serializers.PrimaryKeyRelatedField(
-        queryset=MemberPackage.objects.filter(is_active=True, is_highlighted=True),
+        queryset=MemberPackage.objects.filter(is_active=True, is_published=True),
         source='member_package',
         write_only=True,
         required=True,
