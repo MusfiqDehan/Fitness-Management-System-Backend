@@ -2,9 +2,10 @@ from django.db import models
 from django.utils import timezone
 from datetime import date, timedelta
 from django.db.models import Sum
+from utils.base_model import BaseModel
 
 
-class MemberPackage(models.Model):
+class MemberPackage(BaseModel):
     PACKAGE_TYPE = (
         ('monthly', 'Monthly'),
         ('3_month', '3 Months'),
@@ -17,18 +18,37 @@ class MemberPackage(models.Model):
     duration_in_days = models.PositiveIntegerField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
 
+    description = models.TextField(blank=True, default="")
+    features = models.JSONField(default=list, blank=True)
+    add_ons = models.JSONField(default=list, blank=True)
+    display_order = models.PositiveIntegerField(default=0)
+    is_highlighted = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['display_order', 'name']
+
     def __str__(self):
         return f"{self.name} - {self.price}"
 
 
-class Member(models.Model):
+class Member(BaseModel):
     MEMBERSHIP_TYPE = (
         ('package', 'Package'),
         ('monthly', 'Monthly Only'),
     )
 
+    GENDER_CHOICES = (
+        ('male', 'Male'),
+        ('female', 'Female'),
+        ('other', 'Other'),
+    )
+
     full_name = models.CharField(max_length=150)
     phone_number = models.CharField(max_length=20, unique=True)
+    email = models.EmailField(blank=True, null=True)
+    gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    address = models.TextField(blank=True, default="")
 
     membership_type = models.CharField(
         max_length=20,
@@ -40,7 +60,8 @@ class Member(models.Model):
         MemberPackage,
         on_delete=models.SET_NULL,
         null=True,
-        blank=True
+        blank=True,
+        related_name='members'
     )
 
     start_date = models.DateField(default=date.today)
@@ -50,8 +71,18 @@ class Member(models.Model):
     card_id = models.CharField(max_length=100, unique=True, blank=True, null=True)
     fingerprint_id = models.CharField(max_length=100, unique=True, blank=True, null=True)
 
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    emergency_contact_name = models.CharField(max_length=150, blank=True, default="")
+    emergency_contact_phone = models.CharField(max_length=20, blank=True, default="")
+    notes = models.TextField(blank=True, default="")
+
+    # Payment tracking
+    payment_method = models.CharField(max_length=50, blank=True, default="")
+    payment_status = models.CharField(max_length=20, blank=True, default="unpaid")
+
+    photo = models.ImageField(upload_to='members/photos/', blank=True, null=True)
+
+    class Meta:
+        ordering = ['-created_at']
 
     # ----------------------------
     # PROPERTIES
@@ -120,34 +151,44 @@ class Member(models.Model):
         return self.full_name
 
 
-class Payment(models.Model):
+class Payment(BaseModel):
     PAYMENT_TYPE = (
         ('admission', 'Admission Fee'),
         ('package', 'Package Payment'),
         ('monthly', 'Monthly Payment'),
     )
 
-    member = models.ForeignKey(Member, on_delete=models.CASCADE)
+    member = models.ForeignKey(Member, on_delete=models.CASCADE, related_name='payments')
     payment_type = models.CharField(max_length=20, choices=PAYMENT_TYPE)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-
     payment_date = models.DateTimeField(auto_now_add=True)
     note = models.TextField(blank=True, null=True)
+    is_paid = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-payment_date']
 
     def __str__(self):
         return f"{self.member.full_name} - {self.amount}"
 
 
-class Attendance(models.Model):
+class Attendance(BaseModel):
     ENTRY_METHOD = (
         ('card', 'Card'),
         ('fingerprint', 'Fingerprint'),
     )
 
-    member = models.ForeignKey(Member, on_delete=models.CASCADE)
+    member = models.ForeignKey(Member, on_delete=models.CASCADE, related_name='attendances')
     check_in_time = models.DateTimeField(auto_now_add=True)
     check_out_time = models.DateTimeField(blank=True, null=True)
     entry_method = models.CharField(max_length=20, choices=ENTRY_METHOD)
+    device_id = models.CharField(max_length=100, blank=True, null=True)
+
+    class Meta:
+        ordering = ['-check_in_time']
+
+    def __str__(self):
+        return f"{self.member.full_name} - {self.check_in_time.strftime('%Y-%m-%d %H:%M')}"
     device_id = models.CharField(max_length=100, blank=True, null=True)
 
     class Meta:

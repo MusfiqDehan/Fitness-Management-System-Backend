@@ -1,13 +1,36 @@
 from rest_framework import serializers
 from .models import Member, MemberPackage, Payment, Attendance
+from datetime import date
+
 
 # ----------------------------
 # MemberPackage
 # ----------------------------
 class MemberPackageSerializer(serializers.ModelSerializer):
+    features = serializers.JSONField(required=False, default=list)
+    add_ons = serializers.JSONField(required=False, default=list)
+
     class Meta:
         model = MemberPackage
-        fields = ('id', 'name', 'package_type', 'duration_in_days', 'price')
+        fields = (
+            'id', 'name', 'package_type', 'duration_in_days', 'price',
+            'description', 'features', 'add_ons', 'display_order',
+            'is_active', 'is_highlighted', 'created_at', 'updated_at',
+        )
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class MemberPackagePublicSerializer(serializers.ModelSerializer):
+    """Public serializer for landing page - only published and active packages."""
+    features = serializers.JSONField(required=False, default=list)
+    add_ons = serializers.JSONField(required=False, default=list)
+
+    class Meta:
+        model = MemberPackage
+        fields = (
+            'id', 'name', 'package_type', 'duration_in_days', 'price',
+            'description', 'features', 'add_ons',
+        )
 
 
 # ----------------------------
@@ -27,20 +50,16 @@ class MemberSerializer(serializers.ModelSerializer):
     class Meta:
         model = Member
         fields = (
-            'id',
-            'full_name',
-            'phone_number',
-            'membership_type',
-            'member_package',
-            'member_package_id',
-            'start_date',
-            'end_date',
-            'remaining_days',
-            'card_id',
-            'fingerprint_id',
-            'is_active',
-            'created_at',
+            'id', 'full_name', 'phone_number', 'email', 'gender',
+            'date_of_birth', 'address', 'membership_type',
+            'member_package', 'member_package_id',
+            'start_date', 'end_date', 'remaining_days',
+            'card_id', 'fingerprint_id',
+            'emergency_contact_name', 'emergency_contact_phone', 'notes',
+            'payment_method', 'payment_status', 'photo',
+            'is_active', 'is_published', 'created_at', 'updated_at',
         )
+        read_only_fields = ['created_at', 'updated_at', 'remaining_days']
 
     def validate(self, attrs):
         membership_type = attrs.get('membership_type', getattr(self.instance, 'membership_type', None))
@@ -55,6 +74,29 @@ class MemberSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class MemberPublicSerializer(serializers.ModelSerializer):
+    """For public registration from landing page."""
+    member_package_id = serializers.PrimaryKeyRelatedField(
+        queryset=MemberPackage.objects.filter(is_active=True, is_highlighted=True),
+        source='member_package',
+        write_only=True,
+        required=True,
+    )
+
+    class Meta:
+        model = Member
+        fields = (
+            'full_name', 'phone_number', 'email', 'gender',
+            'address', 'membership_type', 'member_package_id',
+            'emergency_contact_name', 'emergency_contact_phone', 'notes',
+        )
+
+    def validate_membership_type(self, value):
+        if value != 'package':
+            raise serializers.ValidationError('Only package membership is allowed for self-registration.')
+        return value
+
+
 # ----------------------------
 # Payment
 # ----------------------------
@@ -64,14 +106,11 @@ class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
         fields = (
-            'id',
-            'member',
-            'member_name',  # useful for dashboard display
-            'payment_type',
-            'amount',
-            'payment_date',
-            'note',
+            'id', 'member', 'member_name', 'payment_type', 'amount',
+            'payment_date', 'note', 'is_paid',
+            'is_active', 'is_published', 'created_at',
         )
+        read_only_fields = ['created_at']
 
 
 # ----------------------------
@@ -83,11 +122,18 @@ class AttendanceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Attendance
         fields = (
-            'id',
-            'member',
-            'member_name',  # useful for dashboard
-            'check_in_time',
-            'check_out_time',
-            'entry_method',
-            'device_id',
+            'id', 'member', 'member_name', 'check_in_time',
+            'check_out_time', 'entry_method', 'device_id',
+            'is_active', 'created_at',
         )
+        read_only_fields = ['created_at']
+
+
+# ----------------------------
+# Member Minimal (for dropdowns)
+# ----------------------------
+class MemberMinimalSerializer(serializers.ModelSerializer):
+    """Minimal serializer for member dropdowns - devices page."""
+    class Meta:
+        model = Member
+        fields = ('id', 'full_name', 'phone_number', 'card_id', 'fingerprint_id', 'is_active')
