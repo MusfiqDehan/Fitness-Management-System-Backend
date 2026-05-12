@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 from django.utils import timezone
+from django.core.exceptions import ObjectDoesNotExist
 
 # -------------------------------
 # User Manager
@@ -44,6 +45,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = (
         ('student', 'Student'),
         ('instructor', 'Instructor'),
+        ('trainer', 'Trainer'),
         ('staff', 'Staff'),
         ('admin', 'Admin'),
         ('superuser', 'Superuser'),
@@ -77,6 +79,25 @@ class User(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         # Display email/phone with role
         return f"{self.email or self.phone} ({self.role})"
+
+    @property
+    def member(self):
+        """Resolve membership profile linked by email or phone for student users."""
+        from apps.membership.models import Member
+
+        queryset = Member.objects.filter(is_deleted=False)
+
+        if self.email:
+            member = queryset.filter(email__iexact=self.email).first()
+            if member:
+                return member
+
+        if self.phone:
+            member = queryset.filter(phone_number=self.phone).first()
+            if member:
+                return member
+
+        raise ObjectDoesNotExist("Member profile not found for this user.")
 
 
 

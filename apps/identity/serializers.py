@@ -8,7 +8,7 @@ from django_tenants.utils import get_public_schema_name
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.settings import api_settings
-from .models import User, StudentProfile, InstructorProfile
+from .models import User
 
 
 def is_valid_phone_number(value):
@@ -119,18 +119,6 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         return user
 
-class StudentProfileSerializer(serializers.ModelSerializer):
-
-    class Meta:
-        model = StudentProfile
-        exclude = ['user']
-
-
-class InstructorProfileSerializer(serializers.ModelSerializer):
-
-    class Meta:
-        model = InstructorProfile
-        exclude = ['user']
 
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
@@ -166,10 +154,9 @@ class CurrentUserSerializer(serializers.ModelSerializer):
         ]
 
     def get_full_name(self, obj):
-        if obj.role == 'student' and hasattr(obj, 'student_profile'):
-            return obj.student_profile.full_name
-        if obj.role == 'instructor' and hasattr(obj, 'instructor_profile'):
-            return obj.instructor_profile.full_name
+        # Use the user's own full_name field; trainer-specific data lives in TrainerProfile
+        if obj.full_name:
+            return obj.full_name
         if obj.role in ['admin', 'staff', 'superuser']:
             return obj.email or obj.phone
         return obj.full_name or obj.email or obj.phone

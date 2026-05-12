@@ -10,11 +10,9 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from apps.access.permissions import HasFeatureMethodPermission
 
-from .models import User, StudentProfile, InstructorProfile
+from .models import User
 from .serializers import (
     RegisterSerializer,
-    StudentProfileSerializer,
-    InstructorProfileSerializer,
     UserSerializer,
     CurrentUserSerializer,
     CurrentUserUpdateSerializer,
@@ -47,48 +45,6 @@ class RegisterView(generics.CreateAPIView):
 
 
 # -------------------------------
-# Student Profile Creation
-# -------------------------------
-class StudentProfileCreateView(generics.CreateAPIView):
-    serializer_class = StudentProfileSerializer
-    permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
-        user = self.request.user
-
-        # Ensure user is a student
-        if user.role != "student":
-            raise PermissionDenied("Only students can create student profile.")
-
-        # Prevent duplicate profile
-        if hasattr(user, "student_profile"):
-            raise ValidationError("Student profile already exists.")
-
-        serializer.save(user=user)
-
-
-# -------------------------------
-# Instructor Profile Creation
-# -------------------------------
-class InstructorProfileCreateView(generics.CreateAPIView):
-    serializer_class = InstructorProfileSerializer
-    permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
-        user = self.request.user
-
-        # Ensure user is an instructor
-        if user.role != "instructor":
-            raise PermissionDenied("Only instructors can create instructor profile.")
-
-        # Prevent duplicate profile
-        if hasattr(user, "instructor_profile"):
-            raise ValidationError("Instructor profile already exists.")
-
-        serializer.save(user=user)
-
-
-# -------------------------------
 # Current Logged-in User
 # Includes tenant_schema so the frontend knows which tenant context
 # the token was issued under.
@@ -112,6 +68,11 @@ class CurrentUserAPIView(APIView):
 
 
 class InstructorListAPIView(GenericAPIView):
+    """
+    Legacy endpoint — returns instructor users (role='instructor').
+    For full trainer profiles (classes, schedules, ratings) use:
+    GET /api/v1/trainer/
+    """
     feature_key = 'instructors'
     queryset = User.objects.filter(role='instructor', is_active=True)
     serializer_class = UserSerializer

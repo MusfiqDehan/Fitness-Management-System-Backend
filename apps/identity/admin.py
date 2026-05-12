@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, StudentProfile, InstructorProfile
+from .models import User
 
 class UserAdmin(BaseUserAdmin):
     list_display = ('email', 'phone', 'tenant', 'role', 'is_staff', 'is_superuser', 'is_active', 'email_verified', 'created_at')
@@ -25,18 +25,6 @@ class UserAdmin(BaseUserAdmin):
     filter_horizontal = ('groups', 'user_permissions')
 
 
-class StudentProfileAdmin(admin.ModelAdmin):
-    list_display = ('full_name', 'user', 'age', 'weight', 'height', 'emergency_contact')
-    search_fields = ('full_name', 'user__email', 'user__phone')
-    list_filter = ('age',)
-
-
-class InstructorProfileAdmin(admin.ModelAdmin):
-    list_display = ('full_name', 'user', 'experience_years', 'specialization')
-    search_fields = ('full_name', 'user__email', 'user__phone', 'specialization')
-    list_filter = ('experience_years',)
-
-
 admin.site.register(User, UserAdmin)
-admin.site.register(StudentProfile, StudentProfileAdmin)
-admin.site.register(InstructorProfile, InstructorProfileAdmin)
+# StudentProfile and InstructorProfile are deprecated.
+# Trainer functionality is now handled by the 'trainer' app.
