@@ -38,11 +38,6 @@ from .views import (
     GymClubDashboardRetrieveAPIView,
     GymClubDashboardUpdateAPIView,
     GymClubDashboardDeleteAPIView,
-    PaymentDashboardListAPIView,
-    PaymentDashboardCreateAPIView,
-    PaymentDashboardRetrieveAPIView,
-    PaymentDashboardUpdateAPIView,
-    PaymentDashboardDeleteAPIView,
     AttendanceDashboardListAPIView,
     AttendanceDashboardCreateAPIView,
     AttendanceDashboardRetrieveAPIView,
@@ -112,14 +107,6 @@ urlpatterns = [
     path('gym-club/<int:pk>/update/', GymClubDashboardUpdateAPIView.as_view(), name='gym-club-update'),
     path('gym-club/<int:pk>/delete/', GymClubDashboardDeleteAPIView.as_view(), name='gym-club-delete'),
     # ==== End of Gym Club related endpoints ====
-
-    # ==== Payment related endpoints ====
-    path('payments/', PaymentDashboardListAPIView.as_view(), name='payment-list'),
-    path('payments/create/', PaymentDashboardCreateAPIView.as_view(), name='payment-create'),
-    path('payments/<int:pk>/', PaymentDashboardRetrieveAPIView.as_view(), name='payment-detail'),
-    path('payments/<int:pk>/update/', PaymentDashboardUpdateAPIView.as_view(), name='payment-update'),
-    path('payments/<int:pk>/delete/', PaymentDashboardDeleteAPIView.as_view(), name='payment-delete'),
-    # ==== End of Payment related endpoints ====
 
     # ==== Attendance related endpoints ====
     path('attendance/', AttendanceDashboardListAPIView.as_view(), name='attendance-list'),

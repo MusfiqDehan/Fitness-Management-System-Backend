@@ -52,7 +52,6 @@ class DashboardAPIViewTests(APITestCase):
 			('dashboard:gym-club-list', None),
 			('dashboard:member-list', None),
 			('dashboard:member-package-list', None),
-			('dashboard:payment-list', None),
 			('dashboard:attendance-list', None),
 			('dashboard:site-banner-list', None),
 			('dashboard:promo-banner-list', None),
