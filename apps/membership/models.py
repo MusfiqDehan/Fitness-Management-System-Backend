@@ -166,17 +166,46 @@ class Payment(BaseModel):
         ('admission', 'Admission Fee'),
         ('package', 'Package Payment'),
         ('monthly', 'Monthly Payment'),
+        ('other', 'Other'),
+    )
+
+    PAYMENT_METHOD = (
+        ('bkash', 'Bkash'),
+        ('nagad', 'Nagad'),
+        ('card', 'Card'),
+        ('cash', 'Cash'),
+        ('bank_transfer', 'Bank Transfer'),
+        ('other', 'Other'),
+    )
+
+    STATUS_PAID = 'paid'
+    STATUS_PARTIAL = 'partial'
+    STATUS_DUE = 'due'
+    PAYMENT_STATUS = (
+        (STATUS_PAID, 'Paid'),
+        (STATUS_PARTIAL, 'Partially Paid'),
+        (STATUS_DUE, 'Due'),
     )
 
     member = models.ForeignKey(Member, on_delete=models.CASCADE, related_name='payments')
     payment_type = models.CharField(max_length=20, choices=PAYMENT_TYPE)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    payment_date = models.DateTimeField(auto_now_add=True)
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD, default='cash')
+    payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS, default=STATUS_DUE)
+    payment_date = models.DateTimeField(default=timezone.now)
+    invoice_no = models.CharField(max_length=64, blank=True, null=True, unique=True)
     note = models.TextField(blank=True, null=True)
     is_paid = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['-payment_date']
+
+    def save(self, *args, **kwargs):
+        if self.payment_status == self.STATUS_PAID:
+            self.is_paid = True
+        elif self.payment_status in (self.STATUS_PARTIAL, self.STATUS_DUE):
+            self.is_paid = False
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.member.full_name} - {self.amount}"

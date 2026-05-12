@@ -496,7 +496,7 @@ class CompleteMemberRegistrationAPIView(APIView):
 
 class PaymentView(ModelCRUDView):
     """Handles all Payment operations."""
-    feature_key = 'members'
+    feature_key = 'payments'
     queryset = Payment.objects.all().order_by('-payment_date')
     serializer_class = PaymentSerializer
     permission_classes = [HasFeatureMethodPermission]

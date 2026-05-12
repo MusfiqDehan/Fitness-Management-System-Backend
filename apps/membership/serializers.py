@@ -102,15 +102,28 @@ class MemberPublicSerializer(serializers.ModelSerializer):
 # ----------------------------
 class PaymentSerializer(serializers.ModelSerializer):
     member_name = serializers.CharField(source='member.full_name', read_only=True)
+    member_phone = serializers.CharField(source='member.phone_number', read_only=True)
+    member_email = serializers.CharField(source='member.email', read_only=True)
+    package_name = serializers.CharField(source='member.member_package.name', read_only=True)
+    payment_type_display = serializers.CharField(source='get_payment_type_display', read_only=True)
+    payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
+    payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
 
     class Meta:
         model = Payment
         fields = (
-            'id', 'member', 'member_name', 'payment_type', 'amount',
-            'payment_date', 'note', 'is_paid',
+            'id', 'member', 'member_name', 'member_phone', 'member_email', 'package_name',
+            'payment_type', 'payment_type_display',
+            'amount',
+            'payment_method', 'payment_method_display',
+            'payment_status', 'payment_status_display',
+            'payment_date', 'invoice_no', 'note', 'is_paid',
             'is_active', 'is_published', 'created_at',
         )
-        read_only_fields = ['created_at']
+        read_only_fields = [
+            'created_at', 'member_name', 'member_phone', 'member_email', 'package_name',
+            'payment_type_display', 'payment_method_display', 'payment_status_display',
+        ]
 
 
 # ----------------------------
