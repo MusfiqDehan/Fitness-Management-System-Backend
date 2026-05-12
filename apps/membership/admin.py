@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Member, MemberPackage, Attendance, Payment
+from .models import Member, MemberPackage, Attendance, Payment, GymClass, GymSchedule
 
 
 class AttendanceInline(admin.TabularInline):
@@ -61,3 +61,17 @@ class AttendanceAdmin(admin.ModelAdmin):
     list_display = ('member', 'check_in_time', 'check_out_time', 'entry_method')
     list_filter = ('entry_method',)
     search_fields = ('member__full_name', 'member__phone_number')
+
+
+@admin.register(GymClass)
+class GymClassAdmin(admin.ModelAdmin):
+    list_display = ('name', 'class_type', 'level', 'instructor', 'duration_minutes', 'capacity')
+    list_filter = ('class_type', 'level')
+    search_fields = ('name', 'instructor')
+
+
+@admin.register(GymSchedule)
+class GymScheduleAdmin(admin.ModelAdmin):
+    list_display = ('title', 'day_of_week', 'start_time', 'end_time', 'instructor', 'capacity')
+    list_filter = ('day_of_week',)
+    search_fields = ('title', 'instructor')

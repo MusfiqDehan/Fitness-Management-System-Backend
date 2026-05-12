@@ -17,7 +17,7 @@ from django.conf import settings
 from datetime import timedelta
 import secrets
 
-from .models import Member, MemberPackage, Payment, Attendance
+from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
 from .serializers import (
     MemberSerializer,
     MemberPublicSerializer,
@@ -26,6 +26,8 @@ from .serializers import (
     MemberMinimalSerializer,
     PaymentSerializer,
     AttendanceSerializer,
+    GymClassSerializer,
+    GymScheduleSerializer,
 )
 from utils.base_view import ModelCRUDView
 from apps.access.permissions import HasFeatureMethodPermission
@@ -511,4 +513,138 @@ class AttendanceView(ModelCRUDView):
     feature_key = 'attendance'
     queryset = Attendance.objects.all().order_by('-check_in_time')
     serializer_class = AttendanceSerializer
+    permission_classes = [HasFeatureMethodPermission]
+
+
+# =============================================================================
+# PAYMENT ANALYTICS VIEW
+# =============================================================================
+
+class PaymentAnalyticsAPIView(APIView):
+    """GET /membership/payments/analytics/?period=today|weekly|monthly"""
+    permission_classes = [HasFeatureMethodPermission]
+    feature_key = 'payments'
+
+    def get(self, request):
+        from django.db.models import Sum, Count
+        from django.utils.timezone import now
+        from datetime import timedelta, date as dt_date
+        from decimal import Decimal
+
+        period = request.query_params.get('period', 'monthly').lower()
+        today = now().date()
+
+        if period == 'today':
+            start = today
+        elif period == 'weekly':
+            start = today - timedelta(days=7)
+        elif period == 'monthly':
+            start = today.replace(day=1)
+        else:
+            start = today.replace(day=1)
+
+        qs = Payment.objects.filter(payment_date__date__gte=start, is_deleted=False)
+
+        total_collected = qs.filter(payment_status='paid').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        total_due = qs.filter(payment_status='due').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        total_partial = qs.filter(payment_status='partial').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        transaction_count = qs.count()
+
+        # Previous period for trend
+        delta = (today - start).days or 1
+        prev_start = start - timedelta(days=delta)
+        prev_qs = Payment.objects.filter(payment_date__date__gte=prev_start, payment_date__date__lt=start, is_deleted=False)
+        prev_collected = prev_qs.filter(payment_status='paid').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        if prev_collected > 0:
+            trend_pct = round(float((total_collected - prev_collected) / prev_collected * 100), 1)
+        else:
+            trend_pct = 0.0
+
+        # Payment method breakdown
+        method_qs = qs.values('payment_method').annotate(total=Sum('amount'), count=Count('id'))
+        payment_methods = [
+            {'method': r['payment_method'], 'total': float(r['total'] or 0), 'count': r['count']}
+            for r in method_qs
+        ]
+
+        # Package breakdown
+        pkg_qs = qs.values('member__member_package__name').annotate(total=Sum('amount'), count=Count('id'))
+        package_breakdown = [
+            {'package': r['member__member_package__name'] or 'No Package', 'total': float(r['total'] or 0), 'count': r['count']}
+            for r in pkg_qs
+        ]
+
+        # Revenue trend bars
+        revenue_trend = self._build_revenue_trend(period, today)
+
+        # Overdue member count
+        overdue_count = Member.objects.filter(
+            is_deleted=False, is_active=True,
+            end_date__lt=today
+        ).count()
+
+        return Response({
+            'period': period,
+            'total_collected': float(total_collected),
+            'total_due': float(total_due),
+            'total_partial': float(total_partial),
+            'transaction_count': transaction_count,
+            'trend_pct': trend_pct,
+            'overdue_count': overdue_count,
+            'payment_methods': payment_methods,
+            'package_breakdown': package_breakdown,
+            'revenue_trend': revenue_trend,
+        })
+
+    def _build_revenue_trend(self, period, today):
+        from django.db.models import Sum
+        from datetime import timedelta
+        from decimal import Decimal
+
+        results = []
+        if period == 'today':
+            for hour in [6, 9, 12, 15, 18, 21]:
+                label = f"{hour}{'a' if hour < 12 else 'p'}"
+                qs = Payment.objects.filter(
+                    payment_date__date=today,
+                    payment_date__hour__gte=hour,
+                    payment_date__hour__lt=hour + 3,
+                    payment_status='paid', is_deleted=False,
+                )
+                total = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                results.append({'label': label, 'value': float(total)})
+        elif period == 'weekly':
+            for i in range(7):
+                d = today - timedelta(days=6 - i)
+                qs = Payment.objects.filter(payment_date__date=d, payment_status='paid', is_deleted=False)
+                total = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                results.append({'label': d.strftime('%a'), 'value': float(total)})
+        else:
+            import calendar
+            year, month = today.year, today.month
+            num_months = 12
+            for m in range(1, num_months + 1):
+                qs = Payment.objects.filter(payment_date__year=year, payment_date__month=m, payment_status='paid', is_deleted=False)
+                total = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                results.append({'label': calendar.month_abbr[m], 'value': float(total)})
+        return results
+
+
+# =============================================================================
+# GYM CLASS + SCHEDULE VIEWS
+# =============================================================================
+
+class GymClassView(ModelCRUDView):
+    """CRUD for gym-level class catalog. GET/POST /membership/gym-classes/ etc."""
+    feature_key = 'classes'
+    queryset = GymClass.objects.filter(is_deleted=False).order_by('name')
+    serializer_class = GymClassSerializer
+    permission_classes = [HasFeatureMethodPermission]
+
+
+class GymScheduleView(ModelCRUDView):
+    """CRUD for weekly gym schedule. GET/POST /membership/gym-schedules/ etc."""
+    feature_key = 'classes'
+    queryset = GymSchedule.objects.filter(is_deleted=False).order_by('day_of_week', 'start_time')
+    serializer_class = GymScheduleSerializer
     permission_classes = [HasFeatureMethodPermission]

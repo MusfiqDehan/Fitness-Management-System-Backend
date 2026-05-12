@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Member, MemberPackage, Payment, Attendance
+from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
 from datetime import date
 
 
@@ -150,3 +150,38 @@ class MemberMinimalSerializer(serializers.ModelSerializer):
     class Meta:
         model = Member
         fields = ('id', 'full_name', 'phone_number', 'card_id', 'fingerprint_id', 'is_active')
+
+
+# ----------------------------
+# GymClass
+# ----------------------------
+class GymClassSerializer(serializers.ModelSerializer):
+    class_type_display = serializers.CharField(source='get_class_type_display', read_only=True)
+    level_display = serializers.CharField(source='get_level_display', read_only=True)
+
+    class Meta:
+        model = GymClass
+        fields = (
+            'id', 'name', 'class_type', 'class_type_display',
+            'level', 'level_display', 'instructor',
+            'duration_minutes', 'capacity', 'description',
+            'is_active', 'created_at', 'updated_at',
+        )
+        read_only_fields = ['created_at', 'updated_at']
+
+
+# ----------------------------
+# GymSchedule
+# ----------------------------
+class GymScheduleSerializer(serializers.ModelSerializer):
+    day_of_week_display = serializers.CharField(source='get_day_of_week_display', read_only=True)
+
+    class Meta:
+        model = GymSchedule
+        fields = (
+            'id', 'gym_class', 'title', 'class_type', 'instructor',
+            'day_of_week', 'day_of_week_display',
+            'start_time', 'end_time', 'capacity',
+            'is_active', 'created_at', 'updated_at',
+        )
+        read_only_fields = ['created_at', 'updated_at']
