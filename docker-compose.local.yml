@@ -37,6 +37,7 @@ services:
     environment:
       - DEBUG=true
       - DJANGO_SETTINGS_MODULE=config.settings
+      - SKIP_DB_BOOTSTRAP=1
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_HOST=redis
@@ -65,6 +66,7 @@ services:
     environment:
       - DEBUG=true
       - DJANGO_SETTINGS_MODULE=config.settings
+      - SKIP_DB_BOOTSTRAP=1
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_HOST=redis
