@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+if [ "${SKIP_DB_BOOTSTRAP:-0}" = "1" ]; then
+    echo "Skipping DB bootstrap/migrations for this container (SKIP_DB_BOOTSTRAP=1)."
+    exec "$@"
+fi
+
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
