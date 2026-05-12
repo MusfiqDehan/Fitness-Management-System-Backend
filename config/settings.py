@@ -11,12 +11,29 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 import os
+import socket
 from pathlib import Path
 from datetime import timedelta
 import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _is_running_in_docker() -> bool:
+    return Path('/.dockerenv').exists()
+
+
+def _first_resolvable_host(host_candidates):
+    for host in host_candidates:
+        if not host:
+            continue
+        try:
+            socket.getaddrinfo(host, None)
+            return host
+        except OSError:
+            continue
+    return None
 
 
 # Quick-start development settings - unsuitable for production
@@ -213,6 +230,32 @@ if _database_url:
         conn_max_age=600,
         conn_health_checks=True,
     )
+
+    # If Django runs on the host machine, Docker service names like "db"
+    # are not resolvable. Remap to localhost (host-mapped port) for local use.
+    db_host = _db_cfg.get('HOST')
+
+    if not _is_running_in_docker() and db_host in {'db', 'postgres', 'postgresql', 'gym-db-local'}:
+        _db_cfg['HOST'] = os.environ.get('LOCAL_DB_HOST', 'localhost')
+        if not os.environ.get('LOCAL_DB_PORT') and str(_db_cfg.get('PORT') or '') in {'', '5432'}:
+            _db_cfg['PORT'] = '5451'
+        else:
+            _db_cfg['PORT'] = os.environ.get('LOCAL_DB_PORT', _db_cfg.get('PORT'))
+
+    if _is_running_in_docker():
+        in_docker_host = _db_cfg.get('HOST')
+        fallback_hosts = [
+            in_docker_host,
+            os.environ.get('DOCKER_DB_HOST', ''),
+            os.environ.get('POSTGRES_HOST', ''),
+            'gym-db-local',
+            'db',
+            'postgres',
+        ]
+        resolved_host = _first_resolvable_host(fallback_hosts)
+        if resolved_host:
+            _db_cfg['HOST'] = resolved_host
+
     _db_cfg['ENGINE'] = 'django_tenants.postgresql_backend'
     DATABASES = {'default': _db_cfg}
 else:
