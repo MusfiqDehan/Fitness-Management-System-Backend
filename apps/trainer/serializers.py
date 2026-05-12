@@ -34,12 +34,28 @@ class TrainerProfileSerializer(serializers.ModelSerializer):
 class TrainerProfilePublicSerializer(serializers.ModelSerializer):
     """Public serializer for trainer's public profile page."""
     user_name = serializers.CharField(source='user.full_name', read_only=True)
+    user_email = serializers.EmailField(source='user.email', read_only=True, allow_null=True)
+    user_phone = serializers.CharField(source='user.phone', read_only=True, allow_null=True)
+    organization_name = serializers.SerializerMethodField()
     avatar = serializers.ImageField(use_url=True)
+
+    def get_organization_name(self, obj):
+        request = self.context.get('request')
+        request_tenant = getattr(request, 'tenant', None)
+        if request_tenant and getattr(request_tenant, 'name', ''):
+            return request_tenant.name
+
+        user_tenant = getattr(obj.user, 'tenant', None)
+        if user_tenant and getattr(user_tenant, 'name', ''):
+            return user_tenant.name
+
+        return ''
     
     class Meta:
         model = TrainerProfile
         fields = [
-            'id', 'user_name', 'username', 'title', 'bio', 'specializations',
+            'id', 'user_name', 'user_email', 'user_phone', 'organization_name',
+            'username', 'title', 'bio', 'specializations',
             'experience_years', 'avatar', 'cover_photo',
             'total_classes', 'total_members', 'average_rating', 'total_ratings',
             'instagram', 'facebook', 'youtube', 'website',
@@ -67,6 +83,18 @@ class TrainerDocumentSerializer(serializers.ModelSerializer):
             'description', 'is_active', 'is_published', 'created_at', 'updated_at',
         ]
         read_only_fields = ['created_at', 'updated_at']
+
+
+class TrainerDocumentPublicSerializer(serializers.ModelSerializer):
+    """Public serializer for profile-visible trainer documents."""
+
+    class Meta:
+        model = TrainerDocument
+        fields = [
+            'id', 'title', 'document_type', 'issuing_organization',
+            'issue_date', 'expiry_date', 'document_file', 'document_url',
+            'description',
+        ]
 
 
 # =============================================================================
