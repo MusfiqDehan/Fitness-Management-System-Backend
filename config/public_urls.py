@@ -36,7 +36,7 @@ urlpatterns = [
     path('api/v1/tenants/', include(('apps.tenancy.urls', 'tenancy'), namespace='tenancy')),
 
     # Platform-admin billing & package management
-    path('api/v1/billing/', include(('apps.billing.urls', 'billing'), namespace='billing')),
+    path('api/v1/billing/', include(('apps.billing.public_urls', 'billing'), namespace='billing')),
 
     # Trainer public routes (no tenant scope needed)
     path('api/v1/trainer/public/profile/<slug:username>/', TrainerPublicProfileView.as_view(), name='trainer-public-profile'),

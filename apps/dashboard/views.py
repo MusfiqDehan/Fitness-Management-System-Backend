@@ -24,13 +24,11 @@ from apps.quick_action.serializers import (
 from apps.membership.serializers import (
     MemberSerializer,
     MemberPackageSerializer,
-    PaymentSerializer,
     AttendanceSerializer,
 )
 from apps.membership.models import (
     MemberPackage,
     Member,
-    Payment,
     Attendance
 )
 from apps.access.permissions import HasFeatureMethodPermission
@@ -485,40 +483,6 @@ class MemberDashboardUpdateAPIView(UpdateModelAPIView, MemberDashboardBaseAPIVie
 
 
 class MemberDashboardDeleteAPIView(DestroyModelAPIView, MemberDashboardBaseAPIView):
-    pass
-
-
-# Payment
-class PaymentDashboardBaseAPIView(GenericAPIView):
-    feature_key = 'payments'
-    queryset = Payment.objects.select_related('member').all().order_by('-payment_date')
-    serializer_class = PaymentSerializer
-    permission_classes = [HasFeatureMethodPermission]
-
-    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['payment_type', 'member']
-    search_fields = ['member__full_name', 'note']
-    ordering_fields = ['payment_date', 'amount', 'member__full_name']
-    ordering = ['-payment_date']
-
-
-class PaymentDashboardListAPIView(ListModelAPIView, PaymentDashboardBaseAPIView):
-    pass
-
-
-class PaymentDashboardCreateAPIView(CreateModelAPIView, PaymentDashboardBaseAPIView):
-    pass
-
-
-class PaymentDashboardRetrieveAPIView(RetrieveModelAPIView, PaymentDashboardBaseAPIView):
-    pass
-
-
-class PaymentDashboardUpdateAPIView(UpdateModelAPIView, PaymentDashboardBaseAPIView):
-    pass
-
-
-class PaymentDashboardDeleteAPIView(DestroyModelAPIView, PaymentDashboardBaseAPIView):
     pass
 
 

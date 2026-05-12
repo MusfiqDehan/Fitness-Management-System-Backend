@@ -15,6 +15,7 @@ from apps.tenancy.models import (
     PlatformPackage,
     PlatformPackageFeature,
 )
+from apps.membership.models import Member, Payment
 
 
 class FeatureSerializer(serializers.ModelSerializer):
@@ -115,3 +116,87 @@ class PackageFeatureBulkSerializer(serializers.Serializer):
     """PUT /billing/packages/{id}/features/ — replace package feature mapping."""
 
     feature_ids = serializers.ListField(child=serializers.IntegerField())
+
+
+class PaymentMemberOptionSerializer(serializers.ModelSerializer):
+    package_name = serializers.CharField(source='member_package.name', read_only=True)
+
+    class Meta:
+        model = Member
+        fields = ['id', 'full_name', 'phone_number', 'email', 'package_name']
+
+
+class PaymentSerializer(serializers.ModelSerializer):
+    member_name = serializers.CharField(source='member.full_name', read_only=True)
+    member_phone = serializers.CharField(source='member.phone_number', read_only=True)
+    member_email = serializers.CharField(source='member.email', read_only=True)
+    package_name = serializers.CharField(source='member.member_package.name', read_only=True)
+    payment_type_display = serializers.CharField(source='get_payment_type_display', read_only=True)
+    payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
+    payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
+
+    class Meta:
+        model = Payment
+        fields = [
+            'id',
+            'member',
+            'member_name',
+            'member_phone',
+            'member_email',
+            'package_name',
+            'payment_type',
+            'payment_type_display',
+            'amount',
+            'payment_method',
+            'payment_method_display',
+            'payment_status',
+            'payment_status_display',
+            'payment_date',
+            'invoice_no',
+            'note',
+            'is_paid',
+            'is_active',
+            'is_published',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'created_at',
+            'updated_at',
+            'member_name',
+            'member_phone',
+            'member_email',
+            'package_name',
+            'payment_type_display',
+            'payment_method_display',
+            'payment_status_display',
+        ]
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            mutable = dict(data)
+            aliases = {
+                'member_id': 'member',
+                'method': 'payment_method',
+                'status': 'payment_status',
+                'notes': 'note',
+                'invoiceNo': 'invoice_no',
+            }
+            for old_key, new_key in aliases.items():
+                if old_key in mutable and new_key not in mutable:
+                    mutable[new_key] = mutable[old_key]
+            data = mutable
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        payment_status = attrs.get('payment_status')
+        is_paid = attrs.get('is_paid')
+
+        if payment_status is not None:
+            attrs['is_paid'] = payment_status == Payment.STATUS_PAID
+        elif is_paid is not None:
+            attrs['payment_status'] = (
+                Payment.STATUS_PAID if is_paid else Payment.STATUS_DUE
+            )
+
+        return attrs

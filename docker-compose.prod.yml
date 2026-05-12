@@ -42,7 +42,7 @@ services:
       # ── Backend router: all *.musfiqdehan.com subdomains,
       #    only for API / admin / media / static paths.
       #    HostRegexp uses a plain Go regex (Traefik v3 syntax).
-      - "traefik.http.routers.backend.rule=HostRegexp(`^[a-z0-9][a-z0-9-]*\\.musfiqdehan\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`))"
+      - "traefik.http.routers.backend.rule=HostRegexp(`^[a-z0-9][a-z0-9-]*\\.musfiqdehan\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`))"
       - "traefik.http.routers.backend.entrypoints=websecure"
       - "traefik.http.routers.backend.tls=true"
       # Stabilise wildcard TLS matching for HostRegexp routes (Traefik v3)
