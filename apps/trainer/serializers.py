@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.contrib.auth import get_user_model
 from .models import (
     TrainerProfile, TrainerDocument, TrainerClass,
     TrainerSchedule, ScheduleBooking, TrainerRating, TrainerInvitation,
@@ -12,12 +13,51 @@ from apps.membership.models import Member
 class TrainerProfileSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.full_name', read_only=True)
     user_email = serializers.EmailField(source='user.email', read_only=True)
+    user_phone = serializers.CharField(source='user.phone', read_only=True)
     is_active = serializers.BooleanField(source='user.is_active', read_only=True)
+    full_name = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    phone = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
+
+    def validate_phone(self, value):
+        cleaned = (value or '').strip()
+        if not cleaned:
+            return ''
+
+        user_model = get_user_model()
+        queryset = user_model.objects.filter(phone=cleaned)
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.user_id)
+        if queryset.exists():
+            raise serializers.ValidationError('Phone number already in use.')
+        return cleaned
+
+    def update(self, instance, validated_data):
+        full_name = validated_data.pop('full_name', None)
+        phone = validated_data.pop('phone', None)
+
+        instance = super().update(instance, validated_data)
+
+        user = instance.user
+        changed_fields = []
+
+        if full_name is not None:
+            user.full_name = full_name.strip()
+            changed_fields.append('full_name')
+
+        if phone is not None:
+            user.phone = (phone or '').strip() or None
+            changed_fields.append('phone')
+
+        if changed_fields:
+            user.save(update_fields=changed_fields)
+
+        return instance
 
     class Meta:
         model = TrainerProfile
         fields = [
-            'id', 'user', 'user_name', 'user_email', 'is_active',
+            'id', 'user', 'user_name', 'user_email', 'user_phone', 'is_active',
+            'full_name', 'phone',
             'username', 'title', 'bio', 'specializations', 'experience_years',
             'avatar', 'cover_photo',
             'total_classes', 'total_members', 'average_rating', 'total_ratings',
