@@ -17,6 +17,7 @@ from .models import (
 )
 from .serializers import (
     TrainerProfileSerializer, TrainerDocumentSerializer,
+    TrainerDocumentPublicSerializer,
     TrainerClassSerializer, TrainerScheduleSerializer,
     ScheduleBookingSerializer, ScheduleBookingCreateSerializer,
     TrainerRatingSerializer, TrainerRatingCreateSerializer,
@@ -197,6 +198,14 @@ class TrainerPublicProfileView(APIView):
             trainer=profile, is_deleted=False
         ).select_related('member').order_by('-created_at')[:20]
         data['recent_ratings'] = TrainerRatingSerializer(ratings, many=True).data
+
+        # Include published public documents (certifications, awards, body images, etc.)
+        documents = TrainerDocument.objects.filter(
+            trainer=profile,
+            is_published=True,
+            is_deleted=False,
+        ).order_by('-issue_date', '-created_at')
+        data['documents'] = TrainerDocumentPublicSerializer(documents, many=True).data
         
         return Response(data)
 
