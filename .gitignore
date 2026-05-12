@@ -25,6 +25,7 @@ staticfiles/
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # Migrations (optional if you want to ignore)
 # */migrations/*
