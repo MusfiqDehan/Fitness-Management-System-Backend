@@ -10,6 +10,12 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from django.db.models import Q
+from django.db import transaction
+from django.utils import timezone
+from django.core.mail import send_mail
+from django.conf import settings
+from datetime import timedelta
+import secrets
 
 from .models import Member, MemberPackage, Payment, Attendance
 from .serializers import (
@@ -23,6 +29,55 @@ from .serializers import (
 )
 from utils.base_view import ModelCRUDView
 from apps.access.permissions import HasFeatureMethodPermission
+
+
+def _build_member_invite_url(request, token: str) -> str:
+    return f"{request.scheme}://{request.get_host()}/register?token={token}"
+
+
+def _send_member_invitation_email(member: Member, request, invited_by=None, force_new_token: bool = False) -> str | None:
+    """Prepare invitation token and send invitation email. Returns invite URL if sent."""
+    if not member.email:
+        return None
+
+    now = timezone.now()
+    has_valid_token = bool(
+        member.invitation_token
+        and member.invitation_expires_at
+        and member.invitation_expires_at > now
+    )
+
+    if force_new_token or not has_valid_token:
+        member.invitation_token = secrets.token_urlsafe(48)
+        member.invitation_sent_at = now
+        member.invitation_expires_at = now + timedelta(days=7)
+
+    if invited_by is not None:
+        member.invited_by = invited_by
+
+    member.is_active = False
+    member.save(update_fields=[
+        'invitation_token', 'invitation_sent_at', 'invitation_expires_at',
+        'invited_by', 'is_active',
+    ])
+
+    invite_url = _build_member_invite_url(request, member.invitation_token)
+    tenant_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'our gym'
+
+    send_mail(
+        subject=f"Complete your member registration at {tenant_name}",
+        message=(
+            f"Hi {member.full_name or 'there'},\n\n"
+            f"You have been invited to complete your member registration. "
+            f"Use the link below to verify your invitation and set your password:\n\n"
+            f"{invite_url}\n\n"
+            f"This link expires in 7 days."
+        ),
+        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
+        recipient_list=[member.email],
+        fail_silently=False,
+    )
+    return invite_url
 
 
 # =============================================================================
@@ -103,6 +158,34 @@ class MemberView(MemberActions, ModelCRUDView):
     serializer_class = MemberSerializer
     permission_classes = [HasFeatureMethodPermission]
 
+    def _create(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        inviter = request.user if getattr(request, 'user', None) and request.user.is_authenticated else None
+
+        try:
+            with transaction.atomic():
+                instance = serializer.save()
+                invite_url = _send_member_invitation_email(
+                    instance,
+                    request,
+                    invited_by=inviter,
+                    force_new_token=True,
+                )
+        except Exception as exc:
+            return Response(
+                {'error': f'Failed to send invitation email: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        payload = self.get_serializer(instance).data
+        payload['invitation_sent'] = bool(invite_url)
+        if invite_url:
+            payload['invite_url'] = invite_url
+
+        return Response(payload, status=status.HTTP_201_CREATED)
+
     def get_queryset(self):
         queryset = Member.objects.all().order_by('-created_at')
         is_active = self.request.query_params.get('is_active')
@@ -168,10 +251,33 @@ class PublicMemberRegistrationAPIView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        if not request.data.get('email'):
+            return Response({'error': 'Email is required for registration'}, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = MemberPublicSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        member = serializer.save()
-        return Response(MemberSerializer(member).data, status=status.HTTP_201_CREATED)
+
+        try:
+            with transaction.atomic():
+                member = serializer.save(is_active=False)
+                invite_url = _send_member_invitation_email(
+                    member,
+                    request,
+                    invited_by=None,
+                    force_new_token=True,
+                )
+        except Exception as exc:
+            return Response(
+                {'error': f'Failed to send invitation email: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response({
+            'message': 'Registration received. Please check your email to verify and set password.',
+            'member_id': member.id,
+            'invitation_sent': bool(invite_url),
+            'invite_url': invite_url,
+        }, status=status.HTTP_201_CREATED)
 
 
 # =============================================================================
@@ -242,10 +348,6 @@ class InviteMemberAPIView(APIView):
     permission_classes = [HasFeatureMethodPermission]
 
     def post(self, request):
-        from django.utils import timezone
-        from django.conf import settings
-        import secrets
-
         email = request.data.get('email')
         full_name = request.data.get('full_name', '')
         phone_number = request.data.get('phone_number')
@@ -271,42 +373,25 @@ class InviteMemberAPIView(APIView):
         if existing:
             return Response({'error': 'An invitation has already been sent to this phone number'}, status=status.HTTP_400_BAD_REQUEST)
 
-        token = secrets.token_urlsafe(48)
-        expires_at = timezone.now() + timedelta(days=7)
+        inviter = request.user if getattr(request, 'user', None) and request.user.is_authenticated else None
 
-        member = Member.objects.create(
-            full_name=full_name or email.split('@')[0],
-            phone_number=phone_number,
-            email=email,
-            member_package_id=member_package_id,
-            is_active=False,
-            invited_by=request.user if hasattr(request, 'user') else None,
-            invitation_token=token,
-            invitation_sent_at=timezone.now(),
-            invitation_expires_at=expires_at,
-        )
-
-        # Build invitation URL
-        invite_url = f"{request.scheme}://{request.get_host()}/register?token={token}"
-
-        # Send email
         try:
-            from django.core.mail import send_mail
-            send_mail(
-                subject=f"You're invited to join {getattr(request, 'tenant_name', 'our gym')}",
-                message=(
-                    f"Hi {full_name or 'there'},\n\n"
-                    f"You've been invited to join our gym. "
-                    f"Click the link below to complete your registration and set your password:\n\n"
-                    f"{invite_url}\n\n"
-                    f"This link expires in 7 days."
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[email],
-                fail_silently=False,
-            )
-        except Exception as e:
-            return Response({'error': f'Failed to send email: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            with transaction.atomic():
+                member = Member.objects.create(
+                    full_name=full_name or email.split('@')[0],
+                    phone_number=phone_number,
+                    email=email,
+                    member_package_id=member_package_id,
+                    is_active=False,
+                )
+                invite_url = _send_member_invitation_email(
+                    member,
+                    request,
+                    invited_by=inviter,
+                    force_new_token=True,
+                )
+        except Exception as exc:
+            return Response({'error': f'Failed to send email: {str(exc)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({
             'message': 'Invitation sent successfully',
@@ -348,9 +433,6 @@ class CompleteMemberRegistrationAPIView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        from django.utils import timezone
-        from django.contrib.auth.hashers import make_password
-
         token = request.data.get('token')
         password = request.data.get('password')
         full_name = request.data.get('full_name')
@@ -363,12 +445,21 @@ class CompleteMemberRegistrationAPIView(APIView):
         except Member.DoesNotExist:
             return Response({'error': 'Invalid or expired token'}, status=status.HTTP_404_NOT_FOUND)
 
-        if member.invitation_expires_at < timezone.now():
+        if not member.invitation_expires_at or member.invitation_expires_at < timezone.now():
             return Response({'error': 'Invitation has expired'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not member.email:
+            return Response({'error': 'Invited member does not have an email address'}, status=status.HTTP_400_BAD_REQUEST)
+
+        tenant = getattr(getattr(member, 'invited_by', None), 'tenant', None) or getattr(request, 'tenant', None)
+        if tenant is None:
+            return Response({'error': 'Could not determine tenant for this invitation'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Create auth User for member
         from apps.identity.models import User
-        from django.db import transaction
+
+        if User.objects.filter(email=member.email).exists():
+            return Response({'error': 'A user account with this email already exists'}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
             # Create user account
@@ -376,7 +467,7 @@ class CompleteMemberRegistrationAPIView(APIView):
                 email=member.email,
                 full_name=full_name or member.full_name,
                 role='student',
-                tenant=member.tenant,
+                tenant=tenant,
                 email_verified=True,
                 password_set_at=timezone.now(),
             )
@@ -385,10 +476,16 @@ class CompleteMemberRegistrationAPIView(APIView):
 
             # Activate member
             member.invitation_token = None
+            member.invitation_sent_at = None
             member.invitation_expires_at = None
             member.invited_by = None
             member.is_active = True
-            member.save()
+            if full_name:
+                member.full_name = full_name
+            member.save(update_fields=[
+                'invitation_token', 'invitation_sent_at', 'invitation_expires_at',
+                'invited_by', 'is_active', 'full_name',
+            ])
 
         return Response({'message': 'Registration completed successfully', 'member_id': member.id})
 
