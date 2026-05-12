@@ -19,6 +19,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
+from apps.trainer.views import TrainerPublicProfileView, VerifyTrainerInvitationAPIView, CompleteTrainerRegistrationAPIView
 
 urlpatterns = [
     # Django admin (manages Tenant + Domain records)
@@ -36,6 +37,11 @@ urlpatterns = [
 
     # Platform-admin billing & package management
     path('api/v1/billing/', include(('apps.billing.urls', 'billing'), namespace='billing')),
+
+    # Trainer public routes (no tenant scope needed)
+    path('api/v1/trainer/public/profile/<slug:username>/', TrainerPublicProfileView.as_view(), name='trainer-public-profile'),
+    path('api/v1/trainer/public/verify-invitation/', VerifyTrainerInvitationAPIView.as_view(), name='trainer-verify-invitation'),
+    path('api/v1/trainer/public/complete-registration/', CompleteTrainerRegistrationAPIView.as_view(), name='trainer-complete-registration'),
 
     # API Schema & Docs (shared)
     path('api/v1/schema/', SpectacularAPIView.as_view(), name='schema'),

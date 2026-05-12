@@ -38,6 +38,7 @@ urlpatterns = [
     path('api/v1/access/', include(('apps.access.urls', 'access'), namespace='access')),
     path('api/v1/billing/', include(('apps.billing.urls', 'billing'), namespace='billing')),
     path('api/v1/attendance/', include(('apps.attendance.urls', 'attendance'), namespace='attendance')),
+    path('api/v1/trainer/', include(('apps.trainer.urls', 'trainer'), namespace='trainer')),
 
     # ZKTeco ADMS device paths.
     # Accept both with and without a trailing slash because F18 firmware often
