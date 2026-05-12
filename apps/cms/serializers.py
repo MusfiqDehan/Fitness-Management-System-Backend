@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 from django.core.validators import URLValidator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import (
@@ -324,7 +325,7 @@ class DashboardBlogSerializer(serializers.ModelSerializer):
         source='category',
         write_only=True
     )
-    image = serializers.ImageField(required=False)
+    image = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = Blog
@@ -342,8 +343,9 @@ class DashboardBlogSerializer(serializers.ModelSerializer):
             'author',
             'published_date',
             'created_at',
+            'updated_at',
         ]
-        read_only_fields = ['author', 'published_date', 'created_at']
+        read_only_fields = ['author', 'published_date', 'created_at', 'updated_at']
 
     def create(self, validated_data):
         # Assign author automatically
@@ -359,6 +361,3 @@ class DashboardBlogSerializer(serializers.ModelSerializer):
         if validated_data.get('status') == 'published' and not instance.published_date:
             validated_data['published_date'] = timezone.now()
         return super().update(instance, validated_data)
-
-
-from django.utils import timezone

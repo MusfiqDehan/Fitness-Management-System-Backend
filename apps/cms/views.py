@@ -318,12 +318,12 @@ class BlogCategoryDeleteAPIView(DestroyModelAPIView, BlogCategoryBaseAPIView):
 
 class DashboardBlogBaseAPIView(GenericAPIView):
     feature_key = 'cms.blogs'
-    queryset = Blog.objects.all().order_by('-created_at')
+    queryset = Blog.objects.select_related('category', 'author').order_by('-created_at')
     serializer_class = DashboardBlogSerializer
     permission_classes = [HasFeatureMethodPermission]
     filter_backends = [SearchFilter]
-    filterset_fields = ['status', 'category']
-    search_fields = ['title', 'description']
+    filterset_fields = ['status', 'category', 'is_show_on_home_page']
+    search_fields = ['title', 'slug', 'excerpt', 'description', 'category__name']
 
     def perform_create(self, serializer):
         return serializer.save(author=self.request.user)
@@ -355,6 +355,7 @@ class DashboardBlogDeleteAPIView(DestroyModelAPIView, DashboardBlogBaseAPIView):
 
 class PublicBlogListView(generics.ListAPIView):
     serializer_class = BlogListSerializer
+    permission_classes = [permissions.AllowAny]
     filter_backends = [SearchFilter]
     search_fields = ['title', 'description', 'category__name']
 
@@ -367,6 +368,7 @@ class PublicBlogListView(generics.ListAPIView):
 
 class PublicBlogDetailView(generics.RetrieveAPIView):
     serializer_class = BlogDetailSerializer
+    permission_classes = [permissions.AllowAny]
     lookup_field = 'slug'
 
     def get_queryset(self):

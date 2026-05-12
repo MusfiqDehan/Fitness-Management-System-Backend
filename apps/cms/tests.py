@@ -14,13 +14,22 @@ from apps.dashboard.views import FileUploadView
 from apps.identity.models import User
 from apps.tenancy.models import Domain, Feature, Tenant, TenantFeatureFlag
 
-from .models import PromoBanner, SiteBanner
+from .models import Blog, BlogCategory, PromoBanner, SiteBanner
 from .views import (
+	BlogCategoryCreateAPIView,
+	BlogCategoryListAPIView,
+	DashboardBlogCreateAPIView,
+	DashboardBlogDeleteAPIView,
+	DashboardBlogListAPIView,
+	DashboardBlogRetrieveAPIView,
+	DashboardBlogUpdateAPIView,
 	PromoBannerCreateAPIView,
 	PromoBannerDeleteAPIView,
 	PromoBannerListAPIView,
 	PromoBannerRetrieveAPIView,
 	PromoBannerUpdateAPIView,
+	PublicBlogDetailView,
+	PublicBlogListView,
 	PublicPromoBannerListView,
 	PublicSiteBannerListView,
 	SiteBannerCreateAPIView,
@@ -75,18 +84,19 @@ class CMSBannerApiTests(APITestCase):
 				is_trial=False,
 			)
 			Domain.objects.create(domain="api.testserver", tenant=self.tenant, is_primary=True)
-			feature, _ = Feature.objects.get_or_create(
-				key="cms.banners",
-				defaults={"name": "Banner Manager", "description": "Banner management"},
-			)
-			TenantFeatureFlag.objects.get_or_create(
-				tenant=self.tenant,
-				feature=feature,
-				defaults={
-					"is_enabled": True,
-					"source": TenantFeatureFlag.SOURCE_OVERRIDE,
-				},
-			)
+			for key, name in (("cms.banners", "Banner Manager"), ("cms.blogs", "Blog Manager")):
+				feature, _ = Feature.objects.get_or_create(
+					key=key,
+					defaults={"name": name, "description": f"{name} access"},
+				)
+				TenantFeatureFlag.objects.get_or_create(
+					tenant=self.tenant,
+					feature=feature,
+					defaults={
+						"is_enabled": True,
+						"source": TenantFeatureFlag.SOURCE_OVERRIDE,
+					},
+				)
 
 		with schema_context(self.tenant.schema_name):
 			self.user = User.objects.create_superuser(
@@ -385,3 +395,137 @@ class CMSBannerApiTests(APITestCase):
 		upload_payload = upload_response.data
 		self.assertIn("file_url", upload_payload)
 		self.assertIn("/media/uploads/", upload_payload["file_url"])
+
+	def test_blog_category_and_blog_admin_crud_cycle(self):
+		category_create_response = self._call_tenant_view(
+			BlogCategoryCreateAPIView.as_view(),
+			"post",
+			reverse("cms:blog-category-create"),
+			{"name": "Fitness"},
+			user=self.user,
+		)
+		self.assertEqual(category_create_response.status_code, status.HTTP_201_CREATED)
+		category_id = category_create_response.data["id"]
+
+		category_list_response = self._call_tenant_view(
+			BlogCategoryListAPIView.as_view(),
+			"get",
+			reverse("cms:blog-category-list"),
+			user=self.user,
+		)
+		self.assertEqual(category_list_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(category_list_response.data["count"], 1)
+
+		blog_create_response = self._call_tenant_view(
+			DashboardBlogCreateAPIView.as_view(),
+			"post",
+			reverse("cms:blog-create"),
+			{
+				"title": "Progressive Overload Guide",
+				"slug": "progressive-overload-guide",
+				"excerpt": "How to progress safely every week.",
+				"description": "Detailed blog description for overload principles.",
+				"status": "draft",
+				"is_show_on_home_page": True,
+				"category_id": category_id,
+				"image": SimpleUploadedFile("blog.gif", TEST_GIF_BYTES, content_type="image/gif"),
+			},
+			user=self.user,
+			format="multipart",
+		)
+		self.assertEqual(blog_create_response.status_code, status.HTTP_201_CREATED)
+		blog_id = blog_create_response.data["id"]
+		self.assertEqual(blog_create_response.data["category"]["id"], category_id)
+		self.assertEqual(blog_create_response.data["status"], "draft")
+
+		blog_list_response = self._call_tenant_view(
+			DashboardBlogListAPIView.as_view(),
+			"get",
+			reverse("cms:blog-list"),
+			user=self.user,
+		)
+		self.assertEqual(blog_list_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(blog_list_response.data["count"], 1)
+
+		blog_detail_response = self._call_tenant_view(
+			DashboardBlogRetrieveAPIView.as_view(),
+			"get",
+			reverse("cms:blog-detail", args=[blog_id]),
+			user=self.user,
+			pk=blog_id,
+		)
+		self.assertEqual(blog_detail_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(blog_detail_response.data["title"], "Progressive Overload Guide")
+
+		blog_update_response = self._call_tenant_view(
+			DashboardBlogUpdateAPIView.as_view(),
+			"patch",
+			reverse("cms:blog-update", args=[blog_id]),
+			{
+				"status": "published",
+				"excerpt": "Updated summary.",
+				"category_id": category_id,
+			},
+			user=self.user,
+			pk=blog_id,
+		)
+		self.assertEqual(blog_update_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(blog_update_response.data["status"], "published")
+		self.assertIsNotNone(blog_update_response.data["published_date"])
+
+		blog_delete_response = self._call_tenant_view(
+			DashboardBlogDeleteAPIView.as_view(),
+			"delete",
+			reverse("cms:blog-delete", args=[blog_id]),
+			user=self.user,
+			pk=blog_id,
+		)
+		self.assertEqual(blog_delete_response.status_code, status.HTTP_204_NO_CONTENT)
+
+	def test_public_blog_endpoints_only_show_published_posts(self):
+		with schema_context(self.tenant.schema_name):
+			category = BlogCategory.objects.create(name="Wellness", slug="wellness")
+			Blog.objects.create(
+				title="Published Recovery",
+				slug="published-recovery",
+				image=SimpleUploadedFile("published.gif", TEST_GIF_BYTES, content_type="image/gif"),
+				category=category,
+				excerpt="Visible post",
+				description="Published details",
+				status="published",
+				published_date=timezone.now(),
+			)
+			Blog.objects.create(
+				title="Draft Recovery",
+				slug="draft-recovery",
+				image=SimpleUploadedFile("draft.gif", TEST_GIF_BYTES, content_type="image/gif"),
+				category=category,
+				excerpt="Hidden post",
+				description="Draft details",
+				status="draft",
+			)
+
+		public_list_response = self._call_tenant_view(
+			PublicBlogListView.as_view(),
+			"get",
+			reverse("cms:public-blog-list"),
+		)
+		self.assertEqual(public_list_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(public_list_response.data["count"], 1)
+		self.assertEqual(public_list_response.data["results"][0]["slug"], "published-recovery")
+
+		public_detail_response = self._call_tenant_view(
+			PublicBlogDetailView.as_view(),
+			"get",
+			reverse("cms:public-blog-detail", args=["published-recovery"]),
+			slug="published-recovery",
+		)
+		self.assertEqual(public_detail_response.status_code, status.HTTP_200_OK)
+
+		draft_detail_response = self._call_tenant_view(
+			PublicBlogDetailView.as_view(),
+			"get",
+			reverse("cms:public-blog-detail", args=["draft-recovery"]),
+			slug="draft-recovery",
+		)
+		self.assertEqual(draft_detail_response.status_code, status.HTTP_404_NOT_FOUND)
