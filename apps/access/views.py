@@ -119,6 +119,8 @@ class MyPermissionsView(APIView):
         return Response({
             "user_id": user.id,
             "email": user.email,
+            "full_name": getattr(user, "full_name", "") or "",
+            "role": getattr(user, "role", "") or "",
             "is_tenant_admin": is_tenant_admin,
             "permissions": permission_map,
             "enabled_features": feature_keys,
