@@ -20,7 +20,8 @@ db.sqlite3-journal
 
 # Django media/static generated files
 media/
-static/
+static/*
+!static/.gitkeep
 staticfiles/
 # Environment variables
 .env
