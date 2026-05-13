@@ -228,10 +228,71 @@ class Attendance(BaseModel):
 
     def __str__(self):
         return f"{self.member.full_name} - {self.check_in_time.strftime('%Y-%m-%d %H:%M')}"
-    device_id = models.CharField(max_length=100, blank=True, null=True)
+
+
+# =============================================================================
+# GYM CLASS (catalog of class types offered by the gym)
+# =============================================================================
+
+class GymClass(BaseModel):
+    CLASS_TYPES = (
+        ('yoga', 'Yoga'),
+        ('hiit', 'HIIT'),
+        ('strength', 'Strength'),
+        ('cardio', 'Cardio'),
+        ('pilates', 'Pilates'),
+        ('zumba', 'Zumba'),
+        ('other', 'Other'),
+    )
+    LEVELS = (
+        ('beginner', 'Beginner'),
+        ('intermediate', 'Intermediate'),
+        ('advanced', 'Advanced'),
+    )
+
+    name = models.CharField(max_length=150)
+    class_type = models.CharField(max_length=20, choices=CLASS_TYPES, default='other')
+    level = models.CharField(max_length=20, choices=LEVELS, default='beginner')
+    instructor = models.CharField(max_length=150, blank=True, default='')
+    duration_minutes = models.PositiveIntegerField(default=60)
+    capacity = models.PositiveIntegerField(default=20)
+    description = models.TextField(blank=True, default='')
 
     class Meta:
-        ordering = ['-check_in_time']
+        ordering = ['name']
 
     def __str__(self):
-        return f"{self.member.full_name} - {self.check_in_time}"
+        return self.name
+
+
+# =============================================================================
+# GYM SCHEDULE (weekly recurring sessions for gym classes)
+# =============================================================================
+
+class GymSchedule(BaseModel):
+    DAYS = (
+        ('saturday', 'Saturday'),
+        ('sunday', 'Sunday'),
+        ('monday', 'Monday'),
+        ('tuesday', 'Tuesday'),
+        ('wednesday', 'Wednesday'),
+        ('thursday', 'Thursday'),
+        ('friday', 'Friday'),
+    )
+
+    gym_class = models.ForeignKey(
+        GymClass, on_delete=models.CASCADE, related_name='schedules', null=True, blank=True
+    )
+    title = models.CharField(max_length=150)
+    class_type = models.CharField(max_length=20, blank=True, default='')
+    instructor = models.CharField(max_length=150, blank=True, default='')
+    day_of_week = models.CharField(max_length=10, choices=DAYS)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    capacity = models.PositiveIntegerField(default=20)
+
+    class Meta:
+        ordering = ['day_of_week', 'start_time']
+
+    def __str__(self):
+        return f"{self.title} ({self.day_of_week} {self.start_time})"

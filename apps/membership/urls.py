@@ -8,7 +8,10 @@ from .views import (
     VerifyInvitationAPIView,
     CompleteMemberRegistrationAPIView,
     PaymentView,
+    PaymentAnalyticsAPIView,
     AttendanceView,
+    GymClassView,
+    GymScheduleView,
     PublicMemberRegistrationAPIView,
     PublicPackageListAPIView,
     PublicPackageRetrieveAPIView,
@@ -37,9 +40,16 @@ urlpatterns = [
     # ========== PAYMENTS ==========
     path('payments/', PaymentView.as_view(), name='payment-list'),
     path('payments/<int:pk>/', PaymentView.as_view(), name='payment-detail'),
+    path('payments/analytics/', PaymentAnalyticsAPIView.as_view(), name='payment-analytics'),
 
     # ========== ATTENDANCE ==========
     path('attendance/', AttendanceView.as_view(), name='attendance-list'),
+
+    # ========== GYM CLASSES & SCHEDULES ==========
+    path('gym-classes/', GymClassView.as_view(), name='gymclass-list'),
+    path('gym-classes/<int:pk>/', GymClassView.as_view(), name='gymclass-detail'),
+    path('gym-schedules/', GymScheduleView.as_view(), name='gymschedule-list'),
+    path('gym-schedules/<int:pk>/', GymScheduleView.as_view(), name='gymschedule-detail'),
 
     # ========== PUBLIC (Landing Page) ==========
     path('public/register/', PublicMemberRegistrationAPIView.as_view(), name='public-register'),

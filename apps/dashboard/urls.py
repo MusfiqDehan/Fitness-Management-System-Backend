@@ -1,4 +1,17 @@
 from django.urls import path
+from .settings_views import (
+    GymProfileAPIView,
+    NotificationPreferencesAPIView,
+    GymPreferencesAPIView,
+    MyAccountAPIView,
+    ChangePasswordAPIView,
+    ReminderTemplateListAPIView,
+    ReminderTemplateDetailAPIView,
+    ReminderListAPIView,
+    ReminderDetailAPIView,
+    ReminderSendAPIView,
+    ReminderStatsAPIView,
+)
 from .views import (
     GymClassDashboardListAPIView,
     GymClassDashboardCreateAPIView,
@@ -117,4 +130,24 @@ urlpatterns = [
     # ==== End of Attendance related endpoints ====
 
     path('upload/', FileUploadView.as_view(), name='file-upload'),
+
+    # ==== Settings endpoints ====
+    path('settings/gym-profile/', GymProfileAPIView.as_view(), name='settings-gym-profile'),
+    path('settings/notifications/', NotificationPreferencesAPIView.as_view(), name='settings-notifications'),
+    path('settings/preferences/', GymPreferencesAPIView.as_view(), name='settings-preferences'),
+    path('settings/my-account/', MyAccountAPIView.as_view(), name='settings-my-account'),
+    path('settings/change-password/', ChangePasswordAPIView.as_view(), name='settings-change-password'),
+    # ==== End of Settings endpoints ====
+
+    # ==== Reminder Template endpoints ====
+    path('reminder-templates/', ReminderTemplateListAPIView.as_view(), name='reminder-template-list'),
+    path('reminder-templates/<int:pk>/', ReminderTemplateDetailAPIView.as_view(), name='reminder-template-detail'),
+    # ==== End of Reminder Template endpoints ====
+
+    # ==== Reminder endpoints ====
+    path('reminders/', ReminderListAPIView.as_view(), name='reminder-list'),
+    path('reminders/stats/', ReminderStatsAPIView.as_view(), name='reminder-stats'),
+    path('reminders/<int:pk>/', ReminderDetailAPIView.as_view(), name='reminder-detail'),
+    path('reminders/<int:pk>/send/', ReminderSendAPIView.as_view(), name='reminder-send'),
+    # ==== End of Reminder endpoints ====
 ]
