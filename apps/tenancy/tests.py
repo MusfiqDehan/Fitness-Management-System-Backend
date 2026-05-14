@@ -415,8 +415,8 @@ class TenancyApiTests(APITestCase):
 		}
 
 		with self.settings(
-			PUBLIC_FRONTEND_URL="https://gym-ms.musfiqdehan.com",
-			TENANT_FRONTEND_BASE_DOMAIN="musfiqdehan.com",
+			PUBLIC_FRONTEND_URL="https://fitssort.com",
+			TENANT_FRONTEND_BASE_DOMAIN="fitssort.com",
 			TENANT_FRONTEND_SCHEME="https",
 			TENANT_FRONTEND_PORT="",
 		):
@@ -429,7 +429,7 @@ class TenancyApiTests(APITestCase):
 
 		self.assertEqual(res.status_code, status.HTTP_201_CREATED)
 		email_log = EmailQueue.objects.get(to_email="owner@prodgym.test", purpose=EmailQueue.PURPOSE_VERIFICATION)
-		self.assertTrue(email_log.context["verification_url"].startswith("https://prodgym.musfiqdehan.com/SetTenantPassword?token="))
+		self.assertTrue(email_log.context["verification_url"].startswith("https://prodgym.fitssort.com/SetTenantPassword?token="))
 
 	def test_invitation_email_uses_https_tenant_subdomain_in_production_mode(self):
 		self.client.force_authenticate(user=self.public_user)
@@ -440,8 +440,8 @@ class TenancyApiTests(APITestCase):
 		}
 
 		with self.settings(
-			PUBLIC_FRONTEND_URL="https://gym-ms.musfiqdehan.com",
-			TENANT_FRONTEND_BASE_DOMAIN="musfiqdehan.com",
+			PUBLIC_FRONTEND_URL="https://fitssort.com",
+			TENANT_FRONTEND_BASE_DOMAIN="fitssort.com",
 			TENANT_FRONTEND_SCHEME="https",
 			TENANT_FRONTEND_PORT="",
 		):
@@ -454,7 +454,7 @@ class TenancyApiTests(APITestCase):
 
 		self.assertEqual(res.status_code, status.HTTP_201_CREATED)
 		email_log = EmailQueue.objects.get(to_email="admin@prodinvite.test", purpose=EmailQueue.PURPOSE_INVITATION)
-		self.assertTrue(email_log.context["invitation_url"].startswith("https://prodinvite.musfiqdehan.com/accept-invite?token="))
+		self.assertTrue(email_log.context["invitation_url"].startswith("https://prodinvite.fitssort.com/accept-invite?token="))
 
 	def test_token_validation_rejects_wrong_tenant_host(self):
 		raw_token, _ = Invitation.issue_token(
