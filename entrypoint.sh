@@ -26,7 +26,7 @@ def to_bool(value, default=False):
 
 TenantModel = get_tenant_model()
 DomainModel = get_tenant_domain_model()
-public_domain = os.environ.get('PUBLIC_DOMAIN', 'localhost').strip()
+public_domain = os.environ.get('PUBLIC_DOMAIN', 'localhost').strip().lower()
 
 
 def ensure_domain(domain, tenant, *, is_primary=False, label='domain'):
@@ -79,10 +79,15 @@ if auto_create_default_tenant:
     default_slug = os.environ.get('DEFAULT_TENANT_SLUG', 'main-gym').strip()
     default_code = os.environ.get('DEFAULT_TENANT_CODE', 'MAIN').strip()
     default_domains_raw = os.environ.get('DEFAULT_TENANT_DOMAINS', 'gym-backend-local')
-    default_domains = [d.strip() for d in default_domains_raw.split(',') if d.strip()]
+    default_domains = [d.strip().lower() for d in default_domains_raw.split(',') if d.strip()]
 
     if default_schema == 'public':
         print('Skipping default tenant bootstrap: DEFAULT_TENANT_SCHEMA cannot be public.')
+    elif public_domain and public_domain in default_domains:
+        raise SystemExit(
+            'Invalid tenant bootstrap config: DEFAULT_TENANT_DOMAINS must not include PUBLIC_DOMAIN. '
+            f'{public_domain} belongs to the public schema.'
+        )
     else:
         default_tenant, default_created = TenantModel.objects.get_or_create(
             schema_name=default_schema,
