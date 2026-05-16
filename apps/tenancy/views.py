@@ -132,10 +132,12 @@ def _request_host(request):
 
 
 def _public_request_hosts():
+	public_domain = getattr(settings, "PUBLIC_DOMAIN", "").strip().lower()
 	return {
 		host
 		for host in {
-			getattr(settings, "PUBLIC_DOMAIN", "").strip().lower(),
+			public_domain,
+			f"www.{public_domain}" if public_domain else "",
 			"localhost",
 			"127.0.0.1",
 			"testserver",

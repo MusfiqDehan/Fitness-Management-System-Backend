@@ -477,6 +477,27 @@ class TenancyApiTests(APITestCase):
 		self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
 		self.assertEqual(res.data["detail"], "Token does not belong to this tenant domain.")
 
+	def test_token_validation_allows_www_public_host(self):
+		with override_settings(PUBLIC_DOMAIN="fitssort.com"):
+			raw_token, _ = Invitation.issue_token(
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				tenant=self.tenant,
+				email="admin@api.test",
+				subdomain="api",
+				company_name=self.tenant.name,
+				ttl_minutes=30,
+				metadata={"domain": "api.testserver"},
+			)
+
+			res = self.client.post(
+				"/api/v1/tenancy/tokens/validate/",
+				{"token": raw_token},
+				format="json",
+				HTTP_HOST="www.fitssort.com",
+			)
+
+		self.assertEqual(res.status_code, status.HTTP_200_OK)
+
 	def test_token_validation_returns_tenant_specific_password_url(self):
 		raw_token, _ = Invitation.issue_token(
 			token_type=Invitation.TOKEN_TYPE_VERIFICATION,
