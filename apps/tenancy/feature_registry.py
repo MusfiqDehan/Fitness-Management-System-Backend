@@ -68,6 +68,12 @@ PLATFORM_REGISTRY: list[RegistryItem] = [
                 "icon": "UserCheck",
             },
             {
+                "key": "platform.email_settings",
+                "name": "Email Settings",
+                "route": "/platform/email",
+                "icon": "Mail",
+            },
+            {
                 "key": "platform.settings",
                 "name": "Settings",
                 "route": "/settings",
