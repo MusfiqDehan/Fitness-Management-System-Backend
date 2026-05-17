@@ -78,6 +78,7 @@ SHARED_APPS = [
     'rest_framework',
     'corsheaders',
     'drf_spectacular',
+    'apps.crm.apps.CrmConfig',
 ]
 
 # Apps whose tables are replicated inside EACH tenant schema
@@ -90,7 +91,6 @@ TENANT_APPS = [
     'apps.membership.apps.MembershipConfig',
     'apps.quick_action.apps.QuickActionConfig',
     'apps.cms.apps.CmsConfig',
-    'apps.crm.apps.CrmConfig',
     'apps.billing.apps.BillingConfig',
     'apps.attendance.apps.AttendanceConfig',
     'apps.trainer.apps.TrainerConfig',
@@ -409,6 +409,8 @@ EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', 15))
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', os.environ.get('EMAIL_HOST_USER', 'noreply@example.com'))
+# Recipient address for contact-form query notifications
+CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', os.environ.get('EMAIL_HOST_USER', 'contact@fitssort.com'))
 
 # ADMS device logging
 LOGGING = {
