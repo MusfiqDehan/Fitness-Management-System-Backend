@@ -38,6 +38,9 @@ urlpatterns = [
     # Platform-admin billing & package management
     path('api/v1/billing/', include(('apps.billing.public_urls', 'billing'), namespace='billing')),
 
+    # Public contact-us form submissions
+    path('api/v1/crm/', include(('apps.crm.public_urls', 'crm'), namespace='crm')),
+
     # Trainer public routes (no tenant scope needed)
     path('api/v1/trainer/public/profile/<slug:username>/', TrainerPublicProfileView.as_view(), name='trainer-public-profile'),
     path('api/v1/trainer/public/verify-invitation/', VerifyTrainerInvitationAPIView.as_view(), name='trainer-verify-invitation'),
