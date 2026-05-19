@@ -257,6 +257,7 @@ class GymClass(BaseModel):
     duration_minutes = models.PositiveIntegerField(default=60)
     capacity = models.PositiveIntegerField(default=20)
     description = models.TextField(blank=True, default='')
+    image_url = models.URLField(max_length=1000, blank=True, default='')
 
     class Meta:
         ordering = ['name']
