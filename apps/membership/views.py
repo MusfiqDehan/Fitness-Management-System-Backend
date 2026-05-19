@@ -648,3 +648,27 @@ class GymScheduleView(ModelCRUDView):
     queryset = GymSchedule.objects.filter(is_deleted=False).order_by('day_of_week', 'start_time')
     serializer_class = GymScheduleSerializer
     permission_classes = [HasFeatureMethodPermission]
+
+
+# =============================================================================
+# PUBLIC GYM CLASS + SCHEDULE (for landing page)
+# =============================================================================
+
+class PublicGymClassListAPIView(APIView):
+    """GET /api/v1/membership/public/gym-classes/ — public list of active classes."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        classes = GymClass.objects.filter(is_active=True, is_deleted=False).order_by('name')
+        serializer = GymClassSerializer(classes, many=True)
+        return Response(serializer.data)
+
+
+class PublicGymScheduleListAPIView(APIView):
+    """GET /api/v1/membership/public/gym-schedules/ — public schedules for landing page."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        schedules = GymSchedule.objects.filter(is_deleted=False).order_by('day_of_week', 'start_time')
+        serializer = GymScheduleSerializer(schedules, many=True)
+        return Response(serializer.data)

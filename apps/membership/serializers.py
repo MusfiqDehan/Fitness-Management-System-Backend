@@ -29,7 +29,7 @@ class MemberPackagePublicSerializer(serializers.ModelSerializer):
         model = MemberPackage
         fields = (
             'id', 'name', 'package_type', 'duration_in_days', 'price',
-            'description', 'features', 'add_ons',
+            'description', 'features', 'add_ons', 'display_order', 'is_highlighted',
         )
 
 
