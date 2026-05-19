@@ -213,6 +213,30 @@ class CMSBannerApiTests(APITestCase):
 		self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
 		self.assertEqual(create_response.data["desktop_url"], "/media/uploads/hero-desktop.jpg")
 
+	def test_site_banner_video_create_accepts_uploaded_media_paths(self):
+		create_response = self._call_tenant_view(
+			SiteBannerCreateAPIView.as_view(),
+			"post",
+			reverse("cms:site-banner-create"),
+			{
+				"title": "Hero Video",
+				"subtitle": "Looped gym reel",
+				"media_type": "video",
+				"desktop_url": "/media/uploads/hero-desktop.mp4",
+				"tablet_url": "/media/uploads/hero-tablet.mp4",
+				"mobile_url": "/media/uploads/hero-mobile.mp4",
+				"cta_text": "Watch Now",
+				"cta_link": "/pricing",
+				"alt_text": "Members training in a cinematic hero video",
+				"is_active": True,
+			},
+			user=self.user,
+		)
+
+		self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(create_response.data["media_type"], "video")
+		self.assertEqual(create_response.data["desktop_url"], "/media/uploads/hero-desktop.mp4")
+
 	def test_promo_banner_admin_crud_cycle(self):
 		create_response = self._call_tenant_view(
 			PromoBannerCreateAPIView.as_view(),
