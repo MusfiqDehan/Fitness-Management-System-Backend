@@ -4,6 +4,7 @@ from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.cms.models import SiteSettings
 from apps.identity.models import User
 from apps.quick_action.models import BlogCategory, Category, ClassSchedule, Contact, GymClass
 from apps.membership.models import Member, MemberPackage
@@ -238,3 +239,51 @@ class DashboardAPIViewTests(APITestCase):
 		)
 		self.assertEqual(second_response.status_code, status.HTTP_200_OK)
 		self.assertEqual(second_response.data['company_name'], 'Fit Hive Updated')
+
+	def test_gym_profile_patch_accepts_logo_fields(self):
+		"""PATCH gym-profile should accept and return logo_url, logo_width, logo_height."""
+		self.client.force_authenticate(user=self.admin_user)
+		response = self.client.patch(
+			reverse('dashboard:settings-gym-profile'),
+			{
+				'gym_name': 'My Gym',
+				'logo_url': 'http://example.com/logo.png',
+				'logo_width': 200,
+				'logo_height': 60,
+			},
+			format='json',
+		)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data['logo_url'], 'http://example.com/logo.png')
+		self.assertEqual(response.data['logo_width'], 200)
+		self.assertEqual(response.data['logo_height'], 60)
+
+	def test_gym_profile_patch_syncs_all_fields_to_site_settings(self):
+		"""Saving Gym Profile should propagate all fields to SiteSettings automatically."""
+		self.client.force_authenticate(user=self.admin_user)
+		self.client.patch(
+			reverse('dashboard:settings-gym-profile'),
+			{
+				'gym_name': 'FitsSort Gym',
+				'email': 'gym@example.com',
+				'phone': '+8801234567890',
+				'address': '123 Fitness St',
+				'website': 'https://fitssort.com',
+				'timezone': 'Asia/Dhaka',
+				'logo_url': 'http://example.com/logo.png',
+				'logo_width': 150,
+				'logo_height': 50,
+			},
+			format='json',
+		)
+		site = SiteSettings.objects.filter(pk=1).first()
+		self.assertIsNotNone(site)
+		self.assertEqual(site.company_name, 'FitsSort Gym')
+		self.assertEqual(site.email, 'gym@example.com')
+		self.assertEqual(site.phone, '+8801234567890')
+		self.assertEqual(site.address, '123 Fitness St')
+		self.assertEqual(site.website, 'https://fitssort.com')
+		self.assertEqual(site.timezone, 'Asia/Dhaka')
+		self.assertEqual(site.logo_url, 'http://example.com/logo.png')
+		self.assertEqual(site.logo_width, 150)
+		self.assertEqual(site.logo_height, 50)
