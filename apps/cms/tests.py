@@ -37,6 +37,8 @@ from .views import (
 	SiteBannerListAPIView,
 	SiteBannerRetrieveAPIView,
 	SiteBannerUpdateAPIView,
+	SiteSettingsAPIView,
+	PublicSiteSettingsView,
 )
 
 
@@ -553,3 +555,36 @@ class CMSBannerApiTests(APITestCase):
 			slug="draft-recovery",
 		)
 		self.assertEqual(draft_detail_response.status_code, status.HTTP_404_NOT_FOUND)
+
+	def test_site_settings_contact_fields_round_trip(self):
+		"""SiteSettingsAPIView should accept and return the new contact fields."""
+		payload = {
+			'company_name': 'Test Gym',
+			'phone': '+8801234567890',
+			'email': 'gym@test.com',
+			'address': '42 Fitness Ave, Dhaka',
+			'website': 'https://testgym.com',
+			'timezone': 'Asia/Dhaka',
+		}
+		create_response = self._call_tenant_view(
+			SiteSettingsAPIView.as_view(),
+			'patch',
+			reverse('cms:site-settings'),
+			data=payload,
+			user=self.user,
+		)
+		self.assertEqual(create_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(create_response.data['phone'], '+8801234567890')
+		self.assertEqual(create_response.data['email'], 'gym@test.com')
+		self.assertEqual(create_response.data['address'], '42 Fitness Ave, Dhaka')
+		self.assertEqual(create_response.data['website'], 'https://testgym.com')
+		self.assertEqual(create_response.data['timezone'], 'Asia/Dhaka')
+
+		public_response = self._call_tenant_view(
+			PublicSiteSettingsView.as_view(),
+			'get',
+			reverse('cms:public-site-settings'),
+		)
+		self.assertEqual(public_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(public_response.data['phone'], '+8801234567890')
+		self.assertEqual(public_response.data['timezone'], 'Asia/Dhaka')
