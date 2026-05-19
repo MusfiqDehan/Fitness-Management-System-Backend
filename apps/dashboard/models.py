@@ -8,6 +8,9 @@ class GymProfile(models.Model):
     website = models.URLField(blank=True, default="")
     address = models.TextField(blank=True, default="")
     timezone = models.CharField(max_length=50, default="Asia/Dhaka")
+    logo_url = models.URLField(max_length=1000, blank=True, default="")
+    logo_width = models.PositiveIntegerField(default=120)
+    logo_height = models.PositiveIntegerField(default=40)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
