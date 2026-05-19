@@ -1,11 +1,37 @@
 from rest_framework import serializers
+from django.core.validators import URLValidator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import GymProfile, NotificationPreferences, GymPreferences, ReminderTemplate, Reminder
 
 
 class GymProfileSerializer(serializers.ModelSerializer):
+    logo_url = serializers.CharField(allow_blank=True, required=False)
+    website = serializers.URLField(allow_blank=True, required=False)
+
+    def validate_logo_url(self, value):
+        normalized = (value or "").strip()
+        if not normalized:
+            return ""
+
+        # Local storage uploads return relative /media/... paths in dev/prod.
+        if normalized.startswith('/media/'):
+            return normalized
+
+        validator = URLValidator()
+        try:
+            validator(normalized)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError("Enter a valid URL.") from exc
+
+        return normalized
+
     class Meta:
         model = GymProfile
-        fields = ["id", "gym_name", "email", "phone", "website", "address", "timezone", "updated_at"]
+        fields = [
+            "id", "gym_name", "email", "phone", "website", "address", "timezone",
+            "logo_url", "logo_width", "logo_height",
+            "updated_at",
+        ]
         read_only_fields = ["id", "updated_at"]
 
 
