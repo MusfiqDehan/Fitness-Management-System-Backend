@@ -227,6 +227,29 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 	return tenant, domain
 
 
+def _bootstrap_tenant_branding_defaults(tenant):
+	"""Initialize tenant-local branding records from the tenant company name."""
+	with schema_context(tenant.schema_name):
+		from apps.cms.models import SiteSettings
+		from apps.dashboard.models import GymProfile
+
+		gym_profile, _ = GymProfile.objects.get_or_create(
+			pk=1,
+			defaults={"gym_name": tenant.name},
+		)
+		if not (gym_profile.gym_name or "").strip():
+			gym_profile.gym_name = tenant.name
+			gym_profile.save(update_fields=["gym_name"])
+
+		site_settings, _ = SiteSettings.objects.get_or_create(
+			pk=1,
+			defaults={"company_name": tenant.name},
+		)
+		if not (site_settings.company_name or "").strip():
+			site_settings.company_name = tenant.name
+			site_settings.save(update_fields=["company_name"])
+
+
 def _build_frontend_url(path_suffix, *, subdomain="", domain="", prefer_public=False):
 	path = f"/{path_suffix.lstrip('/')}"
 	if not prefer_public:
@@ -608,6 +631,7 @@ class PasswordSetupAPIView(APIView):
 				)
 				invitation.tenant = tenant
 				invitation.save(update_fields=["tenant"])
+				_bootstrap_tenant_branding_defaults(tenant)
 			else:
 				domain = tenant.domains.filter(is_primary=True).values_list("domain", flat=True).first() or domain
 
