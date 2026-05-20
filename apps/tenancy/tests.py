@@ -5,6 +5,8 @@ from django_tenants.utils import schema_context
 from rest_framework import status
 from rest_framework.test import APITestCase, APIRequestFactory
 
+from apps.cms.models import SiteSettings
+from apps.dashboard.models import GymProfile
 from apps.identity.models import User
 from .models import (
 	Domain,
@@ -543,6 +545,15 @@ class TenancyApiTests(APITestCase):
 		self.assertEqual(res.status_code, status.HTTP_200_OK)
 		self.assertEqual(res.data["tenant_domain"], "logingym.testserver")
 		self.assertEqual(res.data["login_url"], "http://logingym.localhost:5173/Login")
+
+		with schema_context("public"):
+			tenant = Tenant.objects.get(schema_name="logingym")
+
+		with schema_context(tenant.schema_name):
+			profile = GymProfile.objects.get(pk=1)
+			site_settings = SiteSettings.objects.get(pk=1)
+			self.assertEqual(profile.gym_name, "Login Gym")
+			self.assertEqual(site_settings.company_name, "Login Gym")
 
 	def test_password_setup_retry_returns_success_for_already_used_token(self):
 		factory = APIRequestFactory()
