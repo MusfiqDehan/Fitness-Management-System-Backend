@@ -111,7 +111,8 @@ class MyPermissionsView(APIView):
             or getattr(user, "role", "") == "admin"
         )
         permission_map = get_user_permission_map(user)
-        tenant = getattr(user, "tenant", None)
+        # Resolve tenant from request first; older users can have null/stale user.tenant.
+        tenant = getattr(request, "tenant", None) or getattr(user, "tenant", None)
         feature_keys: list[str] = []
         if tenant is not None and connection.schema_name != get_public_schema_name():
             flags = TenantFeatureFlag.objects.filter(tenant=tenant).select_related("feature")
