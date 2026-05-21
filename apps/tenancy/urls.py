@@ -13,6 +13,7 @@ from .views import (
 	TenantAdminActivationAPIView,
 	TenantAuditLogListAPIView,
 	TenantMemberInviteAPIView,
+	ChangePasswordView,
 )
 from .rbac_views import (
 	PlatformModuleListView,
@@ -57,6 +58,9 @@ urlpatterns = [
 
 	# Tenant staff member invitations (from Permissions page)
 	path('members/invite/', TenantMemberInviteAPIView.as_view(), name='tenant-member-invite'),
+
+	# Change password — available in both tenant and public schemas
+	path('password/change/', ChangePasswordView.as_view(), name='password-change'),
 
 	# Authenticated platform permission lookup (used by frontend to filter Platform Admin sidebar)
 	path('admin/me/platform-permissions/', MyPlatformPermissionsView.as_view(), name='me-platform-permissions'),
