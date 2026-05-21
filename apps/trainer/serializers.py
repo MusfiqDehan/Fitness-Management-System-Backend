@@ -77,7 +77,8 @@ class TrainerProfilePublicSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True, allow_null=True)
     user_phone = serializers.CharField(source='user.phone', read_only=True, allow_null=True)
     organization_name = serializers.SerializerMethodField()
-    avatar = serializers.ImageField(use_url=True)
+    avatar = serializers.ImageField(use_url=True, allow_null=True, required=False)
+    cover_photo = serializers.ImageField(use_url=True, allow_null=True, required=False)
 
     def get_organization_name(self, obj):
         request = self.context.get('request')
@@ -127,6 +128,7 @@ class TrainerDocumentSerializer(serializers.ModelSerializer):
 
 class TrainerDocumentPublicSerializer(serializers.ModelSerializer):
     """Public serializer for profile-visible trainer documents."""
+    document_file = serializers.FileField(use_url=True, allow_null=True, required=False)
 
     class Meta:
         model = TrainerDocument
@@ -213,7 +215,7 @@ class ScheduleBookingSerializer(serializers.ModelSerializer):
         model = ScheduleBooking
         fields = [
             'id', 'schedule', 'member', 'member_name', 'booked_at', 'status',
-            'check_in_time', 'check_out_time', 'notes',
+            'check_in_time', 'check_out_time', 'notes', 'schedule_info',
             'is_active', 'created_at', 'updated_at',
         ]
         read_only_fields = ['booked_at', 'created_at', 'updated_at']
@@ -225,6 +227,8 @@ class ScheduleBookingSerializer(serializers.ModelSerializer):
             'start_time': obj.schedule.start_time,
             'end_time': obj.schedule.end_time,
             'location': obj.schedule.location,
+            'trainer_id': obj.schedule.trainer_id,
+            'trainer_name': obj.schedule.trainer.user.full_name or obj.schedule.trainer.user.email,
         }
 
 
@@ -241,7 +245,10 @@ class ScheduleBookingCreateSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data):
-        member = self.context['request'].user.member
+        try:
+            member = self.context['request'].user.member
+        except Exception:
+            raise serializers.ValidationError('Member profile not found for this account.')
         schedule = TrainerSchedule.objects.get(pk=validated_data['schedule_id'])
         
         # Check for existing booking
@@ -302,8 +309,23 @@ class TrainerRatingCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError('Trainer not found.')
         return value
 
+    def validate(self, attrs):
+        try:
+            member = self.context['request'].user.member
+        except Exception:
+            raise serializers.ValidationError('Member profile not found for this account.')
+        trainer_id = attrs.get('trainer_id')
+        if trainer_id and TrainerRating.objects.filter(
+            trainer_id=trainer_id, member=member, is_deleted=False
+        ).exists():
+            raise serializers.ValidationError('You have already submitted a review for this trainer.')
+        return attrs
+
     def create(self, validated_data):
-        member = self.context['request'].user.member
+        try:
+            member = self.context['request'].user.member
+        except Exception:
+            raise serializers.ValidationError('Member profile not found for this account.')
         trainer = TrainerProfile.objects.get(pk=validated_data['trainer_id'])
         rating = TrainerRating.objects.create(
             trainer=trainer,
