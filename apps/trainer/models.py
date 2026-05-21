@@ -57,13 +57,13 @@ class TrainerProfile(BaseModel):
 
     def recalc_stats(self):
         """Recalculate denormalized stats from related models."""
-        from apps.trainer.models import TrainerClass, TrainerRating
+        from apps.trainer.models import TrainerClass, TrainerRating, ScheduleBooking
         self.total_classes = TrainerClass.objects.filter(
             trainer=self, is_deleted=False
         ).count()
-        self.total_members = TrainerClass.objects.filter(
-            trainer=self, is_deleted=False
-        ).values('members').distinct().count()
+        self.total_members = ScheduleBooking.objects.filter(
+            schedule__trainer=self, is_deleted=False
+        ).values('member').distinct().count()
         ratings = TrainerRating.objects.filter(trainer=self, is_deleted=False)
         if ratings.exists():
             self.average_rating = round(
