@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Member Registration Invitation</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f4f4ed;font-family:Arial,Helvetica,sans-serif;color:#111111;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+      Complete your member registration at {{ company_name }} on Fitssort.
+    </div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4ed;margin:0;padding:32px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #e7e0c7;box-shadow:0 24px 60px rgba(17,17,17,0.12);">
+            <tr>
+              <td style="background:#050505;padding:28px 32px 34px 32px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="color:#ffffff;font-size:24px;font-weight:800;letter-spacing:-0.2px;">
+                      Fitssort
+                    </td>
+                    <td align="right" style="color:#ffc300;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1.6px;">
+                      Member invite
+                    </td>
+                  </tr>
+                </table>
+                <div style="margin-top:30px;width:56px;height:4px;background:#ffc300;border-radius:999px;"></div>
+                <h1 style="margin:18px 0 0 0;color:#ffffff;font-size:34px;line-height:1.15;font-weight:800;letter-spacing:-0.6px;">
+                  Complete your registration at {{ company_name }}
+                </h1>
+                <p style="margin:14px 0 0 0;color:rgba(255,255,255,0.78);font-size:16px;line-height:1.6;">
+                  Your membership has been created. Verify your invitation and set a password to access your account.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:34px 32px 30px 32px;">
+                <p style="margin:0;color:#333333;font-size:16px;line-height:1.7;">Hello{% if member_name %} {{ member_name }}{% endif %},</p>
+                <p style="margin:12px 0 0 0;color:#333333;font-size:16px;line-height:1.7;">
+                  {% if invited_by_name %}<strong style="color:#111111;">{{ invited_by_name }}</strong> has added you as a member of{% else %}You have been added as a member of{% endif %}
+                  <strong style="color:#111111;">{{ company_name }}</strong>.
+                  Click the button below to verify your invitation and set your password so you can log in and manage your membership.
+                </p>
+
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:26px 0;background:#fff9d8;border:1px solid #f1d875;border-radius:18px;">
+                  <tr>
+                    <td width="50%" style="padding:18px 20px;border-right:1px solid #f1d875;">
+                      <p style="margin:0;color:#6f5600;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;">Gym</p>
+                      <p style="margin:8px 0 0 0;color:#111111;font-size:18px;line-height:1.35;font-weight:800;">{{ company_name }}</p>
+                    </td>
+                    <td width="50%" style="padding:18px 20px;">
+                      <p style="margin:0;color:#6f5600;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;">Role</p>
+                      <p style="margin:8px 0 0 0;color:#111111;font-size:18px;line-height:1.35;font-weight:800;">Member</p>
+                    </td>
+                  </tr>
+                </table>
+
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+                  <tr>
+                    <td align="center" bgcolor="#ffc300" style="border-radius:999px;box-shadow:0 12px 28px rgba(255,195,0,0.32);">
+                      <a href="{{ invitation_url }}" style="display:inline-block;padding:15px 28px;color:#111111;font-size:16px;line-height:20px;font-weight:800;text-decoration:none;border-radius:999px;">Verify &amp; Set Password</a>
+                    </td>
+                  </tr>
+                </table>
+
+                <p style="margin:26px 0 0 0;color:#555555;font-size:14px;line-height:1.7;text-align:center;">
+                  This invitation expires at <strong style="color:#111111;">{{ expires_at }}</strong>.
+                </p>
+                <p style="margin:18px 0 0 0;color:#777777;font-size:12px;line-height:1.6;word-break:break-all;">
+                  If the button does not work, copy and paste this link into your browser:<br />
+                  <a href="{{ invitation_url }}" style="color:#111111;text-decoration:underline;">{{ invitation_url }}</a>
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#111111;padding:20px 32px;color:rgba(255,255,255,0.64);font-size:12px;line-height:1.6;text-align:center;">
+                If you did not expect this invitation, you can safely ignore this email.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
