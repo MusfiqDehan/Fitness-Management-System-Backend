@@ -1113,3 +1113,45 @@ class TenantMemberInviteAPIView(APIView):
 			{"message": f"Invitation sent to {email}.", "email": email, "role": role_slug},
 			status=status.HTTP_201_CREATED,
 		)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Change Password — available in both tenant and public schemas
+# Any authenticated user may change their own password.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ChangePasswordView(APIView):
+	"""Allow any authenticated user (tenant or platform admin) to change their password.
+
+	POST /api/v1/tenancy/password/change/
+	Body: { current_password, new_password }
+	"""
+
+	permission_classes = [IsAuthenticated]
+
+	def post(self, request):
+		current_password = (request.data.get("current_password") or "").strip()
+		new_password = (request.data.get("new_password") or "").strip()
+
+		if not current_password or not new_password:
+			return Response(
+				{"detail": "current_password and new_password are required."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		if not request.user.check_password(current_password):
+			return Response(
+				{"detail": "Current password is incorrect."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		if len(new_password) < 8:
+			return Response(
+				{"detail": "New password must be at least 8 characters."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		request.user.set_password(new_password)
+		request.user.password_set_at = timezone.now()
+		request.user.save(update_fields=["password", "password_set_at"])
+		return Response({"detail": "Password changed successfully."})
