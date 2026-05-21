@@ -12,7 +12,8 @@ from rest_framework.permissions import AllowAny
 from django.db.models import Q
 from django.db import transaction
 from django.utils import timezone
-from django.core.mail import send_mail
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
 from django.conf import settings
 from datetime import timedelta
 import secrets
@@ -64,21 +65,35 @@ def _send_member_invitation_email(member: Member, request, invited_by=None, forc
     ])
 
     invite_url = _build_member_invite_url(request, member.invitation_token)
-    tenant_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'our gym'
-
-    send_mail(
-        subject=f"Complete your member registration at {tenant_name}",
-        message=(
-            f"Hi {member.full_name or 'there'},\n\n"
-            f"You have been invited to complete your member registration. "
-            f"Use the link below to verify your invitation and set your password:\n\n"
-            f"{invite_url}\n\n"
-            f"This link expires in 7 days."
-        ),
-        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
-        recipient_list=[member.email],
-        fail_silently=False,
+    company_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'our gym'
+    invited_by_name = (
+        getattr(invited_by, 'full_name', None) or getattr(invited_by, 'email', None)
+        if invited_by is not None else None
     )
+
+    context = {
+        'member_name': member.full_name or '',
+        'invited_by_name': invited_by_name,
+        'company_name': company_name,
+        'invitation_url': invite_url,
+        'expires_at': member.invitation_expires_at,
+    }
+    html_body = render_to_string('membership/emails/member_invitation_email.html', context)
+    fallback_text = (
+        f"Hi {member.full_name or 'there'},\n\n"
+        f"You have been invited to complete your member registration at {company_name}. "
+        f"Use the link below to verify your invitation and set your password:\n\n"
+        f"{invite_url}\n\n"
+        f"This link expires on {member.invitation_expires_at}."
+    )
+    email = EmailMultiAlternatives(
+        subject=f"Complete your member registration at {company_name}",
+        body=fallback_text,
+        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
+        to=[member.email],
+    )
+    email.attach_alternative(html_body, 'text/html')
+    email.send(fail_silently=False)
     return invite_url
 
 
