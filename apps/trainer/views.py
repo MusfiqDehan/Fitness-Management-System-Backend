@@ -165,7 +165,7 @@ class TopTrainersView(APIView):
             is_deleted=False,
             user__is_active=True,
         ).select_related('user').order_by('-average_rating', '-total_ratings')[:10]
-        serializer = TrainerProfilePublicSerializer(trainers, many=True)
+        serializer = TrainerProfilePublicSerializer(trainers, many=True, context={'request': request})
         return Response(serializer.data)
 
 
@@ -184,20 +184,35 @@ class TrainerPublicProfileView(APIView):
         except TrainerProfile.DoesNotExist:
             return Response({'error': 'Trainer not found'}, status=status.HTTP_404_NOT_FOUND)
         
-        serializer = TrainerProfilePublicSerializer(profile)
+        ctx = {'request': request}
+        serializer = TrainerProfilePublicSerializer(profile, context=ctx)
         data = serializer.data
+
+        # Keep public rating summary in sync even if denormalized fields are stale.
+        ratings_qs = TrainerRating.objects.filter(trainer=profile, is_deleted=False)
+        ratings_avg = ratings_qs.aggregate(avg=Avg('rating'))['avg'] or 0
+        data['average_rating'] = round(float(ratings_avg), 1)
+        data['total_ratings'] = ratings_qs.count()
+
+        # Keep class/member counters in sync even if denormalized fields are stale.
+        data['total_classes'] = TrainerClass.objects.filter(
+            trainer=profile,
+            is_deleted=False,
+        ).count()
+        data['total_members'] = ScheduleBooking.objects.filter(
+            schedule__trainer=profile,
+            is_deleted=False,
+        ).values('member').distinct().count()
         
         # Include classes
         classes = TrainerClass.objects.filter(
             trainer=profile, is_published=True, is_deleted=False
         ).order_by('name')
-        data['classes'] = TrainerClassPublicSerializer(classes, many=True).data
+        data['classes'] = TrainerClassPublicSerializer(classes, many=True, context=ctx).data
         
         # Include ratings
-        ratings = TrainerRating.objects.filter(
-            trainer=profile, is_deleted=False
-        ).select_related('member').order_by('-created_at')[:20]
-        data['recent_ratings'] = TrainerRatingSerializer(ratings, many=True).data
+        ratings = ratings_qs.select_related('member').order_by('-created_at')[:20]
+        data['recent_ratings'] = TrainerRatingSerializer(ratings, many=True, context=ctx).data
 
         # Include published public documents (certifications, awards, body images, etc.)
         documents = TrainerDocument.objects.filter(
@@ -205,7 +220,7 @@ class TrainerPublicProfileView(APIView):
             is_published=True,
             is_deleted=False,
         ).order_by('-issue_date', '-created_at')
-        data['documents'] = TrainerDocumentPublicSerializer(documents, many=True).data
+        data['documents'] = TrainerDocumentPublicSerializer(documents, many=True, context=ctx).data
         
         return Response(data)
 
@@ -285,8 +300,38 @@ class TrainerClassView(TrainerModelActions, ModelCRUDView):
             serializer = self.get_serializer(data=data)
             serializer.is_valid(raise_exception=True)
             instance = serializer.save()
+            if getattr(instance, 'trainer', None) and hasattr(instance.trainer, 'recalc_stats'):
+                instance.trainer.recalc_stats()
             return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
-        return super()._create(request)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        if getattr(instance, 'trainer', None) and hasattr(instance.trainer, 'recalc_stats'):
+            instance.trainer.recalc_stats()
+        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+
+    def _update(self, pk, request, partial):
+        instance = self.get_object()
+        old_trainer = getattr(instance, 'trainer', None)
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        updated = serializer.save()
+
+        # Recalculate old/new trainer stats in case trainer ownership changed.
+        if old_trainer and hasattr(old_trainer, 'recalc_stats'):
+            old_trainer.recalc_stats()
+        if getattr(updated, 'trainer', None) and hasattr(updated.trainer, 'recalc_stats'):
+            updated.trainer.recalc_stats()
+
+        return Response(self.get_serializer(updated).data)
+
+    def _destroy(self, pk):
+        instance = self.get_object()
+        trainer = getattr(instance, 'trainer', None)
+        instance.delete()
+        if trainer and hasattr(trainer, 'recalc_stats'):
+            trainer.recalc_stats()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def _list(self, request):
         queryset = self.filter_queryset(self.get_queryset())
@@ -433,6 +478,9 @@ class ScheduleBookingView(APIView):
         serializer = ScheduleBookingCreateSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
+        trainer = getattr(getattr(booking, 'schedule', None), 'trainer', None)
+        if trainer and hasattr(trainer, 'recalc_stats'):
+            trainer.recalc_stats()
         return Response(
             ScheduleBookingSerializer(booking).data,
             status=status.HTTP_201_CREATED
@@ -478,6 +526,9 @@ class BookingCheckInView(APIView):
         booking.check_in_time = timezone.now()
         booking.status = 'attended'
         booking.save(update_fields=['check_in_time', 'status'])
+        trainer = getattr(getattr(booking, 'schedule', None), 'trainer', None)
+        if trainer and hasattr(trainer, 'recalc_stats'):
+            trainer.recalc_stats()
         return Response(ScheduleBookingSerializer(booking).data)
 
 
@@ -498,6 +549,9 @@ class BookingCancelView(APIView):
         
         booking.status = 'cancelled'
         booking.save(update_fields=['status'])
+        trainer = getattr(getattr(booking, 'schedule', None), 'trainer', None)
+        if trainer and hasattr(trainer, 'recalc_stats'):
+            trainer.recalc_stats()
         return Response({'message': 'Booking cancelled'})
 
 
@@ -524,17 +578,33 @@ class TrainerRatingView(TrainerModelActions, ModelCRUDView):
     def _create(self, request):
         if _is_trainer_user(request.user):
             raise PermissionDenied('Trainers cannot create ratings.')
-        return super()._create(request)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        if getattr(instance, 'trainer', None) and hasattr(instance.trainer, 'recalc_stats'):
+            instance.trainer.recalc_stats()
+        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
 
     def _update(self, pk, request, partial):
         if _is_trainer_user(request.user):
             raise PermissionDenied('Trainers cannot modify ratings.')
-        return super()._update(pk, request, partial)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        updated = serializer.save()
+        if getattr(updated, 'trainer', None) and hasattr(updated.trainer, 'recalc_stats'):
+            updated.trainer.recalc_stats()
+        return Response(self.get_serializer(updated).data)
 
     def _destroy(self, pk):
         if _is_trainer_user(self.request.user):
             raise PermissionDenied('Trainers cannot delete ratings.')
-        return super()._destroy(pk)
+        instance = self.get_object()
+        trainer = getattr(instance, 'trainer', None)
+        instance.delete()
+        if trainer and hasattr(trainer, 'recalc_stats'):
+            trainer.recalc_stats()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def _list(self, request):
         queryset = self.filter_queryset(self.get_queryset())
@@ -598,34 +668,48 @@ class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
         serializer = TrainerInvitationCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         invitation = serializer.save()
-        
+
         # Build invitation URL
         invite_url = f"{request.scheme}://{request.get_host()}/trainer/register?token={invitation.token}"
-        
-        # Send email
+
+        # Resolve gym name from tenant context
+        company_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'Your Gym'
+        invited_by_name = getattr(request.user, 'full_name', None) or getattr(request.user, 'email', '')
+
+        # Send HTML email using the trainer invitation template
         try:
-            from django.core.mail import send_mail
             from django.conf import settings
-            send_mail(
-                subject="You're invited to join as a Trainer",
-                message=(
-                    f"Hi,\n\n"
-                    f"You've been invited to join our platform as a trainer. "
-                    f"Click the link below to complete your registration:\n\n"
-                    f"{invite_url}\n\n"
-                    f"This link expires in 7 days."
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[invitation.invited_email],
-                fail_silently=False,
+            from django.core.mail import EmailMultiAlternatives
+            from django.template.loader import render_to_string
+
+            context = {
+                'company_name': company_name,
+                'invited_by_name': invited_by_name,
+                'invitation_url': invite_url,
+                'expires_at': invitation.invitation_expires_at,
+            }
+            html_body = render_to_string('trainer/emails/trainer_invitation_email.html', context)
+            fallback_text = (
+                f"Hi,\n\n"
+                f"{invited_by_name} has invited you to join {company_name} as a Trainer on Fitssort.\n\n"
+                f"Complete your registration here:\n{invite_url}\n\n"
+                f"This link expires on {invitation.invitation_expires_at}."
             )
+            email = EmailMultiAlternatives(
+                subject=f"You're invited to join {company_name} as a Trainer",
+                body=fallback_text,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to=[invitation.invited_email],
+            )
+            email.attach_alternative(html_body, 'text/html')
+            email.send(fail_silently=False)
         except Exception as e:
             return Response({
                 'error': f'Invitation created but email failed: {str(e)}',
                 'invitation_id': invitation.id,
                 'invite_url': invite_url,
             }, status=status.HTTP_201_CREATED)
-        
+
         return Response({
             'message': 'Invitation sent successfully',
             'invitation_id': invitation.id,
