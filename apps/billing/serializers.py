@@ -14,6 +14,7 @@ from apps.tenancy.models import (
     Feature,
     PlatformPackage,
     PlatformPackageFeature,
+    PlatformPricingConfig,
 )
 from apps.membership.models import Member, Payment
 
@@ -70,6 +71,17 @@ class PackageSerializer(serializers.ModelSerializer):
             "is_public",
             "sort_order",
             "highlight",
+            # pricing display customisation
+            "badge_label",
+            "cta_label",
+            "setup_fee",
+            "original_setup_fee",
+            "original_price_monthly",
+            "original_price_yearly",
+            "included_items",
+            "yearly_discount_percent",
+            "price_custom_label",
+            "price_period_label",
             "features",
             "feature_ids",
             "created_at",
@@ -110,6 +122,15 @@ class PackageSerializer(serializers.ModelSerializer):
         if feature_ids is not None:
             self._sync_features(package, feature_ids)
         return package
+
+
+class PlatformPricingConfigSerializer(serializers.ModelSerializer):
+    """GET / PATCH /billing/pricing-config/ — platform-wide pricing defaults."""
+
+    class Meta:
+        model = PlatformPricingConfig
+        fields = ["id", "default_yearly_discount_percent", "updated_at"]
+        read_only_fields = ["id", "updated_at"]
 
 
 class PackageFeatureBulkSerializer(serializers.Serializer):
