@@ -19,6 +19,7 @@ from .models import (
     Invitation,
     PlatformPackage,
     PlatformPackageFeature,
+    PlatformPricingConfig,
     PlatformRole,
     PlatformRolePermission,
     PlatformUserRole,
@@ -35,6 +36,7 @@ from .rbac_serializers import (
     FeatureSerializer,
     PlatformPackageFeatureBulkSerializer,
     PlatformPackageSerializer,
+    PlatformPricingConfigSerializer,
     PlatformRolePermissionsBulkSerializer,
     PlatformRoleSerializer,
     PlatformUserRoleSerializer,
@@ -235,6 +237,18 @@ class PublicPlatformPackageListView(generics.ListAPIView):
     queryset = PlatformPackage.objects.filter(is_active=True, is_public=True)
     serializer_class = PublicPlatformPackageSerializer
     permission_classes = [AllowAny]
+
+
+class PublicPlatformPricingConfigView(APIView):
+    """Public endpoint: returns the global yearly discount for the pricing page billing toggle."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        config = PlatformPricingConfig.get_instance()
+        return Response({
+            "default_yearly_discount_percent": config.default_yearly_discount_percent,
+        })
 
 
 class PlatformPackageListCreateView(generics.ListCreateAPIView):
