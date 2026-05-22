@@ -28,6 +28,7 @@ from apps.tenancy.models import (
     Feature,
     PlatformPackage,
     PlatformPackageFeature,
+    PlatformPricingConfig,
 )
 from apps.tenancy.permissions import IsPlatformFeaturePermission
 from utils.base_view import ModelCRUDView
@@ -36,6 +37,7 @@ from .serializers import (
     FeatureSerializer,
     PackageFeatureBulkSerializer,
     PackageSerializer,
+    PlatformPricingConfigSerializer,
     PaymentSerializer,
     PaymentMemberOptionSerializer,
 )
@@ -186,6 +188,25 @@ class FeatureListAPIView(APIView):
     def get(self, request):
         features = Feature.objects.all().order_by("sort_order", "key")
         return Response(FeatureSerializer(features, many=True).data)
+
+
+class PlatformPricingConfigAPIView(APIView):
+    """GET / PATCH /api/v1/billing/pricing-config/ — platform-wide pricing defaults."""
+
+    def get_permissions(self):
+        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+            return [perm() for perm in PACKAGE_VIEW_PERMS]
+        return [perm() for perm in PACKAGE_EDIT_PERMS]
+
+    def get(self, request):
+        return Response(PlatformPricingConfigSerializer(PlatformPricingConfig.get_instance()).data)
+
+    def patch(self, request):
+        instance = PlatformPricingConfig.get_instance()
+        serializer = PlatformPricingConfigSerializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class PackageListCreateAPIView(APIView):
