@@ -388,6 +388,52 @@ class PlatformPackage(models.Model):
     is_public = models.BooleanField(default=True, help_text="Show on public pricing page.")
     sort_order = models.IntegerField(default=0)
     highlight = models.BooleanField(default=False, help_text="Visually highlighted plan (e.g. 'most popular').")
+
+    # ── Pricing display customisation ──────────────────────────
+    badge_label = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text="Top-right card badge text (e.g. '14 Days Free Trial', 'Most Popular').",
+    )
+    cta_label = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text="Call-to-action button label shown on the pricing card.",
+    )
+    setup_fee = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text="Setup fee display text (e.g. 'Tk. 4990' or 'Custom').",
+    )
+    original_setup_fee = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text="Strikethrough setup fee display text (e.g. 'Tk. 8990').",
+    )
+    original_price_monthly = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Strikethrough monthly price shown alongside the current price.",
+    )
+    original_price_yearly = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Strikethrough yearly price shown when billing toggle is set to annually.",
+    )
+    included_items = models.JSONField(
+        default=list, blank=True,
+        help_text="Manually typed 'What's included' list. Overrides auto-generated feature names when non-empty.",
+    )
+    yearly_discount_percent = models.IntegerField(
+        null=True, blank=True,
+        help_text=(
+            "Yearly discount percentage (0–100) shown as 'You Save X%' next to the billing toggle. "
+            "Leave blank to inherit the platform-wide default from PlatformPricingConfig."
+        ),
+    )
+    price_custom_label = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text="If set, replaces the numeric price display (e.g. 'Custom' for Enterprise plans).",
+    )
+    price_period_label = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text="If set, replaces the computed period string (e.g. '(10k – 30k+)/Month').",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -410,6 +456,35 @@ class PlatformPackageFeature(models.Model):
 
     def __str__(self):
         return f"{self.package.slug}:{self.feature.key}={'on' if self.is_enabled else 'off'}"
+
+
+class PlatformPricingConfig(models.Model):
+    """Singleton that stores platform-wide pricing defaults.
+
+    Always use ``PlatformPricingConfig.get_instance()`` — never create
+    more than one row (enforced via pk=1 get_or_create).
+    """
+
+    default_yearly_discount_percent = models.IntegerField(
+        default=0,
+        help_text=(
+            "Global yearly discount % shown as 'You Save X%' on the pricing page. "
+            "Individual packages can override this via their own yearly_discount_percent field."
+        ),
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Pricing Config"
+        verbose_name_plural = "Platform Pricing Config"
+
+    def __str__(self):
+        return f"PlatformPricingConfig (default discount: {self.default_yearly_discount_percent}%)"
+
+    @classmethod
+    def get_instance(cls):
+        obj, _ = cls.objects.get_or_create(pk=1, defaults={"default_yearly_discount_percent": 0})
+        return obj
 
 
 class TenantFeatureFlag(models.Model):
