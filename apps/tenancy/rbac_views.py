@@ -668,4 +668,10 @@ class FeatureRegistryView(APIView):
 
     def get(self, request):
         from .feature_registry import build_api_payload
-        return Response(build_api_payload())
+        from django_tenants.utils import get_public_schema_name
+        badge_overrides: dict = {}
+        if request.tenant.schema_name != get_public_schema_name():
+            from apps.membership.models import Member
+            member_count = Member.objects.count()
+            badge_overrides[("members", "/members/all")] = str(member_count)
+        return Response(build_api_payload(badge_overrides=badge_overrides))
