@@ -25,6 +25,7 @@ from .rbac_views import (
 	FeatureListCreateView,
 	FeatureDetailView,
 	PublicPlatformPackageListView,
+	PublicPlatformPricingConfigView,
 	PlatformPackageListCreateView,
 	PlatformPackageDetailView,
 	PlatformPackageFeaturesView,
@@ -52,6 +53,7 @@ urlpatterns = [
 
 	# Public packages (landing page pricing)
 	path('packages/', PublicPlatformPackageListView.as_view(), name='public-packages'),
+	path('packages/pricing-config/', PublicPlatformPricingConfigView.as_view(), name='public-pricing-config'),
 
 	# Authenticated tenant feature lookup (used by frontend to know which features to show)
 	path('me/features/', CurrentTenantFeatureListView.as_view(), name='current-tenant-features'),
