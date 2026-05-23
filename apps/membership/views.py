@@ -504,6 +504,29 @@ class CompleteMemberRegistrationAPIView(APIView):
                 'invited_by', 'is_active', 'full_name',
             ])
 
+        try:
+            from apps.reminder.utils import create_notification
+            # Broadcast to admins: a new member joined
+            create_notification(
+                notification_type='member_onboarded',
+                title=f'New member joined: {member.full_name or member.email}',
+                actor_name=member.full_name or '',
+                actor_email=member.email or '',
+                target_type='member',
+                target_id=str(member.id),
+            )
+            # Personal to the new member: welcome message
+            create_notification(
+                notification_type='welcome_member',
+                title=f'Welcome, {member.full_name or member.email}!',
+                message='Your gym membership is now active. Start exploring your dashboard.',
+                recipient=user,
+                target_type='member',
+                target_id=str(member.id),
+            )
+        except Exception:
+            pass  # Notifications are best-effort
+
         return Response({'message': 'Registration completed successfully', 'member_id': member.id})
 
 
