@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.identity.models import User
-from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog
+from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage
 from .permissions import IsPlatformFeaturePermission
 from .serializers import (
 	TenantSelfRegistrationSerializer,
@@ -175,6 +175,99 @@ def _assert_token_request_scope(request, invitation):
 	return expected_domain
 
 
+def _get_package_trial_days(plan_slug: str) -> int:
+	"""Return trial_days from PlatformPackage, defaulting to 14 if not found."""
+	if not plan_slug or plan_slug == "free":
+		return 14
+	public_schema = get_public_schema_name()
+	with schema_context(public_schema):
+		pkg = PlatformPackage.objects.filter(slug=plan_slug, is_active=True).first()
+		if pkg:
+			return max(0, pkg.trial_days)
+	return 14
+
+
+def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dict:
+	"""Initiate a SaaS subscription payment for a newly created tenant.
+
+	Returns a dict with `payment_url` (str or None) and `trial_days` (int).
+	Only initiates payment when:
+	  - The package has price_monthly > 0
+	  - The package has trial_days == 0 (no free trial)
+	  - The platform has a default gateway with credentials configured
+
+	When trial_days > 0, no payment is initiated — the tenant is billed
+	after the trial period ends (via a separate renewal flow).
+	"""
+	public_schema = get_public_schema_name()
+	with schema_context(public_schema):
+		pkg = PlatformPackage.objects.filter(slug=plan_slug, is_active=True).first()
+		if pkg is None:
+			return {"payment_url": None, "trial_days": 14, "is_trial": True}
+
+		trial_days = max(0, pkg.trial_days)
+
+		if trial_days > 0:
+			# Free trial — no immediate payment required
+			return {"payment_url": None, "trial_days": trial_days, "is_trial": True}
+
+		from decimal import Decimal
+		if pkg.price_monthly <= Decimal("0"):
+			# Free plan — no charge
+			return {"payment_url": None, "trial_days": 0, "is_trial": False}
+
+		# Paid plan with no trial — initiate payment now
+		gateway = PaymentGateway.objects.filter(
+			is_default_for_subscriptions=True,
+		).first()
+		if gateway is None or not (gateway.platform_credentials or {}):
+			# No gateway configured yet — let them in anyway (admin can collect payment manually)
+			return {"payment_url": None, "trial_days": 0, "is_trial": False}
+
+		from apps.billing.services import get_gateway
+		from apps.tenancy.models import TenantSubscriptionInvoice
+		import uuid as _uuid
+
+		tran_id = f"SUB-{tenant.schema_name.upper()}-{_uuid.uuid4().hex[:12].upper()}"
+		backend_base = getattr(settings, "BACKEND_BASE_URL", request.build_absolute_uri("/").rstrip("/"))
+		invoice = TenantSubscriptionInvoice.objects.create(
+			tenant=tenant,
+			package_slug=pkg.slug,
+			package_name=pkg.name,
+			amount=pkg.price_monthly,
+			currency="BDT",
+			tran_id=tran_id,
+			gateway_slug=gateway.slug,
+			status=TenantSubscriptionInvoice.STATUS_PENDING,
+			period_start=timezone.now(),
+			period_end=timezone.now() + timedelta(days=30),
+			is_trial=False,
+		)
+
+		try:
+			svc = get_gateway(
+				gateway.slug,
+				credentials=gateway.platform_credentials,
+				is_sandbox=gateway.is_sandbox,
+				success_url=f"{backend_base}/api/v1/billing/subscription/success/",
+				fail_url=f"{backend_base}/api/v1/billing/subscription/fail/",
+				cancel_url=f"{backend_base}/api/v1/billing/subscription/cancel/",
+				ipn_url=f"{backend_base}/api/v1/billing/subscription/ipn/",
+			)
+			result = svc.initiate(invoice)
+			return {
+				"payment_url": result.get("gateway_url"),
+				"tran_id": tran_id,
+				"trial_days": 0,
+				"is_trial": False,
+			}
+		except Exception:
+			# If payment initiation fails, don't block tenant creation; admin can follow up
+			invoice.status = TenantSubscriptionInvoice.STATUS_FAILED
+			invoice.save(update_fields=["status", "updated_at"])
+			return {"payment_url": None, "trial_days": 0, "is_trial": False}
+
+
 def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_domain="", primary_domain="", max_users=10,
 								max_branches=1, plan="free"):
 	public_schema = get_public_schema_name()
@@ -207,7 +300,7 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 			plan=(plan or "free"),
 			status="trial",
 			is_trial=True,
-			trial_ends_at=timezone.now() + timedelta(days=14),
+			trial_ends_at=timezone.now() + timedelta(days=_get_package_trial_days(plan)),
 			max_users=max_users,
 			max_branches=max_branches,
 			is_enabled=True,
@@ -292,16 +385,26 @@ def _tenant_entry_blocked_response():
 	return Response({"detail": "Tenant workspace is suspended."}, status=status.HTTP_403_FORBIDDEN)
 
 
-def _password_setup_success_response(invitation, *, domain, message="Password configured successfully."):
+def _password_setup_success_response(invitation, *, domain, message="Password configured successfully.", payment_info=None):
 	tenant = invitation.tenant
-	return Response(
-		{
-			"message": message,
-			"tenant_schema": tenant.schema_name if tenant else "",
-			"tenant_domain": domain,
-			"login_url": _build_login_url(subdomain=invitation.subdomain, domain=domain),
-		}
-	)
+	data = {
+		"message": message,
+		"tenant_schema": tenant.schema_name if tenant else "",
+		"tenant_domain": domain,
+		"login_url": _build_login_url(subdomain=invitation.subdomain, domain=domain),
+	}
+	if payment_info:
+		data.update({
+			"payment_required": bool(payment_info.get("payment_url")),
+			"payment_url": payment_info.get("payment_url"),
+			"tran_id": payment_info.get("tran_id"),
+			"is_trial": payment_info.get("is_trial", True),
+			"trial_days": payment_info.get("trial_days", 0),
+			"trial_ends_at": (
+				tenant.trial_ends_at.isoformat() if tenant and tenant.trial_ends_at else None
+			),
+		})
+	return Response(data)
 
 
 def _count_tenant_admin_users():
@@ -619,6 +722,7 @@ class PasswordSetupAPIView(APIView):
 					return Response({"detail": "Tenant context not found."}, status=status.HTTP_400_BAD_REQUEST)
 
 				metadata = invitation.metadata or {}
+				plan_slug = metadata.get("plan", "trial") or "trial"
 				tenant, domain = _create_tenant_with_domains(
 					company_name=invitation.company_name,
 					subdomain=invitation.subdomain,
@@ -627,12 +731,13 @@ class PasswordSetupAPIView(APIView):
 					primary_domain=metadata.get("domain", ""),
 					max_users=int(metadata.get("max_users", 10) or 10),
 					max_branches=int(metadata.get("max_branches", 1) or 1),
-					plan=metadata.get("plan", "trial") or "trial",
+					plan=plan_slug,
 				)
 				invitation.tenant = tenant
 				invitation.save(update_fields=["tenant"])
 				_bootstrap_tenant_branding_defaults(tenant)
 			else:
+				plan_slug = None  # existing tenant — no subscription payment needed
 				domain = tenant.domains.filter(is_primary=True).values_list("domain", flat=True).first() or domain
 
 			metadata = invitation.metadata or {}
@@ -703,7 +808,13 @@ class PasswordSetupAPIView(APIView):
 			invitation.used_at = setup_time
 			invitation.save(update_fields=["used_at"])
 
-		return _password_setup_success_response(invitation, domain=domain)
+		# For new tenant self-registrations (token_type=verification), optionally
+		# initiate a subscription payment if the selected package requires it.
+		payment_info = None
+		if invitation.token_type == Invitation.TOKEN_TYPE_VERIFICATION and plan_slug:
+			payment_info = _maybe_initiate_subscription_payment(tenant, plan_slug, request)
+
+		return _password_setup_success_response(invitation, domain=domain, payment_info=payment_info)
 
 
 class TenantAuthenticationAPIView(APIView):
