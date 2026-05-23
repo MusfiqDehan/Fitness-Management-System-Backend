@@ -3,20 +3,28 @@
 - Platform package endpoints (`/billing/packages`, `/billing/features`) are
     intended for public-schema platform admin usage and are gated by
     `platform.packages` permissions.
+- Platform gateway endpoints (`/billing/gateways`) are platform admin only,
+    gated by `platform.billing` permissions.
 - Tenant payment endpoints (`/billing/payments/*`) run on tenant schemas and
     are gated by tenant feature permission key `payments`.
+- Tenant gateway config endpoints (`/billing/payments/gateways/*`) run on
+    tenant schemas and are gated by `payments.gateways`.
 """
+import uuid
 from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count, Sum, Q
 from django.http import HttpResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
+from django_tenants.utils import schema_context
 from rest_framework import status
 from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.permissions import AllowAny
 from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -26,6 +34,7 @@ from apps.access.permissions import HasFeatureMethodPermission
 from apps.membership.models import Member, Payment
 from apps.tenancy.models import (
     Feature,
+    PaymentGateway,
     PlatformPackage,
     PlatformPackageFeature,
     PlatformPricingConfig,
@@ -33,14 +42,21 @@ from apps.tenancy.models import (
 from apps.tenancy.permissions import IsPlatformFeaturePermission
 from utils.base_view import ModelCRUDView
 
+from .models import TenantPaymentGateway, PaymentTransaction
 from .serializers import (
+    AvailableGatewaySerializer,
     FeatureSerializer,
     PackageFeatureBulkSerializer,
     PackageSerializer,
-    PlatformPricingConfigSerializer,
-    PaymentSerializer,
+    PaymentGatewaySerializer,
+    PaymentInitiateSerializer,
     PaymentMemberOptionSerializer,
+    PaymentSerializer,
+    PaymentTransactionSerializer,
+    PlatformPricingConfigSerializer,
+    TenantPaymentGatewaySerializer,
 )
+from .services import get_gateway
 
 
 def _render_payment_invoice_pdf(payment: Payment, tenant_name: str, generated_by: str) -> bytes:
@@ -445,4 +461,874 @@ class PaymentInvoicePdfAPIView(APIView):
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
         response['Content-Disposition'] = f'{disposition}; filename="{filename}"'
         return response
+
+
+def _render_subscription_invoice_pdf(invoice, generated_by: str) -> bytes:
+    """Generate a branded PDF for a TenantSubscriptionInvoice (SaaS billing)."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+
+    from apps.tenancy.models import TenantSubscriptionInvoice
+
+    width, height = A4
+    left = 20 * mm
+    right = width - (20 * mm)
+    top = height - (20 * mm)
+
+    invoice_ref = f"SUB-{invoice.id:06d}"
+    tenant_name = invoice.tenant.name if invoice.tenant else "—"
+    package_name = invoice.package_name or invoice.package_slug or "—"
+    amount_str = f"{invoice.currency} {invoice.amount:,.2f}"
+    created_at = timezone.localtime(invoice.created_at).strftime("%d %b %Y, %I:%M %p")
+
+    def fmt_dt(dt):
+        if dt is None:
+            return "—"
+        return timezone.localtime(dt).strftime("%d %b %Y")
+
+    period = f"{fmt_dt(invoice.period_start)} – {fmt_dt(invoice.period_end)}"
+
+    status_label = {
+        TenantSubscriptionInvoice.STATUS_SUCCESS: "Success",
+        TenantSubscriptionInvoice.STATUS_PENDING: "Pending",
+        TenantSubscriptionInvoice.STATUS_FAILED: "Failed",
+        TenantSubscriptionInvoice.STATUS_CANCELLED: "Cancelled",
+        TenantSubscriptionInvoice.STATUS_TRIAL: "Trial",
+    }.get(invoice.status, invoice.status.title())
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+
+    brand_primary = colors.HexColor("#0F172A")
+    brand_accent = colors.HexColor("#0EA5E9")
+    brand_soft = colors.HexColor("#F1F5F9")
+    text_main = colors.HexColor("#111827")
+    text_muted = colors.HexColor("#64748B")
+
+    # Header bar
+    pdf.setFillColor(brand_primary)
+    pdf.rect(0, height - (42 * mm), width, 42 * mm, fill=1, stroke=0)
+    pdf.setFillColor(colors.white)
+    pdf.setFont("Helvetica-Bold", 21)
+    pdf.drawString(left, top - (4 * mm), "Fitssort")
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(left, top - (11 * mm), "Subscription Invoice")
+
+    # Badge
+    pdf.setFillColor(brand_accent)
+    pdf.roundRect(right - (62 * mm), top - (16 * mm), 62 * mm, 11 * mm, 3 * mm, fill=1, stroke=0)
+    pdf.setFillColor(colors.white)
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawCentredString(right - (31 * mm), top - (9.5 * mm), "SUBSCRIPTION PAYMENT")
+
+    # Invoice info block
+    y = top - (34 * mm)
+    pdf.setFillColor(text_main)
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(left, y, "Invoice Information")
+
+    y -= 8 * mm
+    pdf.setFillColor(brand_soft)
+    pdf.roundRect(left, y - (30 * mm), right - left, 30 * mm, 2 * mm, fill=1, stroke=0)
+
+    pdf.setFillColor(text_muted)
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(left + (4 * mm), y - (5 * mm), "Invoice Ref")
+    pdf.drawString(left + (72 * mm), y - (5 * mm), "Date")
+    pdf.drawString(left + (125 * mm), y - (5 * mm), "Generated By")
+
+    pdf.setFillColor(text_main)
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawString(left + (4 * mm), y - (11 * mm), invoice_ref)
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(left + (72 * mm), y - (11 * mm), created_at)
+    pdf.drawString(left + (125 * mm), y - (11 * mm), generated_by)
+
+    pdf.setFillColor(text_muted)
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(left + (4 * mm), y - (21 * mm), "Tenant / Gym")
+    pdf.drawString(left + (72 * mm), y - (21 * mm), "Transaction ID")
+    pdf.drawString(left + (125 * mm), y - (21 * mm), "Gateway")
+
+    pdf.setFillColor(text_main)
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawString(left + (4 * mm), y - (27 * mm), tenant_name)
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(left + (72 * mm), y - (27 * mm), invoice.tran_id or "—")
+    pdf.drawString(left + (125 * mm), y - (27 * mm), invoice.gateway_slug or "—")
+
+    # Charge summary
+    y -= 44 * mm
+    pdf.setFillColor(text_main)
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(left, y, "Charge Summary")
+
+    y -= 6 * mm
+    table_h = 26 * mm
+    pdf.setStrokeColor(colors.HexColor("#CBD5E1"))
+    pdf.roundRect(left, y - table_h, right - left, table_h, 2 * mm, fill=0, stroke=1)
+
+    pdf.setFillColor(text_muted)
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(left + (4 * mm), y - (5 * mm), "Package")
+    pdf.drawString(left + (95 * mm), y - (5 * mm), "Period")
+    pdf.drawString(left + (145 * mm), y - (5 * mm), "Status")
+    pdf.drawRightString(right - (4 * mm), y - (5 * mm), "Amount")
+
+    pdf.setFillColor(text_main)
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawString(left + (4 * mm), y - (12 * mm), package_name)
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(left + (95 * mm), y - (12 * mm), period)
+    pdf.drawString(left + (145 * mm), y - (12 * mm), status_label)
+    pdf.drawRightString(right - (4 * mm), y - (12 * mm), amount_str)
+
+    pdf.setStrokeColor(colors.HexColor("#E2E8F0"))
+    pdf.line(left + (4 * mm), y - (16 * mm), right - (4 * mm), y - (16 * mm))
+    pdf.setFillColor(text_main)
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(left + (4 * mm), y - (23 * mm), "Total")
+    pdf.drawRightString(right - (4 * mm), y - (23 * mm), amount_str)
+
+    # Footer
+    pdf.setFillColor(brand_soft)
+    pdf.rect(0, 0, width, 20 * mm, fill=1, stroke=0)
+    pdf.setFillColor(text_muted)
+    pdf.setFont("Helvetica", 9)
+    pdf.drawCentredString(width / 2, 8 * mm, "This is a system-generated subscription invoice. Thank you for your business.")
+
+    pdf.showPage()
+    pdf.save()
+    return buffer.getvalue()
+
+
+class SubscriptionInvoicePdfView(APIView):
+    """GET /api/v1/billing/subscription/invoices/<pk>/invoice/
+
+    Tenant-facing: returns the PDF for one of the calling tenant's own
+    TenantSubscriptionInvoice records.  Reads from the public schema.
+    """
+
+    feature_keys = ['payments']
+    permission_classes = [HasFeatureMethodPermission]
+    renderer_classes = [PDFRenderer, JSONRenderer]
+
+    def get(self, request, pk):
+        from apps.tenancy.models import TenantSubscriptionInvoice
+        from django_tenants.utils import get_public_schema_name
+
+        tenant = getattr(request, 'tenant', None)
+        public_schema = get_public_schema_name()
+        with schema_context(public_schema):
+            invoice = get_object_or_404(
+                TenantSubscriptionInvoice.objects.select_related('tenant'),
+                pk=pk,
+                tenant=tenant,
+            )
+            generated_by = getattr(request.user, 'full_name', '') or getattr(request.user, 'email', 'System')
+            pdf_bytes = _render_subscription_invoice_pdf(invoice, generated_by)
+            invoice_ref = f"SUB-{invoice.id:06d}"
+
+        filename = f"subscription-invoice-{invoice_ref}.pdf"
+        disposition = 'attachment' if request.query_params.get('download') == '1' else 'inline'
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'{disposition}; filename="{filename}"'
+        return response
+
+
+class PlatformSubscriptionInvoicePdfView(APIView):
+    """GET /api/v1/billing/subscription/payments/<pk>/invoice/
+
+    Platform-admin facing: returns a PDF for any TenantSubscriptionInvoice.
+    """
+
+    permission_classes = [IsPlatformFeaturePermission.require("platform.payments", "view")]
+    renderer_classes = [PDFRenderer, JSONRenderer]
+
+    def get(self, request, pk):
+        from apps.tenancy.models import TenantSubscriptionInvoice
+
+        invoice = get_object_or_404(
+            TenantSubscriptionInvoice.objects.select_related('tenant'),
+            pk=pk,
+        )
+        generated_by = getattr(request.user, 'full_name', '') or getattr(request.user, 'email', 'System')
+        pdf_bytes = _render_subscription_invoice_pdf(invoice, generated_by)
+        invoice_ref = f"SUB-{invoice.id:06d}"
+
+        filename = f"subscription-invoice-{invoice_ref}.pdf"
+        disposition = 'attachment' if request.query_params.get('download') == '1' else 'inline'
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'{disposition}; filename="{filename}"'
+        return response
+
+
+# ===============================================================
+# Platform admin: Payment Gateway management (public schema)
+# ===============================================================
+
+GATEWAY_VIEW_PERMS = [IsPlatformFeaturePermission.require("platform.billing", "view")]
+GATEWAY_EDIT_PERMS = [IsPlatformFeaturePermission.require("platform.billing", "edit")]
+
+
+class PaymentGatewayListAPIView(APIView):
+    """GET / POST /api/v1/billing/gateways/ — platform admin."""
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [perm() for perm in GATEWAY_EDIT_PERMS]
+        return [perm() for perm in GATEWAY_VIEW_PERMS]
+
+    def get(self, request):
+        gateways = PaymentGateway.objects.all().order_by("sort_order", "name")
+        return Response(PaymentGatewaySerializer(gateways, many=True).data)
+
+    def post(self, request):
+        serializer = PaymentGatewaySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        gateway = serializer.save()
+        return Response(PaymentGatewaySerializer(gateway).data, status=status.HTTP_201_CREATED)
+
+
+class PaymentGatewayDetailAPIView(APIView):
+    """GET / PATCH / DELETE /api/v1/billing/gateways/<slug>/ — platform admin."""
+
+    def get_permissions(self):
+        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+            return [perm() for perm in GATEWAY_VIEW_PERMS]
+        return [perm() for perm in GATEWAY_EDIT_PERMS]
+
+    def _get_object(self, slug):
+        return get_object_or_404(PaymentGateway, slug=slug)
+
+    def get(self, request, slug):
+        return Response(PaymentGatewaySerializer(self._get_object(slug)).data)
+
+    def patch(self, request, slug):
+        gateway = self._get_object(slug)
+        serializer = PaymentGatewaySerializer(gateway, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        gateway = serializer.save()
+        return Response(PaymentGatewaySerializer(gateway).data)
+
+    def delete(self, request, slug):
+        self._get_object(slug).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PaymentGatewayToggleAPIView(APIView):
+    """POST /api/v1/billing/gateways/<slug>/toggle/ — flip is_enabled_for_tenants."""
+
+    permission_classes = GATEWAY_EDIT_PERMS
+
+    def post(self, request, slug):
+        gateway = get_object_or_404(PaymentGateway, slug=slug)
+        gateway.is_enabled_for_tenants = not gateway.is_enabled_for_tenants
+        gateway.save(update_fields=["is_enabled_for_tenants", "updated_at"])
+        return Response(PaymentGatewaySerializer(gateway).data)
+
+
+class PaymentGatewaySetDefaultView(APIView):
+    """POST /api/v1/billing/gateways/<slug>/set-default-subscription/
+
+    Marks one gateway as the default for SaaS subscription billing.
+    Clears the flag on all other gateways atomically.
+    """
+
+    permission_classes = GATEWAY_EDIT_PERMS
+
+    def post(self, request, slug):
+        gateway = get_object_or_404(PaymentGateway, slug=slug)
+        with transaction.atomic():
+            PaymentGateway.objects.exclude(slug=slug).update(is_default_for_subscriptions=False)
+            gateway.is_default_for_subscriptions = True
+            gateway.save(update_fields=["is_default_for_subscriptions", "updated_at"])
+        return Response(PaymentGatewaySerializer(gateway).data)
+
+
+class PlatformSubscriptionPaymentsView(APIView):
+    """GET /api/v1/billing/subscription/payments/ — platform-admin payment overview.
+
+    Returns all TenantSubscriptionInvoice records across all tenants along with
+    aggregate stats (total revenue, count by status).  Gated by the
+    `platform.payments` platform module permission.
+    """
+
+    permission_classes = [IsPlatformFeaturePermission.require("platform.payments", "view")]
+
+    def get(self, request):
+        from apps.tenancy.models import TenantSubscriptionInvoice, Tenant
+        from .serializers import TenantSubscriptionInvoiceSerializer
+
+        # Build queryset with tenant info denormalised
+        invoices_qs = (
+            TenantSubscriptionInvoice.objects
+            .select_related("tenant")
+            .order_by("-created_at")
+        )
+
+        # Optional filter params
+        status_filter = request.GET.get("status", "").strip()
+        search = request.GET.get("search", "").strip()
+        if status_filter:
+            invoices_qs = invoices_qs.filter(status=status_filter)
+        if search:
+            invoices_qs = invoices_qs.filter(
+                Q(tenant__name__icontains=search)
+                | Q(tran_id__icontains=search)
+                | Q(package_name__icontains=search)
+            )
+
+        invoices = list(invoices_qs)
+
+        # Aggregate stats
+        all_invoices = TenantSubscriptionInvoice.objects.all()
+        total_revenue = (
+            all_invoices.filter(status=TenantSubscriptionInvoice.STATUS_SUCCESS)
+            .aggregate(total=Sum("amount"))["total"] or 0
+        )
+        count_by_status = {
+            row["status"]: row["count"]
+            for row in all_invoices.values("status").annotate(count=Count("id"))
+        }
+        unique_paying_tenants = (
+            all_invoices.filter(status=TenantSubscriptionInvoice.STATUS_SUCCESS)
+            .values("tenant_id").distinct().count()
+        )
+
+        serialized = TenantSubscriptionInvoiceSerializer(invoices, many=True).data
+        # Attach tenant name to each item
+        rows = []
+        for inv, data in zip(invoices, serialized):
+            row = dict(data)
+            row["tenant_name"] = inv.tenant.name if inv.tenant else ""
+            row["tenant_schema"] = inv.tenant.schema_name if inv.tenant else ""
+            rows.append(row)
+
+        return Response({
+            "stats": {
+                "total_revenue": str(total_revenue),
+                "total_payments": all_invoices.count(),
+                "successful_payments": count_by_status.get(TenantSubscriptionInvoice.STATUS_SUCCESS, 0),
+                "failed_payments": count_by_status.get(TenantSubscriptionInvoice.STATUS_FAILED, 0),
+                "pending_payments": count_by_status.get(TenantSubscriptionInvoice.STATUS_PENDING, 0),
+                "unique_paying_tenants": unique_paying_tenants,
+            },
+            "results": rows,
+        })
+
+
+# ===============================================================
+# Subscription payment callbacks (public schema)
+# These are called by SSLCommerz after a tenant subscription payment.
+# ===============================================================
+
+def _process_subscription_callback(request, *, tran_id=None):
+    """Shared handler for subscription success/fail/cancel POST callbacks.
+
+    Returns (invoice, redirect_url) so the caller can redirect the browser.
+    """
+    from apps.tenancy.models import TenantSubscriptionInvoice
+
+    public_frontend = getattr(settings, "PUBLIC_FRONTEND_URL", "") or getattr(settings, "FRONTEND_BASE_URL", "")
+
+    if tran_id is None:
+        tran_id = request.POST.get("tran_id") or request.GET.get("tran_id", "")
+
+    if not tran_id:
+        return None, f"{public_frontend}/subscription/fail?reason=missing_tran_id"
+
+    try:
+        with transaction.atomic():
+            invoice = TenantSubscriptionInvoice.objects.select_for_update().filter(tran_id=tran_id).first()
+            if invoice is None:
+                return None, f"{public_frontend}/subscription/fail?reason=not_found"
+
+            if invoice.status == TenantSubscriptionInvoice.STATUS_SUCCESS:
+                # Already processed — idempotent; rebuild success params
+                from urllib.parse import urlencode as _ue
+                _tenant = invoice.tenant
+                _domain = (
+                    _tenant.domains.filter(is_primary=True).values_list("domain", flat=True).first() or ""
+                )
+                _scheme = getattr(settings, "TENANT_FRONTEND_SCHEME", "http")
+                _port = getattr(settings, "TENANT_FRONTEND_PORT", "")
+                _host = f"{_domain}:{_port}" if (_domain and _port) else _domain
+                _login_url = f"{_scheme}://{_host}/login" if _domain else ""
+                _params = _ue({
+                    "tran_id": tran_id,
+                    "login_url": _login_url,
+                    "package": invoice.package_name or invoice.package_slug or "",
+                    "amount": str(invoice.amount),
+                })
+                return invoice, f"{public_frontend}/subscription/success?{_params}"
+
+            val_id = request.POST.get("val_id") or request.GET.get("val_id", "")
+            new_status = TenantSubscriptionInvoice.STATUS_FAILED
+
+            if val_id:
+                try:
+                    gw = PaymentGateway.objects.filter(slug=invoice.gateway_slug).first()
+                    if gw:
+                        creds = gw.platform_credentials or {}
+                        svc = get_gateway(
+                            invoice.gateway_slug,
+                            credentials=creds,
+                            is_sandbox=gw.is_sandbox,
+                            success_url="",
+                            fail_url="",
+                            cancel_url="",
+                            ipn_url="",
+                        )
+                        result = svc.validate(val_id)
+                        invoice.gateway_response = result
+                        invoice.val_id = val_id
+                        if result.get("status") == "VALID":
+                            new_status = TenantSubscriptionInvoice.STATUS_SUCCESS
+                            invoice.validated_at = timezone.now()
+                except Exception:
+                    pass
+
+            invoice.status = new_status
+            invoice.save(update_fields=["status", "val_id", "validated_at", "gateway_response", "updated_at"])
+
+            # On success, activate the tenant subscription
+            if new_status == TenantSubscriptionInvoice.STATUS_SUCCESS:
+                tenant = invoice.tenant
+                tenant.is_trial = False
+                tenant.status = "active"
+                tenant.subscription_start = timezone.now()
+                tenant.subscription_end = invoice.period_end
+                tenant.save(update_fields=["is_trial", "status", "subscription_start", "subscription_end", "updated_at"])
+
+    except Exception:
+        return None, f"{public_frontend}/subscription/fail?reason=error"
+
+    if new_status == TenantSubscriptionInvoice.STATUS_SUCCESS:
+        from urllib.parse import urlencode
+        tenant = invoice.tenant
+        tenant_domain = (
+            tenant.domains.filter(is_primary=True).values_list("domain", flat=True).first() or ""
+        )
+        scheme = getattr(settings, "TENANT_FRONTEND_SCHEME", "http")
+        port = getattr(settings, "TENANT_FRONTEND_PORT", "")
+        if tenant_domain:
+            host = f"{tenant_domain}:{port}" if port else tenant_domain
+            login_url = f"{scheme}://{host}/login"
+        else:
+            login_url = ""
+        params = urlencode({
+            "tran_id": tran_id,
+            "login_url": login_url,
+            "package": invoice.package_name or invoice.package_slug or "",
+            "amount": str(invoice.amount),
+        })
+        return invoice, f"{public_frontend}/subscription/success?{params}"
+    return invoice, f"{public_frontend}/subscription/fail?tran_id={tran_id}"
+
+
+class SubscriptionPaymentIPNView(APIView):
+    """POST /api/v1/billing/subscription/ipn/ — SSLCommerz IPN for subscription billing."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        _process_subscription_callback(request)
+        return Response({"status": "ok"})
+
+
+class SubscriptionPaymentSuccessView(APIView):
+    """GET|POST /api/v1/billing/subscription/success/ — SSLCommerz success redirect."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        _, redirect_url = _process_subscription_callback(request, tran_id=request.GET.get("tran_id"))
+        return redirect(redirect_url)
+
+    def post(self, request):
+        _, redirect_url = _process_subscription_callback(request)
+        return redirect(redirect_url)
+
+
+class SubscriptionPaymentFailView(APIView):
+    """GET|POST /api/v1/billing/subscription/fail/ — SSLCommerz fail redirect."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        public_frontend = getattr(settings, "PUBLIC_FRONTEND_URL", "") or getattr(settings, "FRONTEND_BASE_URL", "")
+        tran_id = request.GET.get("tran_id", "")
+        _process_subscription_callback(request, tran_id=tran_id)
+        return redirect(f"{public_frontend}/subscription/fail?tran_id={tran_id}")
+
+    def post(self, request):
+        tran_id = request.POST.get("tran_id", "")
+        public_frontend = getattr(settings, "PUBLIC_FRONTEND_URL", "") or getattr(settings, "FRONTEND_BASE_URL", "")
+        _process_subscription_callback(request, tran_id=tran_id)
+        return redirect(f"{public_frontend}/subscription/fail?tran_id={tran_id}")
+
+
+class SubscriptionPaymentCancelView(APIView):
+    """GET|POST /api/v1/billing/subscription/cancel/ — SSLCommerz cancel redirect."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        public_frontend = getattr(settings, "PUBLIC_FRONTEND_URL", "") or getattr(settings, "FRONTEND_BASE_URL", "")
+        tran_id = request.GET.get("tran_id", "")
+        from apps.tenancy.models import TenantSubscriptionInvoice
+        TenantSubscriptionInvoice.objects.filter(
+            tran_id=tran_id,
+            status=TenantSubscriptionInvoice.STATUS_PENDING,
+        ).update(status=TenantSubscriptionInvoice.STATUS_CANCELLED)
+        return redirect(f"{public_frontend}/subscription/cancel?tran_id={tran_id}")
+
+    def post(self, request):
+        public_frontend = getattr(settings, "PUBLIC_FRONTEND_URL", "") or getattr(settings, "FRONTEND_BASE_URL", "")
+        tran_id = request.POST.get("tran_id", "")
+        from apps.tenancy.models import TenantSubscriptionInvoice
+        TenantSubscriptionInvoice.objects.filter(
+            tran_id=tran_id,
+            status=TenantSubscriptionInvoice.STATUS_PENDING,
+        ).update(status=TenantSubscriptionInvoice.STATUS_CANCELLED)
+        return redirect(f"{public_frontend}/subscription/cancel?tran_id={tran_id}")
+
+
+class SubscriptionInvoiceListView(APIView):
+    """GET /api/v1/billing/subscription/invoices/ — tenant's SaaS subscription invoice history.
+
+    Queries the public schema (where TenantSubscriptionInvoice lives) using the
+    current request's tenant identity set by django-tenants middleware.
+    """
+
+    feature_key = "payments"
+    permission_classes = [HasFeatureMethodPermission]
+
+    def get(self, request):
+        from apps.tenancy.models import TenantSubscriptionInvoice
+        from django_tenants.utils import get_public_schema_name
+        from .serializers import TenantSubscriptionInvoiceSerializer
+
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            return Response([])
+
+        public_schema = get_public_schema_name()
+        with schema_context(public_schema):
+            invoices = (
+                TenantSubscriptionInvoice.objects
+                .filter(tenant=tenant)
+                .order_by("-created_at")
+            )
+            return Response(TenantSubscriptionInvoiceSerializer(invoices, many=True).data)
+
+
+# ===============================================================
+# Tenant: gateway configuration (tenant schema)
+# ===============================================================
+
+class TenantGatewayConfigView(ModelCRUDView):
+    """GET / POST / PATCH / DELETE /api/v1/billing/payments/gateways/ (and /<pk>/).
+
+    Manages per-tenant SSLCommerz / other gateway credentials.
+    Only slugs that are enabled in the public schema are accepted.
+    """
+
+    feature_key = "payments.gateways"
+    permission_classes = [HasFeatureMethodPermission]
+    queryset = TenantPaymentGateway.objects.all()
+    serializer_class = TenantPaymentGatewaySerializer
+
+    def _is_slug_allowed(self, slug: str) -> bool:
+        with schema_context("public"):
+            return PaymentGateway.objects.filter(slug=slug, is_enabled_for_tenants=True).exists()
+
+    def post(self, request, *args, **kwargs):
+        slug = request.data.get("gateway_slug", "")
+        if not self._is_slug_allowed(slug):
+            return Response(
+                {"detail": f"Gateway '{slug}' is not enabled by the platform."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().post(request, *args, **kwargs)
+
+
+# ===============================================================
+# Tenant: available gateways (for AddPaymentDialog dropdown)
+# ===============================================================
+
+class AvailableGatewaysView(APIView):
+    """GET /api/v1/billing/payments/available-gateways/
+
+    Returns the list of platform-enabled gateways with a flag indicating
+    whether this tenant has already configured credentials for each.
+    """
+
+    feature_key = "payments"
+    permission_classes = [HasFeatureMethodPermission]
+
+    def get(self, request):
+        with schema_context("public"):
+            enabled = list(
+                PaymentGateway.objects.filter(is_enabled_for_tenants=True)
+                .values("slug", "name")
+                .order_by("sort_order", "name")
+            )
+
+        configured_slugs = set(
+            TenantPaymentGateway.objects.filter(is_active=True).values_list("gateway_slug", flat=True)
+        )
+
+        result = [
+            {"slug": g["slug"], "name": g["name"], "is_configured": g["slug"] in configured_slugs}
+            for g in enabled
+        ]
+        return Response(AvailableGatewaySerializer(result, many=True).data)
+
+
+# ===============================================================
+# Tenant: initiate online payment
+# ===============================================================
+
+class PaymentInitiateView(APIView):
+    """POST /api/v1/billing/payments/initiate/
+
+    Creates a PaymentTransaction and returns the gateway redirect URL.
+    The frontend immediately redirects the user to gateway_url.
+    """
+
+    feature_key = "payments"
+    permission_classes = [HasFeatureMethodPermission]
+
+    def post(self, request):
+        serializer = PaymentInitiateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        payment_id = serializer.validated_data["payment_id"]
+        gateway_slug = serializer.validated_data["gateway_slug"]
+
+        payment = get_object_or_404(
+            Payment.objects.select_related("member"),
+            pk=payment_id,
+        )
+
+        try:
+            tenant_gw = TenantPaymentGateway.objects.get(gateway_slug=gateway_slug, is_active=True)
+        except TenantPaymentGateway.DoesNotExist:
+            return Response(
+                {"detail": f"Gateway '{gateway_slug}' is not configured for this gym."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tran_id = f"TXN-{payment.id}-{uuid.uuid4().hex[:8].upper()}"
+
+        # Build absolute callback URLs
+        base = request.build_absolute_uri("/").rstrip("/")
+        prefix = f"{base}/api/v1/billing/payments"
+        success_url = f"{prefix}/success/"
+        fail_url = f"{prefix}/fail/"
+        cancel_url = f"{prefix}/cancel/"
+        ipn_url = f"{prefix}/ipn/"
+
+        with transaction.atomic():
+            tx = PaymentTransaction.objects.create(
+                tran_id=tran_id,
+                gateway_slug=gateway_slug,
+                amount=payment.amount,
+                currency="BDT",
+                status=PaymentTransaction.STATUS_INIT,
+                source_payment=payment,
+            )
+
+        svc = get_gateway(
+            gateway_slug,
+            tenant_gw.credentials,
+            tenant_gw.is_sandbox,
+            success_url=success_url,
+            fail_url=fail_url,
+            cancel_url=cancel_url,
+            ipn_url=ipn_url,
+        )
+
+        try:
+            result = svc.initiate(tx)
+        except ValueError as exc:
+            tx.status = PaymentTransaction.STATUS_FAILED
+            tx.gateway_response = {"error": str(exc)}
+            tx.save(update_fields=["status", "gateway_response", "updated_at"])
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        tx.status = PaymentTransaction.STATUS_PENDING
+        tx.gateway_response = result.get("raw", {})
+        tx.save(update_fields=["status", "gateway_response", "updated_at"])
+
+        return Response({"gateway_url": result["gateway_url"], "tran_id": tran_id})
+
+
+# ===============================================================
+# Tenant: SSLCommerz IPN + browser callbacks
+# ===============================================================
+
+def _process_gateway_callback(tran_id: str, val_id: str, raw_amount: str) -> PaymentTransaction | None:
+    """Shared logic: validate with SSLCommerz and update transaction + payment.
+
+    Uses select_for_update to prevent IPN/success callback race conditions.
+    Returns the updated PaymentTransaction or None if tran_id is not found.
+    """
+    try:
+        with transaction.atomic():
+            tx = (
+                PaymentTransaction.objects
+                .select_for_update()
+                .select_related("source_payment")
+                .get(tran_id=tran_id)
+            )
+
+            # Idempotent: already resolved
+            if tx.status in (PaymentTransaction.STATUS_SUCCESS, PaymentTransaction.STATUS_FAILED,
+                             PaymentTransaction.STATUS_CANCELLED):
+                return tx
+
+            try:
+                tenant_gw = TenantPaymentGateway.objects.get(
+                    gateway_slug=tx.gateway_slug, is_active=True
+                )
+            except TenantPaymentGateway.DoesNotExist:
+                return tx
+
+            svc = get_gateway(
+                tx.gateway_slug,
+                tenant_gw.credentials,
+                tenant_gw.is_sandbox,
+                success_url="", fail_url="", cancel_url="", ipn_url="",
+            )
+
+            try:
+                validation = svc.validate(val_id)
+            except ValueError:
+                tx.status = PaymentTransaction.STATUS_FAILED
+                tx.save(update_fields=["status", "updated_at"])
+                return tx
+
+            gw_status = (validation.get("status") or "").upper()
+            is_valid = gw_status == "VALID"
+
+            # Verify amount matches (guard against amount tampering)
+            try:
+                validated_amount = Decimal(str(validation.get("amount", "0")))
+                amount_ok = abs(validated_amount - tx.amount) < Decimal("1.00")
+            except Exception:
+                amount_ok = False
+
+            if is_valid and amount_ok:
+                tx.status = PaymentTransaction.STATUS_SUCCESS
+                tx.val_id = val_id
+                tx.validated_at = timezone.now()
+                tx.gateway_response = validation
+                tx.save(update_fields=["status", "val_id", "validated_at", "gateway_response", "updated_at"])
+
+                if tx.source_payment:
+                    tx.source_payment.payment_status = Payment.STATUS_PAID
+                    tx.source_payment.is_paid = True
+                    tx.source_payment.save(update_fields=["payment_status", "is_paid", "updated_at"])
+            else:
+                tx.status = PaymentTransaction.STATUS_FAILED
+                tx.gateway_response = validation
+                tx.save(update_fields=["status", "gateway_response", "updated_at"])
+
+    except PaymentTransaction.DoesNotExist:
+        return None
+
+    return tx
+
+
+class PaymentIPNView(APIView):
+    """POST /api/v1/billing/payments/ipn/ — SSLCommerz server-to-server IPN.
+
+    Must be AllowAny because SSLCommerz hits it directly without auth headers.
+    The transaction is validated against the SSLCommerz API (not just IPN data)
+    before any status update is applied.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        tran_id = request.data.get("tran_id", "")
+        val_id = request.data.get("val_id", "")
+        raw_amount = request.data.get("amount", "0")
+
+        if not tran_id:
+            return Response({"detail": "Missing tran_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        _process_gateway_callback(tran_id, val_id, raw_amount)
+        return Response({"status": "received"})
+
+
+class PaymentSuccessView(APIView):
+    """POST /api/v1/billing/payments/success/ — browser redirect after successful payment."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        tran_id = request.data.get("tran_id", "")
+        val_id = request.data.get("val_id", "")
+        raw_amount = request.data.get("amount", "0")
+
+        _process_gateway_callback(tran_id, val_id, raw_amount)
+
+        frontend = getattr(settings, "FRONTEND_BASE_URL", "").rstrip("/")
+        return redirect(f"{frontend}/payments/success?tran_id={tran_id}")
+
+
+class PaymentFailView(APIView):
+    """POST /api/v1/billing/payments/fail/ — browser redirect after failed payment."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        tran_id = request.data.get("tran_id", "")
+
+        try:
+            with transaction.atomic():
+                tx = PaymentTransaction.objects.select_for_update().get(tran_id=tran_id)
+                if tx.status == PaymentTransaction.STATUS_PENDING:
+                    tx.status = PaymentTransaction.STATUS_FAILED
+                    tx.save(update_fields=["status", "updated_at"])
+        except PaymentTransaction.DoesNotExist:
+            pass
+
+        frontend = getattr(settings, "FRONTEND_BASE_URL", "").rstrip("/")
+        return redirect(f"{frontend}/payments/fail?tran_id={tran_id}")
+
+
+class PaymentCancelView(APIView):
+    """POST /api/v1/billing/payments/cancel/ — browser redirect after cancelled payment."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        tran_id = request.data.get("tran_id", "")
+
+        try:
+            with transaction.atomic():
+                tx = PaymentTransaction.objects.select_for_update().get(tran_id=tran_id)
+                if tx.status == PaymentTransaction.STATUS_PENDING:
+                    tx.status = PaymentTransaction.STATUS_CANCELLED
+                    tx.save(update_fields=["status", "updated_at"])
+        except PaymentTransaction.DoesNotExist:
+            pass
+
+        frontend = getattr(settings, "FRONTEND_BASE_URL", "").rstrip("/")
+        return redirect(f"{frontend}/payments/cancel?tran_id={tran_id}")
 
