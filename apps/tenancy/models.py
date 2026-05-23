@@ -528,3 +528,106 @@ class TenantFeatureFlag(models.Model):
         if self.is_enabled:
             return True
         return bool(self.grace_until and self.grace_until > timezone.now())
+
+
+# ===============================================================
+# Payment Gateway Registry (public schema)
+#
+# Platform admin registers available gateways and controls which
+# ones tenants may configure. Each tenant stores their own
+# credentials in billing.TenantPaymentGateway (tenant schema).
+# Cross-schema FKs are not used — gateways are referenced by slug.
+# ===============================================================
+class PaymentGateway(models.Model):
+    """Catalog of payment gateways the platform makes available to tenants."""
+
+    slug = models.SlugField(max_length=50, unique=True, help_text="Stable identifier, e.g. 'sslcommerz'.")
+    name = models.CharField(max_length=120)
+    description = models.CharField(max_length=500, blank=True, default="")
+    is_enabled_for_tenants = models.BooleanField(
+        default=False,
+        help_text="When True, tenants can configure and use this gateway.",
+    )
+    config_schema = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "List of field descriptors that define the credential form tenants must fill in. "
+            "Each entry: {key, label, type ('text'|'password'|'boolean'), required (bool)}."
+        ),
+    )
+    platform_credentials = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Platform-level credentials for processing SaaS subscription payments (write-only in API).",
+    )
+    is_sandbox = models.BooleanField(
+        default=True,
+        help_text="When True, platform-level credentials point to the sandbox/test environment.",
+    )
+    is_default_for_subscriptions = models.BooleanField(
+        default=False,
+        help_text="This gateway is used by the platform to bill tenants for SaaS subscriptions.",
+    )
+    sort_order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.slug})"
+
+
+# ===============================================================
+# Tenant Subscription Invoice (public schema)
+#
+# Tracks platform billing of tenants for their SaaS subscriptions.
+# One row per payment attempt. Lives in the public schema (FK to
+# Tenant, not inside any tenant schema). NOT a BaseModel subclass.
+# ===============================================================
+class TenantSubscriptionInvoice(models.Model):
+    """Records a single subscription billing event for a tenant."""
+
+    STATUS_PENDING = "pending"
+    STATUS_SUCCESS = "success"
+    STATUS_FAILED = "failed"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_TRIAL = "trial"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_TRIAL, "Trial (no charge)"),
+    ]
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="subscription_invoices",
+    )
+    package_slug = models.CharField(max_length=50)
+    package_name = models.CharField(max_length=120, blank=True, default="")
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    currency = models.CharField(max_length=10, default="BDT")
+    tran_id = models.CharField(max_length=100, unique=True)
+    gateway_slug = models.CharField(max_length=50, blank=True, default="")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    gateway_response = models.JSONField(default=dict, blank=True)
+    val_id = models.CharField(max_length=200, blank=True, default="")
+    validated_at = models.DateTimeField(null=True, blank=True)
+    # Billing period this invoice covers
+    period_start = models.DateTimeField(null=True, blank=True)
+    period_end = models.DateTimeField(null=True, blank=True)
+    is_trial = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Invoice {self.tran_id} — {self.tenant.schema_name} [{self.status}]"
