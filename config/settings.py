@@ -95,6 +95,7 @@ TENANT_APPS = [
     'apps.billing.apps.BillingConfig',
     'apps.attendance.apps.AttendanceConfig',
     'apps.trainer.apps.TrainerConfig',
+    'apps.reminder.apps.ReminderConfig',
 ]
 
 # Django requires a flat INSTALLED_APPS list; django-tenants merges both lists

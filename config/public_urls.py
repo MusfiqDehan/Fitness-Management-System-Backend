@@ -41,6 +41,9 @@ urlpatterns = [
     # Public contact-us form submissions
     path('api/v1/crm/', include(('apps.crm.public_urls', 'crm'), namespace='crm')),
 
+    # Notification endpoints for platform admin
+    path('api/v1/reminder/', include(('apps.reminder.urls', 'reminder'), namespace='public-reminder')),
+
     # Trainer public routes (no tenant scope needed)
     path('api/v1/trainer/public/profile/<slug:username>/', TrainerPublicProfileView.as_view(), name='trainer-public-profile'),
     path('api/v1/trainer/public/verify-invitation/', VerifyTrainerInvitationAPIView.as_view(), name='trainer-verify-invitation'),
