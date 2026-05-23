@@ -33,6 +33,7 @@ from .serializers import (
 	SuperadminInvitationSerializer,
 	full_domain_for_subdomain,
 )
+from .services import normalize_plan_slug
 
 
 def _is_superadmin(user):
@@ -177,11 +178,12 @@ def _assert_token_request_scope(request, invitation):
 
 def _get_package_trial_days(plan_slug: str) -> int:
 	"""Return trial_days from PlatformPackage, defaulting to 14 if not found."""
-	if not plan_slug or plan_slug == "free":
+	resolved_plan_slug = normalize_plan_slug(plan_slug)
+	if not resolved_plan_slug:
 		return 14
 	public_schema = get_public_schema_name()
 	with schema_context(public_schema):
-		pkg = PlatformPackage.objects.filter(slug=plan_slug, is_active=True).first()
+		pkg = PlatformPackage.objects.filter(slug=resolved_plan_slug, is_active=True).first()
 		if pkg:
 			return max(0, pkg.trial_days)
 	return 14
@@ -269,9 +271,10 @@ def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dic
 
 
 def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_domain="", primary_domain="", max_users=10,
-								max_branches=1, plan="free"):
+								max_branches=1, plan="starter"):
 	public_schema = get_public_schema_name()
 	with schema_context(public_schema):
+		resolved_plan_slug = normalize_plan_slug(plan)
 		schema_name = _derive_schema_name(subdomain)
 		if Tenant.objects.filter(schema_name=schema_name).exists():
 			raise ValidationError({"subdomain": "This subdomain conflicts with an existing tenant schema."})
@@ -297,10 +300,10 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 			code=final_code,
 			owner_email=owner_email,
 			billing_email=owner_email,
-			plan=(plan or "free"),
+			plan=resolved_plan_slug,
 			status="trial",
 			is_trial=True,
-			trial_ends_at=timezone.now() + timedelta(days=_get_package_trial_days(plan)),
+			trial_ends_at=timezone.now() + timedelta(days=_get_package_trial_days(resolved_plan_slug)),
 			max_users=max_users,
 			max_branches=max_branches,
 			is_enabled=True,
@@ -428,6 +431,7 @@ class TenantSelfRegistrationAPIView(APIView):
 		serializer = TenantSelfRegistrationSerializer(data=request.data, context={"request": request})
 		serializer.is_valid(raise_exception=True)
 		payload = serializer.validated_data
+		selected_plan = normalize_plan_slug(payload.get("plan"))
 
 		domain = full_domain_for_subdomain(payload["subdomain"], request=request)
 		with transaction.atomic():
@@ -440,7 +444,7 @@ class TenantSelfRegistrationAPIView(APIView):
 				ttl_minutes=120,
 				metadata={
 					"domain": domain,
-					"plan": payload.get("plan", "trial") or "trial",
+					"plan": selected_plan,
 					"max_users": 10,
 					"max_branches": 1,
 					"contact_phone": payload.get("contact_phone", ""),
@@ -579,7 +583,7 @@ class SuperadminInvitationAPIView(APIView):
 				metadata={
 					"domain": domain,
 					"custom_domain": payload.get("custom_domain", ""),
-					"plan": payload.get("plan", "pro") or "pro",
+					"plan": normalize_plan_slug(payload.get("plan") or "pro"),
 					"max_users": payload.get("max_users", 10),
 					"max_branches": payload.get("max_branches", 1),
 				},
@@ -722,7 +726,7 @@ class PasswordSetupAPIView(APIView):
 					return Response({"detail": "Tenant context not found."}, status=status.HTTP_400_BAD_REQUEST)
 
 				metadata = invitation.metadata or {}
-				plan_slug = metadata.get("plan", "trial") or "trial"
+				plan_slug = normalize_plan_slug(metadata.get("plan"))
 				tenant, domain = _create_tenant_with_domains(
 					company_name=invitation.company_name,
 					subdomain=invitation.subdomain,
@@ -808,14 +812,42 @@ class PasswordSetupAPIView(APIView):
 			invitation.used_at = setup_time
 			invitation.save(update_fields=["used_at"])
 
-		# For new tenant self-registrations (token_type=verification), optionally
-		# initiate a subscription payment if the selected package requires it.
+		# Fire platform-admin notification for new tenant registrations
+		if plan_slug is not None:
+			try:
+				from apps.reminder.utils import create_notification
+				create_notification(
+					notification_type='tenant_registered',
+					title=f'New gym registered: {tenant.name}',
+					actor_name=tenant.name,
+					actor_email=email,
+					target_type='tenant',
+					target_id=str(tenant.id),
+				)
+			except Exception:
+				pass  # Notifications are best-effort; do not break the registration flow
+
+		# For new owner onboarding flows, optionally initiate subscription payment
+		# when the selected package requires immediate charge.
 		payment_info = None
-		if invitation.token_type == Invitation.TOKEN_TYPE_VERIFICATION and plan_slug:
+		if plan_slug and is_owner_setup and not is_member_invite:
 			payment_info = _maybe_initiate_subscription_payment(tenant, plan_slug, request)
+			if payment_info and not payment_info.get('is_trial', True):
+				try:
+					from apps.reminder.utils import create_notification
+					create_notification(
+						notification_type='tenant_subscribed',
+						title=f'{tenant.name} subscribed to {plan_slug}',
+						actor_name=tenant.name,
+						actor_email=email,
+						target_type='tenant',
+						target_id=str(tenant.id),
+						metadata={'plan': plan_slug},
+					)
+				except Exception:
+					pass  # Notifications are best-effort
 
 		return _password_setup_success_response(invitation, domain=domain, payment_info=payment_info)
-
 
 class TenantAuthenticationAPIView(APIView):
 	permission_classes = [AllowAny]
