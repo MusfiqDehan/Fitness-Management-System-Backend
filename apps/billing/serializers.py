@@ -15,8 +15,10 @@ from apps.tenancy.models import (
     PlatformPackage,
     PlatformPackageFeature,
     PlatformPricingConfig,
+    PaymentGateway,
 )
 from apps.membership.models import Member, Payment
+from apps.billing.models import TenantPaymentGateway, PaymentTransaction
 
 
 class FeatureSerializer(serializers.ModelSerializer):
@@ -155,6 +157,11 @@ class PaymentSerializer(serializers.ModelSerializer):
     payment_type_display = serializers.CharField(source='get_payment_type_display', read_only=True)
     payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
     payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
+    online_transaction_status = serializers.SerializerMethodField()
+
+    def get_online_transaction_status(self, obj):
+        tx = obj.online_transactions.filter(is_deleted=False).order_by('-created_at').first()
+        return tx.status if tx else None
 
     class Meta:
         model = Payment
@@ -172,6 +179,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'payment_method_display',
             'payment_status',
             'payment_status_display',
+            'online_transaction_status',
             'payment_date',
             'invoice_no',
             'note',
@@ -191,6 +199,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'payment_type_display',
             'payment_method_display',
             'payment_status_display',
+            'online_transaction_status',
         ]
 
     def to_internal_value(self, data):
@@ -221,3 +230,118 @@ class PaymentSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+
+# ---------------------------------------------------------------
+# Payment Gateway serializers
+# ---------------------------------------------------------------
+
+class PaymentGatewaySerializer(serializers.ModelSerializer):
+    """Platform admin view/edit of a gateway row (public schema).
+
+    `platform_credentials` is write-only so it is never sent to the frontend.
+    `has_platform_credentials` is a read-only boolean indicating whether
+    credentials have already been configured (without exposing the values).
+    """
+
+    platform_credentials = serializers.JSONField(write_only=True, required=False, default=dict)
+    has_platform_credentials = serializers.SerializerMethodField(read_only=True)
+
+    def get_has_platform_credentials(self, obj) -> bool:
+        creds = obj.platform_credentials or {}
+        return bool(creds)
+
+    class Meta:
+        model = PaymentGateway
+        fields = [
+            "id",
+            "slug",
+            "name",
+            "description",
+            "is_enabled_for_tenants",
+            "config_schema",
+            "platform_credentials",
+            "has_platform_credentials",
+            "is_sandbox",
+            "is_default_for_subscriptions",
+            "sort_order",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class TenantPaymentGatewaySerializer(serializers.ModelSerializer):
+    """Tenant-level gateway configuration (tenant schema).
+
+    `credentials` is write-only — never echoed back in responses.
+    """
+
+    credentials = serializers.JSONField(write_only=True, required=False, default=dict)
+
+    class Meta:
+        model = TenantPaymentGateway
+        fields = [
+            "id",
+            "gateway_slug",
+            "credentials",
+            "is_sandbox",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class PaymentTransactionSerializer(serializers.ModelSerializer):
+    """Read-only transaction audit record."""
+
+    class Meta:
+        model = PaymentTransaction
+        fields = [
+            "id",
+            "tran_id",
+            "gateway_slug",
+            "amount",
+            "currency",
+            "status",
+            "source_payment",
+            "val_id",
+            "validated_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class PaymentInitiateSerializer(serializers.Serializer):
+    """POST /billing/payments/initiate/ request body."""
+
+    payment_id = serializers.IntegerField()
+
+
+class TenantSubscriptionInvoiceSerializer(serializers.Serializer):
+    """Read-only SaaS subscription invoice for the tenant dashboard."""
+
+    id = serializers.IntegerField(read_only=True)
+    package_slug = serializers.CharField(read_only=True)
+    package_name = serializers.CharField(read_only=True)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    currency = serializers.CharField(read_only=True)
+    tran_id = serializers.CharField(read_only=True)
+    gateway_slug = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    is_trial = serializers.BooleanField(read_only=True)
+    period_start = serializers.DateTimeField(read_only=True)
+    period_end = serializers.DateTimeField(read_only=True)
+    validated_at = serializers.DateTimeField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    gateway_slug = serializers.CharField(max_length=50)
+
+
+class AvailableGatewaySerializer(serializers.Serializer):
+    """GET /billing/payments/available-gateways/ response shape."""
+
+    slug = serializers.CharField()
+    name = serializers.CharField()
+    is_configured = serializers.BooleanField()
