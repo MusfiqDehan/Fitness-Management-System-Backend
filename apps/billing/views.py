@@ -10,7 +10,9 @@
 - Tenant gateway config endpoints (`/billing/payments/gateways/*`) run on
     tenant schemas and are gated by `payments.gateways`.
 """
+import os
 import uuid
+from functools import lru_cache
 from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
@@ -59,6 +61,121 @@ from .serializers import (
 from .services import get_gateway
 
 
+@lru_cache(maxsize=1)
+def _get_invoice_fonts() -> tuple[str, str]:
+    """Return (regular, bold) fonts, preferring modern sans-serif TTFs."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    candidates = [
+        (
+            "DejaVuSans",
+            "DejaVuSans-Bold",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+        (
+            "NotoSans",
+            "NotoSans-Bold",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        ),
+    ]
+
+    for regular_name, bold_name, regular_path, bold_path in candidates:
+        if not (os.path.exists(regular_path) and os.path.exists(bold_path)):
+            continue
+        try:
+            if regular_name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(regular_name, regular_path))
+            if bold_name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(bold_name, bold_path))
+            return regular_name, bold_name
+        except Exception:
+            continue
+
+    return "Helvetica", "Helvetica-Bold"
+
+
+def _pdf_clean_text(value) -> str:
+    return " ".join(str(value or "-").split()) or "-"
+
+
+def _pdf_shorten_text(pdf, value, max_width, font_name, font_size) -> str:
+    text = _pdf_clean_text(value)
+    if pdf.stringWidth(text, font_name, font_size) <= max_width:
+        return text
+
+    ellipsis = "..."
+    trimmed = text
+    while trimmed:
+        trimmed = trimmed[:-1].rstrip()
+        candidate = f"{trimmed}{ellipsis}"
+        if pdf.stringWidth(candidate, font_name, font_size) <= max_width:
+            return candidate
+
+    return ellipsis
+
+
+def _pdf_wrap_text(pdf, value, max_width, font_name, font_size, max_lines=2):
+    text = _pdf_clean_text(value)
+    words = text.split(" ")
+    lines = []
+    current = ""
+
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if pdf.stringWidth(candidate, font_name, font_size) <= max_width:
+            current = candidate
+            continue
+
+        if current:
+            lines.append(current)
+            current = word
+        else:
+            lines.append(_pdf_shorten_text(pdf, word, max_width, font_name, font_size))
+            current = ""
+
+    if current:
+        lines.append(current)
+
+    if max_lines and len(lines) > max_lines:
+        visible = lines[: max_lines - 1]
+        visible.append(
+            _pdf_shorten_text(
+                pdf,
+                " ".join(lines[max_lines - 1 :]),
+                max_width,
+                font_name,
+                font_size,
+            )
+        )
+        return visible
+
+    return [
+        _pdf_shorten_text(pdf, line, max_width, font_name, font_size)
+        for line in lines
+    ]
+
+
+def _pdf_draw_lines(
+    pdf,
+    x,
+    top_y,
+    lines,
+    font_name,
+    font_size,
+    fill_color,
+    line_height,
+):
+    pdf.setFillColor(fill_color)
+    pdf.setFont(font_name, font_size)
+    cursor_y = top_y
+    for line in lines:
+        pdf.drawString(x, cursor_y, line)
+        cursor_y -= line_height
+
+
 def _render_payment_invoice_pdf(payment: Payment, tenant_name: str, generated_by: str) -> bytes:
     # Lazy import keeps startup resilient if dependency installation is pending.
     from reportlab.lib import colors
@@ -74,114 +191,218 @@ def _render_payment_invoice_pdf(payment: Payment, tenant_name: str, generated_by
     invoice_no = payment.invoice_no or f"INV-{payment.id:06d}"
     member = payment.member
     package_name = member.member_package.name if member.member_package else "General"
-    amount = f"TK. {payment.amount}"
+    amount = f"TK. {Decimal(payment.amount):,.2f}"
     payment_date = timezone.localtime(payment.payment_date).strftime("%d %b %Y, %I:%M %p")
+    member_name = _pdf_clean_text(member.full_name or "Unknown Member")
+    member_phone = _pdf_clean_text(member.phone_number)
+    generated_by_name = _pdf_clean_text(generated_by or "System")
+    tenant_label = _pdf_clean_text(tenant_name or "Fithive")
+    payment_item = payment.get_payment_type_display()
+    payment_method = payment.get_payment_method_display()
+    payment_status = payment.get_payment_status_display()
+    notes = _pdf_clean_text(payment.note or "No additional notes.")
 
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
 
-    brand_primary = colors.HexColor("#0F172A")
-    brand_accent = colors.HexColor("#0EA5E9")
-    brand_soft = colors.HexColor("#F1F5F9")
-    text_main = colors.HexColor("#111827")
-    text_muted = colors.HexColor("#64748B")
+    regular_font, bold_font = _get_invoice_fonts()
 
-    pdf.setFillColor(brand_primary)
-    pdf.rect(0, height - (42 * mm), width, 42 * mm, fill=1, stroke=0)
+    brand_black = colors.HexColor("#101010")
+    brand_yellow = colors.HexColor("#FFC733")
+    brand_yellow_soft = colors.HexColor("#FFF3C4")
+    brand_surface = colors.white
+    brand_surface_warm = colors.HexColor("#FFF9EE")
+    border_color = colors.HexColor("#E8D39A")
+    text_main = colors.HexColor("#171717")
+    text_muted = colors.HexColor("#6B6558")
+
+    def draw_field(
+        x,
+        top_y,
+        label,
+        value,
+        width,
+        value_font=None,
+        value_size=10,
+        max_lines=1,
+    ):
+        current_value_font = value_font or bold_font
+        pdf.setFillColor(text_muted)
+        pdf.setFont(regular_font, 8.4)
+        pdf.drawString(x, top_y, label.upper())
+        lines = _pdf_wrap_text(pdf, value, width, current_value_font, value_size, max_lines=max_lines)
+        _pdf_draw_lines(
+            pdf,
+            x,
+            top_y - (4.8 * mm),
+            lines,
+            current_value_font,
+            value_size,
+            text_main,
+            4.2 * mm,
+        )
+
+    pdf.setFillColor(brand_surface)
+    pdf.rect(0, 0, width, height, fill=1, stroke=0)
+
+    pdf.setFillColor(brand_black)
+    pdf.rect(0, height - (48 * mm), width, 48 * mm, fill=1, stroke=0)
+    pdf.setFillColor(brand_yellow)
+    pdf.rect(0, height - (6 * mm), width, 6 * mm, fill=1, stroke=0)
 
     pdf.setFillColor(colors.white)
-    pdf.setFont("Helvetica-Bold", 21)
-    pdf.drawString(left, top - (4 * mm), tenant_name or "Gym Management")
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(left, top - (11 * mm), "Payment Invoice")
+    pdf.setFont(bold_font, 22)
+    pdf.drawString(
+        left,
+        top - (8 * mm),
+        _pdf_shorten_text(pdf, tenant_label, right - left - (70 * mm), bold_font, 22),
+    )
+    pdf.setFont(regular_font, 10)
+    pdf.drawString(left, top - (15 * mm), "Payment Invoice")
+    pdf.setFont(regular_font, 9)
+    pdf.drawString(
+        left,
+        top - (22 * mm),
+        _pdf_shorten_text(pdf, invoice_no, right - left - (70 * mm), regular_font, 9),
+    )
 
-    pdf.setFillColor(brand_accent)
-    pdf.roundRect(right - (56 * mm), top - (16 * mm), 56 * mm, 11 * mm, 3 * mm, fill=1, stroke=0)
+    badge_x = right - (58 * mm)
+    pdf.setFillColor(brand_yellow)
+    pdf.roundRect(badge_x, top - (18 * mm), 58 * mm, 12 * mm, 3 * mm, fill=1, stroke=0)
+    pdf.setFillColor(brand_black)
+    pdf.setFont(bold_font, 10)
+    pdf.drawCentredString(badge_x + (29 * mm), top - (10.8 * mm), "MANUAL PAYMENT")
     pdf.setFillColor(colors.white)
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawCentredString(right - (28 * mm), top - (9.5 * mm), "MANUAL PAYMENT")
+    pdf.setFont(regular_font, 9)
+    pdf.drawRightString(right, top - (24 * mm), payment_date)
 
-    y = top - (34 * mm)
+    info_top = top - (40 * mm)
+    info_height = 54 * mm
+    info_width = right - left
+    content_x = left + (6 * mm)
+    content_width = info_width - (12 * mm)
+    column_gap = 10 * mm
+    column_width = (content_width - column_gap) / 2
+    right_column_x = content_x + column_width + column_gap
+
+    pdf.setFillColor(brand_surface_warm)
+    pdf.setStrokeColor(border_color)
+    pdf.setLineWidth(1)
+    pdf.roundRect(left, info_top - info_height, info_width, info_height, 4 * mm, fill=1, stroke=1)
+    pdf.setStrokeColor(brand_yellow)
+    pdf.setLineWidth(2)
+    pdf.line(left + (6 * mm), info_top - (6 * mm), right - (6 * mm), info_top - (6 * mm))
+
     pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(left, y, "Invoice Information")
+    pdf.setFont(bold_font, 11)
+    pdf.drawString(content_x, info_top - (11 * mm), "Invoice Details")
 
-    y -= 8 * mm
-    pdf.setFillColor(brand_soft)
-    pdf.roundRect(left, y - (30 * mm), right - left, 30 * mm, 2 * mm, fill=1, stroke=0)
+    row_one_y = info_top - (18 * mm)
+    row_two_y = info_top - (31 * mm)
+    row_three_y = info_top - (44 * mm)
+    draw_field(content_x, row_one_y, "Invoice No", invoice_no, column_width)
+    draw_field(right_column_x, row_one_y, "Payment Date", payment_date, column_width, value_font=regular_font)
+    draw_field(content_x, row_two_y, "Member", member_name, column_width)
+    draw_field(
+        right_column_x,
+        row_two_y,
+        "Generated By",
+        generated_by_name,
+        column_width,
+        value_font=regular_font,
+        value_size=9.5,
+        max_lines=1,
+    )
+    draw_field(content_x, row_three_y, "Contact", member_phone, column_width, value_font=regular_font)
+    draw_field(right_column_x, row_three_y, "Package", package_name, column_width, value_font=regular_font, max_lines=1)
 
+    summary_top = info_top - info_height - (12 * mm)
+    pdf.setFillColor(text_main)
+    pdf.setFont(bold_font, 11)
+    pdf.drawString(left, summary_top, "Charge Summary")
+
+    table_top = summary_top - (6 * mm)
+    table_width = right - left
+    item_col = 72 * mm
+    method_col = 36 * mm
+    status_col = 34 * mm
+    amount_col = table_width - item_col - method_col - status_col
+    col_one_end = left + item_col
+    col_two_end = col_one_end + method_col
+    col_three_end = col_two_end + status_col
+    header_height = 10 * mm
+    row_line_height = 4.2 * mm
+
+    item_lines = _pdf_wrap_text(pdf, payment_item, item_col - (8 * mm), bold_font, 10, max_lines=2)
+    method_lines = _pdf_wrap_text(pdf, payment_method, method_col - (6 * mm), regular_font, 9.5, max_lines=2)
+    status_lines = _pdf_wrap_text(pdf, payment_status, status_col - (6 * mm), bold_font, 9.5, max_lines=2)
+    body_line_count = max(len(item_lines), len(method_lines), len(status_lines), 1)
+    body_height = max(15 * mm, (body_line_count * row_line_height) + (6 * mm))
+    total_height = 11 * mm
+    table_height = header_height + body_height + total_height
+    table_bottom = table_top - table_height
+    body_bottom = table_top - header_height - body_height
+
+    pdf.setFillColor(brand_surface)
+    pdf.setStrokeColor(border_color)
+    pdf.setLineWidth(1)
+    pdf.roundRect(left, table_bottom, table_width, table_height, 4 * mm, fill=1, stroke=1)
+
+    pdf.setFillColor(brand_black)
+    pdf.roundRect(left, table_top - header_height, table_width, header_height, 4 * mm, fill=1, stroke=0)
+    pdf.setFillColor(colors.white)
+    pdf.setFont(bold_font, 9)
+    pdf.drawString(left + (4 * mm), table_top - (6.5 * mm), "Item")
+    pdf.drawString(col_one_end + (3 * mm), table_top - (6.5 * mm), "Method")
+    pdf.drawString(col_two_end + (3 * mm), table_top - (6.5 * mm), "Status")
+    pdf.drawRightString(right - (4 * mm), table_top - (6.5 * mm), "Amount")
+
+    pdf.setStrokeColor(border_color)
+    pdf.line(left, table_top - header_height, right, table_top - header_height)
+    pdf.line(left, body_bottom, right, body_bottom)
+    pdf.line(col_one_end, table_top - header_height, col_one_end, body_bottom)
+    pdf.line(col_two_end, table_top - header_height, col_two_end, body_bottom)
+    pdf.line(col_three_end, table_top - header_height, col_three_end, body_bottom)
+
+    body_text_top = table_top - header_height - (4.5 * mm)
+    _pdf_draw_lines(pdf, left + (4 * mm), body_text_top, item_lines, bold_font, 10, text_main, row_line_height)
+    _pdf_draw_lines(pdf, col_one_end + (3 * mm), body_text_top, method_lines, regular_font, 9.5, text_main, row_line_height)
+    _pdf_draw_lines(pdf, col_two_end + (3 * mm), body_text_top, status_lines, bold_font, 9.5, text_main, row_line_height)
+    pdf.setFillColor(text_main)
+    pdf.setFont(bold_font, 10)
+    pdf.drawRightString(
+        right - (4 * mm),
+        body_text_top,
+        _pdf_shorten_text(pdf, amount, amount_col - (5 * mm), bold_font, 10),
+    )
+
+    pdf.setFillColor(brand_yellow_soft)
+    pdf.rect(left, table_bottom, table_width, total_height, fill=1, stroke=0)
+    pdf.setFillColor(brand_black)
+    pdf.setFont(bold_font, 11)
+    pdf.drawString(left + (4 * mm), table_bottom + (4 * mm), "Total")
+    pdf.drawRightString(right - (4 * mm), table_bottom + (4 * mm), amount)
+
+    notes_top = table_bottom - (12 * mm)
+    notes_width = right - left
+    notes_lines = _pdf_wrap_text(pdf, notes, notes_width - (12 * mm), regular_font, 10, max_lines=4)
+    notes_height = max(24 * mm, (len(notes_lines) * (4.6 * mm)) + (12 * mm))
+
+    pdf.setFillColor(brand_surface_warm)
+    pdf.setStrokeColor(border_color)
+    pdf.roundRect(left, notes_top - notes_height, notes_width, notes_height, 4 * mm, fill=1, stroke=1)
     pdf.setFillColor(text_muted)
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(left + (4 * mm), y - (5 * mm), "Invoice No")
-    pdf.drawString(left + (72 * mm), y - (5 * mm), "Date")
-    pdf.drawString(left + (125 * mm), y - (5 * mm), "Generated By")
+    pdf.setFont(regular_font, 8.5)
+    pdf.drawString(left + (6 * mm), notes_top - (7 * mm), "NOTES")
+    _pdf_draw_lines(pdf, left + (6 * mm), notes_top - (12.5 * mm), notes_lines, regular_font, 10, text_main, 4.6 * mm)
 
-    pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawString(left + (4 * mm), y - (11 * mm), invoice_no)
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(left + (72 * mm), y - (11 * mm), payment_date)
-    pdf.drawString(left + (125 * mm), y - (11 * mm), generated_by)
-
-    pdf.setFillColor(text_muted)
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(left + (4 * mm), y - (21 * mm), "Member")
-    pdf.drawString(left + (72 * mm), y - (21 * mm), "Contact")
-    pdf.drawString(left + (125 * mm), y - (21 * mm), "Package")
-
-    pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawString(left + (4 * mm), y - (27 * mm), member.full_name)
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(left + (72 * mm), y - (27 * mm), member.phone_number)
-    pdf.drawString(left + (125 * mm), y - (27 * mm), package_name)
-
-    y -= 44 * mm
-    pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(left, y, "Charge Summary")
-
-    y -= 6 * mm
-    table_h = 26 * mm
-    pdf.setStrokeColor(colors.HexColor("#CBD5E1"))
-    pdf.roundRect(left, y - table_h, right - left, table_h, 2 * mm, fill=0, stroke=1)
-
-    pdf.setFillColor(text_muted)
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(left + (4 * mm), y - (5 * mm), "Item")
-    pdf.drawString(left + (95 * mm), y - (5 * mm), "Method")
-    pdf.drawString(left + (125 * mm), y - (5 * mm), "Status")
-    pdf.drawRightString(right - (4 * mm), y - (5 * mm), "Amount")
-
-    pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawString(left + (4 * mm), y - (12 * mm), payment.get_payment_type_display())
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(left + (95 * mm), y - (12 * mm), payment.get_payment_method_display())
-    pdf.drawString(left + (125 * mm), y - (12 * mm), payment.get_payment_status_display())
-    pdf.drawRightString(right - (4 * mm), y - (12 * mm), amount)
-
-    pdf.setStrokeColor(colors.HexColor("#E2E8F0"))
-    pdf.line(left + (4 * mm), y - (16 * mm), right - (4 * mm), y - (16 * mm))
-    pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(left + (4 * mm), y - (23 * mm), "Total")
-    pdf.drawRightString(right - (4 * mm), y - (23 * mm), amount)
-
-    y -= 36 * mm
-    pdf.setFillColor(text_muted)
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(left, y, "Notes")
-    pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica", 10)
-    notes = payment.note or "No additional notes."
-    pdf.drawString(left, y - (5 * mm), notes[:110])
-
-    pdf.setFillColor(brand_soft)
-    pdf.rect(0, 0, width, 20 * mm, fill=1, stroke=0)
-    pdf.setFillColor(text_muted)
-    pdf.setFont("Helvetica", 9)
-    pdf.drawCentredString(width / 2, 8 * mm, "Thank you for your payment. This invoice is system-generated.")
+    pdf.setFillColor(brand_black)
+    pdf.rect(0, 0, width, 18 * mm, fill=1, stroke=0)
+    pdf.setFillColor(brand_yellow)
+    pdf.rect(0, 18 * mm, width, 2 * mm, fill=1, stroke=0)
+    pdf.setFillColor(colors.white)
+    pdf.setFont(regular_font, 9)
+    pdf.drawCentredString(width / 2, 7.5 * mm, "Thank you for your payment. This invoice is system-generated.")
 
     pdf.showPage()
     pdf.save()
@@ -478,14 +699,17 @@ def _render_subscription_invoice_pdf(invoice, generated_by: str) -> bytes:
     top = height - (20 * mm)
 
     invoice_ref = f"SUB-{invoice.id:06d}"
-    tenant_name = invoice.tenant.name if invoice.tenant else "—"
-    package_name = invoice.package_name or invoice.package_slug or "—"
+    tenant_name = _pdf_clean_text(invoice.tenant.name if invoice.tenant else "-")
+    package_name = _pdf_clean_text(invoice.package_name or invoice.package_slug or "-")
     amount_str = f"{invoice.currency} {invoice.amount:,.2f}"
     created_at = timezone.localtime(invoice.created_at).strftime("%d %b %Y, %I:%M %p")
+    generated_by_name = _pdf_clean_text(generated_by or "System")
+    gateway_label = _pdf_clean_text(invoice.gateway_slug)
+    transaction_id = _pdf_clean_text(invoice.tran_id)
 
     def fmt_dt(dt):
         if dt is None:
-            return "—"
+            return "-"
         return timezone.localtime(dt).strftime("%d %b %Y")
 
     period = f"{fmt_dt(invoice.period_start)} – {fmt_dt(invoice.period_end)}"
@@ -498,106 +722,194 @@ def _render_subscription_invoice_pdf(invoice, generated_by: str) -> bytes:
         TenantSubscriptionInvoice.STATUS_TRIAL: "Trial",
     }.get(invoice.status, invoice.status.title())
 
+    regular_font, bold_font = _get_invoice_fonts()
+
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
 
-    brand_primary = colors.HexColor("#0F172A")
-    brand_accent = colors.HexColor("#0EA5E9")
-    brand_soft = colors.HexColor("#F1F5F9")
-    text_main = colors.HexColor("#111827")
-    text_muted = colors.HexColor("#64748B")
+    brand_black = colors.HexColor("#101010")
+    brand_yellow = colors.HexColor("#FFC733")
+    brand_yellow_soft = colors.HexColor("#FFF3C4")
+    brand_surface = colors.white
+    brand_surface_warm = colors.HexColor("#FFF9EE")
+    border_color = colors.HexColor("#E8D39A")
+    text_main = colors.HexColor("#171717")
+    text_muted = colors.HexColor("#6B6558")
 
-    # Header bar
-    pdf.setFillColor(brand_primary)
-    pdf.rect(0, height - (42 * mm), width, 42 * mm, fill=1, stroke=0)
+    def draw_field(
+        x,
+        top_y,
+        label,
+        value,
+        block_width,
+        value_font=None,
+        value_size=9.6,
+        max_lines=1,
+    ):
+        current_value_font = value_font or bold_font
+        pdf.setFillColor(text_muted)
+        pdf.setFont(regular_font, 8.4)
+        pdf.drawString(x, top_y, label.upper())
+        lines = _pdf_wrap_text(pdf, value, block_width, current_value_font, value_size, max_lines=max_lines)
+        _pdf_draw_lines(
+            pdf,
+            x,
+            top_y - (4.8 * mm),
+            lines,
+            current_value_font,
+            value_size,
+            text_main,
+            4.2 * mm,
+        )
+
+    pdf.setFillColor(brand_surface)
+    pdf.rect(0, 0, width, height, fill=1, stroke=0)
+
+    pdf.setFillColor(brand_black)
+    pdf.rect(0, height - (48 * mm), width, 48 * mm, fill=1, stroke=0)
+    pdf.setFillColor(brand_yellow)
+    pdf.rect(0, height - (6 * mm), width, 6 * mm, fill=1, stroke=0)
+
     pdf.setFillColor(colors.white)
-    pdf.setFont("Helvetica-Bold", 21)
-    pdf.drawString(left, top - (4 * mm), "Fitssort")
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(left, top - (11 * mm), "Subscription Invoice")
+    pdf.setFont(bold_font, 22)
+    pdf.drawString(
+        left,
+        top - (8 * mm),
+        _pdf_shorten_text(pdf, tenant_name, right - left - (72 * mm), bold_font, 22),
+    )
+    pdf.setFont(regular_font, 10)
+    pdf.drawString(left, top - (15 * mm), "Subscription Invoice")
+    pdf.setFont(regular_font, 9)
+    pdf.drawString(left, top - (22 * mm), invoice_ref)
 
-    # Badge
-    pdf.setFillColor(brand_accent)
-    pdf.roundRect(right - (62 * mm), top - (16 * mm), 62 * mm, 11 * mm, 3 * mm, fill=1, stroke=0)
+    badge_x = right - (62 * mm)
+    pdf.setFillColor(brand_yellow)
+    pdf.roundRect(badge_x, top - (18 * mm), 62 * mm, 12 * mm, 3 * mm, fill=1, stroke=0)
+    pdf.setFillColor(brand_black)
+    pdf.setFont(bold_font, 10)
+    pdf.drawCentredString(badge_x + (31 * mm), top - (10.8 * mm), "SUBSCRIPTION PAYMENT")
     pdf.setFillColor(colors.white)
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawCentredString(right - (31 * mm), top - (9.5 * mm), "SUBSCRIPTION PAYMENT")
+    pdf.setFont(regular_font, 9)
+    pdf.drawRightString(right, top - (24 * mm), created_at)
 
-    # Invoice info block
-    y = top - (34 * mm)
-    pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(left, y, "Invoice Information")
+    info_top = top - (40 * mm)
+    info_height = 54 * mm
+    info_width = right - left
+    content_x = left + (6 * mm)
+    content_width = info_width - (12 * mm)
+    column_gap = 10 * mm
+    column_width = (content_width - column_gap) / 2
+    right_column_x = content_x + column_width + column_gap
 
-    y -= 8 * mm
-    pdf.setFillColor(brand_soft)
-    pdf.roundRect(left, y - (30 * mm), right - left, 30 * mm, 2 * mm, fill=1, stroke=0)
-
-    pdf.setFillColor(text_muted)
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(left + (4 * mm), y - (5 * mm), "Invoice Ref")
-    pdf.drawString(left + (72 * mm), y - (5 * mm), "Date")
-    pdf.drawString(left + (125 * mm), y - (5 * mm), "Generated By")
-
-    pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawString(left + (4 * mm), y - (11 * mm), invoice_ref)
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(left + (72 * mm), y - (11 * mm), created_at)
-    pdf.drawString(left + (125 * mm), y - (11 * mm), generated_by)
-
-    pdf.setFillColor(text_muted)
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(left + (4 * mm), y - (21 * mm), "Tenant / Gym")
-    pdf.drawString(left + (72 * mm), y - (21 * mm), "Transaction ID")
-    pdf.drawString(left + (125 * mm), y - (21 * mm), "Gateway")
+    pdf.setFillColor(brand_surface_warm)
+    pdf.setStrokeColor(border_color)
+    pdf.setLineWidth(1)
+    pdf.roundRect(left, info_top - info_height, info_width, info_height, 4 * mm, fill=1, stroke=1)
+    pdf.setStrokeColor(brand_yellow)
+    pdf.setLineWidth(2)
+    pdf.line(left + (6 * mm), info_top - (6 * mm), right - (6 * mm), info_top - (6 * mm))
 
     pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawString(left + (4 * mm), y - (27 * mm), tenant_name)
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(left + (72 * mm), y - (27 * mm), invoice.tran_id or "—")
-    pdf.drawString(left + (125 * mm), y - (27 * mm), invoice.gateway_slug or "—")
+    pdf.setFont(bold_font, 11)
+    pdf.drawString(content_x, info_top - (11 * mm), "Invoice Details")
 
-    # Charge summary
-    y -= 44 * mm
+    row_one_y = info_top - (18 * mm)
+    row_two_y = info_top - (31 * mm)
+    row_three_y = info_top - (44 * mm)
+
+    draw_field(content_x, row_one_y, "Invoice Ref", invoice_ref, column_width)
+    draw_field(right_column_x, row_one_y, "Date", created_at, column_width, value_font=regular_font)
+    draw_field(content_x, row_two_y, "Tenant / Gym", tenant_name, column_width)
+    draw_field(
+        right_column_x,
+        row_two_y,
+        "Generated By",
+        generated_by_name,
+        column_width,
+        value_font=regular_font,
+        max_lines=1,
+    )
+    draw_field(content_x, row_three_y, "Gateway", gateway_label, column_width, value_font=regular_font)
+    draw_field(right_column_x, row_three_y, "Transaction ID", transaction_id, column_width, value_font=regular_font)
+
+    summary_top = info_top - info_height - (12 * mm)
     pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(left, y, "Charge Summary")
+    pdf.setFont(bold_font, 11)
+    pdf.drawString(left, summary_top, "Charge Summary")
 
-    y -= 6 * mm
-    table_h = 26 * mm
-    pdf.setStrokeColor(colors.HexColor("#CBD5E1"))
-    pdf.roundRect(left, y - table_h, right - left, table_h, 2 * mm, fill=0, stroke=1)
+    table_top = summary_top - (6 * mm)
+    table_width = right - left
+    package_col = 54 * mm
+    period_col = 56 * mm
+    status_col = 24 * mm
+    amount_col = table_width - package_col - period_col - status_col
+    col_one_end = left + package_col
+    col_two_end = col_one_end + period_col
+    col_three_end = col_two_end + status_col
+    header_height = 10 * mm
+    row_line_height = 4.2 * mm
 
-    pdf.setFillColor(text_muted)
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(left + (4 * mm), y - (5 * mm), "Package")
-    pdf.drawString(left + (95 * mm), y - (5 * mm), "Period")
-    pdf.drawString(left + (145 * mm), y - (5 * mm), "Status")
-    pdf.drawRightString(right - (4 * mm), y - (5 * mm), "Amount")
+    package_lines = _pdf_wrap_text(pdf, package_name, package_col - (8 * mm), bold_font, 10, max_lines=2)
+    period_lines = _pdf_wrap_text(pdf, period, period_col - (6 * mm), regular_font, 9.4, max_lines=2)
+    status_lines = _pdf_wrap_text(pdf, status_label, status_col - (6 * mm), bold_font, 9.4, max_lines=2)
+    body_line_count = max(len(package_lines), len(period_lines), len(status_lines), 1)
+    body_height = max(15 * mm, (body_line_count * row_line_height) + (6 * mm))
+    total_height = 11 * mm
+    table_height = header_height + body_height + total_height
+    table_bottom = table_top - table_height
+    body_bottom = table_top - header_height - body_height
 
+    pdf.setFillColor(brand_surface)
+    pdf.setStrokeColor(border_color)
+    pdf.setLineWidth(1)
+    pdf.roundRect(left, table_bottom, table_width, table_height, 4 * mm, fill=1, stroke=1)
+
+    pdf.setFillColor(brand_black)
+    pdf.roundRect(left, table_top - header_height, table_width, header_height, 4 * mm, fill=1, stroke=0)
+    pdf.setFillColor(colors.white)
+    pdf.setFont(bold_font, 9)
+    pdf.drawString(left + (4 * mm), table_top - (6.5 * mm), "Package")
+    pdf.drawString(col_one_end + (3 * mm), table_top - (6.5 * mm), "Period")
+    pdf.drawString(col_two_end + (3 * mm), table_top - (6.5 * mm), "Status")
+    pdf.drawRightString(right - (4 * mm), table_top - (6.5 * mm), "Amount")
+
+    pdf.setStrokeColor(border_color)
+    pdf.line(left, table_top - header_height, right, table_top - header_height)
+    pdf.line(left, body_bottom, right, body_bottom)
+    pdf.line(col_one_end, table_top - header_height, col_one_end, body_bottom)
+    pdf.line(col_two_end, table_top - header_height, col_two_end, body_bottom)
+    pdf.line(col_three_end, table_top - header_height, col_three_end, body_bottom)
+
+    body_text_top = table_top - header_height - (4.5 * mm)
+    _pdf_draw_lines(pdf, left + (4 * mm), body_text_top, package_lines, bold_font, 10, text_main, row_line_height)
+    _pdf_draw_lines(pdf, col_one_end + (3 * mm), body_text_top, period_lines, regular_font, 9.4, text_main, row_line_height)
+    _pdf_draw_lines(pdf, col_two_end + (3 * mm), body_text_top, status_lines, bold_font, 9.4, text_main, row_line_height)
     pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawString(left + (4 * mm), y - (12 * mm), package_name)
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(left + (95 * mm), y - (12 * mm), period)
-    pdf.drawString(left + (145 * mm), y - (12 * mm), status_label)
-    pdf.drawRightString(right - (4 * mm), y - (12 * mm), amount_str)
+    pdf.setFont(bold_font, 10)
+    pdf.drawRightString(
+        right - (4 * mm),
+        body_text_top,
+        _pdf_shorten_text(pdf, amount_str, amount_col - (5 * mm), bold_font, 10),
+    )
 
-    pdf.setStrokeColor(colors.HexColor("#E2E8F0"))
-    pdf.line(left + (4 * mm), y - (16 * mm), right - (4 * mm), y - (16 * mm))
-    pdf.setFillColor(text_main)
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(left + (4 * mm), y - (23 * mm), "Total")
-    pdf.drawRightString(right - (4 * mm), y - (23 * mm), amount_str)
+    pdf.setFillColor(brand_yellow_soft)
+    pdf.rect(left, table_bottom, table_width, total_height, fill=1, stroke=0)
+    pdf.setFillColor(brand_black)
+    pdf.setFont(bold_font, 11)
+    pdf.drawString(left + (4 * mm), table_bottom + (4 * mm), "Total")
+    pdf.drawRightString(right - (4 * mm), table_bottom + (4 * mm), amount_str)
 
-    # Footer
-    pdf.setFillColor(brand_soft)
-    pdf.rect(0, 0, width, 20 * mm, fill=1, stroke=0)
-    pdf.setFillColor(text_muted)
-    pdf.setFont("Helvetica", 9)
-    pdf.drawCentredString(width / 2, 8 * mm, "This is a system-generated subscription invoice. Thank you for your business.")
+    pdf.setFillColor(brand_black)
+    pdf.rect(0, 0, width, 18 * mm, fill=1, stroke=0)
+    pdf.setFillColor(brand_yellow)
+    pdf.rect(0, 18 * mm, width, 2 * mm, fill=1, stroke=0)
+    pdf.setFillColor(colors.white)
+    pdf.setFont(regular_font, 9)
+    pdf.drawCentredString(
+        width / 2,
+        7.5 * mm,
+        "This is a system-generated subscription invoice. Thank you for choosing Fitssort.",
+    )
 
     pdf.showPage()
     pdf.save()
