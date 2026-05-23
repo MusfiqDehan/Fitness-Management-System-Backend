@@ -740,6 +740,30 @@ class CompleteTrainerRegistrationAPIView(APIView):
         serializer = CompleteTrainerRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         profile = serializer.save()
+
+        try:
+            from apps.reminder.utils import create_notification
+            # Broadcast to admins: a new trainer joined
+            create_notification(
+                notification_type='trainer_onboarded',
+                title=f'New trainer joined: {profile.user.full_name or profile.username}',
+                actor_name=profile.user.full_name or '',
+                actor_email=profile.user.email or '',
+                target_type='trainer',
+                target_id=str(profile.id),
+            )
+            # Personal to the new trainer: welcome message
+            create_notification(
+                notification_type='welcome_trainer',
+                title=f'Welcome to the team, {profile.user.full_name or profile.username}!',
+                message='Your trainer profile is ready. Start adding your classes and schedules.',
+                recipient=profile.user,
+                target_type='trainer',
+                target_id=str(profile.id),
+            )
+        except Exception:
+            pass  # Notifications are best-effort
+
         return Response({
             'message': 'Registration completed successfully',
             'trainer_id': profile.id,
