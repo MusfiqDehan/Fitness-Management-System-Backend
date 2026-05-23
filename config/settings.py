@@ -79,6 +79,7 @@ SHARED_APPS = [
     'corsheaders',
     'drf_spectacular',
     'apps.crm.apps.CrmConfig',
+    'apps.reminder.apps.ReminderConfig',
 ]
 
 # Apps whose tables are replicated inside EACH tenant schema
