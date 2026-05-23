@@ -175,6 +175,7 @@ class Payment(BaseModel):
         ('card', 'Card'),
         ('cash', 'Cash'),
         ('bank_transfer', 'Bank Transfer'),
+        ('sslcommerz', 'SSLCommerz'),
         ('other', 'Other'),
     )
 
