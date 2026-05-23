@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.core import mail
 from django.test import override_settings
 from django.utils import timezone
@@ -13,6 +15,7 @@ from .models import (
 	EmailQueue,
 	Feature,
 	Invitation,
+	PaymentGateway,
 	PlatformPackage,
 	PlatformPackageFeature,
 	Tenant,
@@ -595,3 +598,69 @@ class TenancyApiTests(APITestCase):
 		self.assertEqual(second_res.data["message"], "Password was already configured successfully.")
 		self.assertEqual(second_res.data["tenant_domain"], "retrygym.testserver")
 		self.assertEqual(second_res.data["login_url"], "http://retrygym.localhost:5173/Login")
+
+	@patch("apps.billing.services.get_gateway")
+	def test_password_setup_platform_invitation_growth_returns_payment_redirect(self, mock_get_gateway):
+		class _FakeGateway:
+			def initiate(self, transaction):
+				return {
+					"gateway_url": "https://sandbox.sslcommerz.com/EasyCheckout/test-session",
+					"raw": {"status": "SUCCESS"},
+				}
+
+		mock_get_gateway.return_value = _FakeGateway()
+
+		with schema_context("public"):
+			PlatformPackage.objects.create(
+				slug="growth",
+				name="Growth",
+				description="Growth",
+				price_monthly="3490.00",
+				price_yearly="33504.00",
+				max_users=300,
+				max_branches=3,
+				trial_days=0,
+				is_active=True,
+				is_public=True,
+				highlight=True,
+				sort_order=2,
+			)
+			PaymentGateway.objects.create(
+				slug="sslcommerz",
+				name="SSLCommerz",
+				is_enabled_for_tenants=True,
+				platform_credentials={"store_id": "demo", "store_password": "demo"},
+				is_sandbox=True,
+				is_default_for_subscriptions=True,
+			)
+
+		raw_token, _ = Invitation.issue_token(
+			token_type=Invitation.TOKEN_TYPE_INVITATION,
+			email="owner@growth.test",
+			subdomain="growthgym",
+			company_name="Growth Gym",
+			ttl_minutes=30,
+			metadata={
+				"domain": "growthgym.testserver",
+				"plan": "growth",
+				"max_users": 300,
+				"max_branches": 3,
+			},
+		)
+
+		res = self.client.post(
+			"/api/v1/tenancy/password/setup/",
+			{
+				"token": raw_token,
+				"password": "Test@1234",
+				"confirm_password": "Test@1234",
+			},
+			format="json",
+			HTTP_HOST="testserver",
+		)
+
+		self.assertEqual(res.status_code, status.HTTP_200_OK)
+		self.assertTrue(res.data.get("payment_required"))
+		self.assertTrue((res.data.get("payment_url") or "").startswith("https://sandbox.sslcommerz.com/"))
+		self.assertFalse(res.data.get("is_trial"))
+		self.assertEqual(res.data.get("trial_days"), 0)
