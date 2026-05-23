@@ -118,3 +118,29 @@ Before starting production containers, make sure the external Docker network ref
 - The backend uses `daphne` as the ASGI server.
 - The app is multi-tenant, so tenant and domain settings must be configured before deployment.
 - Static and media volumes are mounted separately in production.
+
+
+## Paymnent Integration Testing
+
+Sandbox Environment
+
+All the transaction made using this environment are counted as test transaction and has no effect with accounting, URL starts with https://sandbox.sslcommerz.com.
+
+Test Credit Card Account Numbers
+
+VISA:
+
+Card Number: 4111111111111111
+Exp: 12/26
+CVV: 111
+Mastercard:
+
+Card Number: 5111111111111111
+Exp: 12/26
+CVV: 111
+American Express:
+
+Card Number: 371111111111111
+Exp: 12/26
+CVV: 111
+Mobile OTP: 111111 or 123456
