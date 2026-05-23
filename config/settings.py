@@ -192,6 +192,11 @@ TENANT_FRONTEND_BASE_DOMAIN = os.environ.get('TENANT_FRONTEND_BASE_DOMAIN', TENA
 TENANT_FRONTEND_SCHEME = os.environ.get('TENANT_FRONTEND_SCHEME', 'http' if DEBUG else 'https').strip().lower() or ('http' if DEBUG else 'https')
 TENANT_FRONTEND_PORT = os.environ.get('TENANT_FRONTEND_PORT', '').strip()
 TENANT_ONBOARDING_LINKS_PUBLIC = os.environ.get('TENANT_ONBOARDING_LINKS_PUBLIC', 'false').lower() in ('true', '1')
+# Public URL of this backend used to build payment-gateway callback URLs.
+# Must be the real Django port — NOT the Vite proxy port.
+# Local dev default: http://localhost:8021
+# Production: set BACKEND_BASE_URL=https://api.yourdomain.com in .env.prod
+BACKEND_BASE_URL = os.environ.get('BACKEND_BASE_URL', 'http://localhost:8021').strip().rstrip('/')
 
 ROOT_URLCONF = 'config.urls'
 
