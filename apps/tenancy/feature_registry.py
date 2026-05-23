@@ -97,11 +97,16 @@ PLATFORM_REGISTRY: list[RegistryItem] = [
                 "route": None,
                 "icon": "LifeBuoy",
             },
-            {
-                "key": "platform.billing",
+            {"key": "platform.billing",
                 "name": "Platform Billing",
-                "route": None,
+                "route": "/platform/billing",
                 "icon": "CreditCard",
+            },
+            {
+                "key": "platform.payments",
+                "name": "Platform Payments",
+                "route": "/platform/payments",
+                "icon": "ReceiptText",
             },
             {
                 "key": "platform.tenant_management",
@@ -136,10 +141,11 @@ TENANT_REGISTRY: list[RegistryItem] = [
     {
         "group": "Finance",
         "children": [
-            {"key": "payments",          "name": "Payments",  "route": "/payments",  "icon": "CreditCard"},
-            {"key": "payments.invoices", "name": "Invoices",  "route": None,         "icon": "FileText"},
-            {"key": "members.packages",  "name": "Packages",  "route": "/packages",  "icon": "Boxes"},
-            {"key": "reminders",         "name": "Reminders", "route": "/reminders", "icon": "Bell"},
+            {"key": "payments",          "name": "Payments",         "route": "/payments",         "icon": "CreditCard"},
+            {"key": "payments.invoices", "name": "Invoices",          "route": None,                "icon": "FileText"},
+            {"key": "payments.gateways", "name": "Payment Gateways",  "route": "/payment-gateways", "icon": "Landmark"},
+            {"key": "members.packages",  "name": "Packages",          "route": "/packages",         "icon": "Boxes"},
+            {"key": "reminders",         "name": "Reminders",         "route": "/reminders",        "icon": "Bell"},
         ],
     },
     {
