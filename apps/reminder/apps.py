@@ -2,4 +2,7 @@ from django.apps import AppConfig
 
 
 class ReminderConfig(AppConfig):
-    name = 'reminder'
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.reminder'
+    label = 'reminder'
+    verbose_name = 'Reminder'
