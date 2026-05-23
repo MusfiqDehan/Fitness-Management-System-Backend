@@ -264,7 +264,35 @@ class ScheduleBookingCreateSerializer(serializers.Serializer):
         # Update participant count
         schedule.current_participants += 1
         schedule.save(update_fields=['current_participants'])
-        
+
+        # Send targeted notifications to the booking member and the trainer.
+        try:
+            from apps.reminder.utils import create_notification
+            member_user = self.context['request'].user
+            trainer_user = schedule.trainer.user
+            class_name = schedule.trainer_class.name
+            member_display = member_user.full_name or member.full_name or member_user.email
+            create_notification(
+                notification_type='class_booking_confirmed',
+                title=f'Booking confirmed: {class_name}',
+                message=f'Your spot in "{class_name}" on {schedule.scheduled_date} has been reserved.',
+                actor_name=trainer_user.full_name or '',
+                recipient=member_user,
+                target_type='booking',
+                target_id=str(booking.id),
+            )
+            create_notification(
+                notification_type='new_booking_received',
+                title=f'New booking for {class_name}',
+                message=f'{member_display} has booked your session on {schedule.scheduled_date}.',
+                actor_name=member_display,
+                recipient=trainer_user,
+                target_type='booking',
+                target_id=str(booking.id),
+            )
+        except Exception:
+            pass  # Notifications are best-effort
+
         return booking
 
 
