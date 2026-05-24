@@ -16,6 +16,7 @@ from functools import lru_cache
 from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db import transaction
@@ -23,7 +24,7 @@ from django.db.models import Count, Sum, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
-from django_tenants.utils import schema_context
+from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework import status
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.permissions import AllowAny
@@ -1369,7 +1370,46 @@ class TenantGatewayConfigView(ModelCRUDView):
                 {"detail": f"Gateway '{slug}' is not enabled by the platform."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Upsert by slug so tenant admins can safely re-save credentials.
+        existing = TenantPaymentGateway.objects.filter(gateway_slug=slug).first()
+        if existing is not None:
+            serializer = self.get_serializer(existing, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            instance = serializer.save()
+            return Response(self.get_serializer(instance).data, status=status.HTTP_200_OK)
+
         return super().post(request, *args, **kwargs)
+
+
+def _is_gateway_credentials_complete(gateway: PaymentGateway, credentials: dict) -> bool:
+    required_keys = [
+        field.get("key")
+        for field in (gateway.config_schema or [])
+        if field.get("required") and field.get("key")
+    ]
+    return all(str((credentials or {}).get(key, "")).strip() for key in required_keys)
+
+
+def _build_tenant_backend_base_url(request) -> str:
+    """Build a tenant callback base URL using tenant domain and backend scheme/port."""
+    fallback = request.build_absolute_uri("/").rstrip("/")
+    tenant = getattr(request, "tenant", None)
+    if tenant is None:
+        return fallback
+
+    primary_domain = tenant.domains.filter(is_primary=True).values_list("domain", flat=True).first()
+    if not primary_domain:
+        return fallback
+
+    backend_base = (getattr(settings, "BACKEND_BASE_URL", "") or "").strip().rstrip("/")
+    if not backend_base:
+        return f"{request.scheme}://{primary_domain}"
+
+    parsed = urlparse(backend_base)
+    scheme = parsed.scheme or request.scheme
+    port_suffix = f":{parsed.port}" if parsed.port and ":" not in primary_domain else ""
+    return f"{scheme}://{primary_domain}{port_suffix}"
 
 
 # ===============================================================
@@ -1388,19 +1428,29 @@ class AvailableGatewaysView(APIView):
 
     def get(self, request):
         with schema_context("public"):
-            enabled = list(
+            enabled_gateways = list(
                 PaymentGateway.objects.filter(is_enabled_for_tenants=True)
-                .values("slug", "name")
                 .order_by("sort_order", "name")
             )
 
-        configured_slugs = set(
-            TenantPaymentGateway.objects.filter(is_active=True).values_list("gateway_slug", flat=True)
-        )
+        configured_rows = {
+            row.gateway_slug: row
+            for row in TenantPaymentGateway.objects.filter(is_active=True)
+        }
 
         result = [
-            {"slug": g["slug"], "name": g["name"], "is_configured": g["slug"] in configured_slugs}
-            for g in enabled
+            {
+                "slug": gateway.slug,
+                "name": gateway.name,
+                "is_configured": (
+                    gateway.slug in configured_rows
+                    and _is_gateway_credentials_complete(
+                        gateway,
+                        configured_rows[gateway.slug].credentials,
+                    )
+                ),
+            }
+            for gateway in enabled_gateways
         ]
         return Response(AvailableGatewaySerializer(result, many=True).data)
 
@@ -1439,10 +1489,40 @@ class PaymentInitiateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        with schema_context("public"):
+            gateway = PaymentGateway.objects.filter(
+                slug=gateway_slug,
+                is_enabled_for_tenants=True,
+            ).first()
+
+        if gateway is None:
+            return Response(
+                {"detail": f"Gateway '{gateway_slug}' is not enabled by the platform."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not _is_gateway_credentials_complete(gateway, tenant_gw.credentials):
+            required_keys = [
+                field.get("key")
+                for field in (gateway.config_schema or [])
+                if field.get("required") and field.get("key")
+            ]
+            missing_keys = [
+                key for key in required_keys
+                if not str((tenant_gw.credentials or {}).get(key, "")).strip()
+            ]
+            return Response(
+                {
+                    "detail": "Gateway credentials are incomplete for this gym.",
+                    "missing_fields": missing_keys,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         tran_id = f"TXN-{payment.id}-{uuid.uuid4().hex[:8].upper()}"
 
         # Build absolute callback URLs
-        base = request.build_absolute_uri("/").rstrip("/")
+        base = _build_tenant_backend_base_url(request)
         prefix = f"{base}/api/v1/billing/payments"
         success_url = f"{prefix}/success/"
         fail_url = f"{prefix}/fail/"
@@ -1496,12 +1576,10 @@ def _process_gateway_callback(tran_id: str, val_id: str, raw_amount: str) -> Pay
     """
     try:
         with transaction.atomic():
-            tx = (
-                PaymentTransaction.objects
-                .select_for_update()
-                .select_related("source_payment")
-                .get(tran_id=tran_id)
-            )
+            # Do not join nullable source_payment in a FOR UPDATE query,
+            # otherwise PostgreSQL raises NotSupportedError on outer joins.
+            tx = PaymentTransaction.objects.select_for_update().get(tran_id=tran_id)
+            existing_gateway_response = tx.gateway_response if isinstance(tx.gateway_response, dict) else {}
 
             # Idempotent: already resolved
             if tx.status in (PaymentTransaction.STATUS_SUCCESS, PaymentTransaction.STATUS_FAILED,
@@ -1543,22 +1621,77 @@ def _process_gateway_callback(tran_id: str, val_id: str, raw_amount: str) -> Pay
                 tx.status = PaymentTransaction.STATUS_SUCCESS
                 tx.val_id = val_id
                 tx.validated_at = timezone.now()
-                tx.gateway_response = validation
+                tx.gateway_response = {
+                    **existing_gateway_response,
+                    "validation": validation,
+                }
                 tx.save(update_fields=["status", "val_id", "validated_at", "gateway_response", "updated_at"])
 
-                if tx.source_payment:
-                    tx.source_payment.payment_status = Payment.STATUS_PAID
-                    tx.source_payment.is_paid = True
-                    tx.source_payment.save(update_fields=["payment_status", "is_paid", "updated_at"])
+                if tx.source_payment_id:
+                    payment = (
+                        Payment.objects
+                        .select_for_update()
+                        .filter(pk=tx.source_payment_id)
+                        .first()
+                    )
+                    if payment is not None:
+                        payment.payment_status = Payment.STATUS_PAID
+                        payment.is_paid = True
+                        payment.save(update_fields=["payment_status", "is_paid", "updated_at"])
             else:
                 tx.status = PaymentTransaction.STATUS_FAILED
-                tx.gateway_response = validation
+                tx.gateway_response = {
+                    **existing_gateway_response,
+                    "validation": validation,
+                }
                 tx.save(update_fields=["status", "gateway_response", "updated_at"])
 
     except PaymentTransaction.DoesNotExist:
         return None
 
     return tx
+
+
+def _request_value(request, key: str, default: str = "") -> str:
+    """Read callback params from either POST body or querystring."""
+    value = request.data.get(key)
+    if value in (None, ""):
+        value = request.query_params.get(key)
+    if value in (None, ""):
+        return default
+    return str(value)
+
+
+def _build_tenant_frontend_base_url(request) -> str:
+    """Build frontend base URL using tenant primary domain when available."""
+    tenant = getattr(request, "tenant", None)
+    if tenant is not None and getattr(tenant, "schema_name", "") != get_public_schema_name():
+        domain = tenant.domains.filter(is_primary=True).values_list("domain", flat=True).first()
+        if domain:
+            scheme = (getattr(settings, "TENANT_FRONTEND_SCHEME", "http") or "http").strip().lower()
+            port = str(getattr(settings, "TENANT_FRONTEND_PORT", "") or "").strip()
+            host = f"{domain}:{port}" if port and ":" not in domain else domain
+            return f"{scheme}://{host}".rstrip("/")
+
+    return (
+        getattr(settings, "FRONTEND_BASE_URL", "").strip().rstrip("/")
+        or getattr(settings, "PUBLIC_FRONTEND_URL", "").strip().rstrip("/")
+    )
+
+
+def _payment_result_redirect_url(request, tx: PaymentTransaction | None, outcome: str, tran_id: str) -> str:
+    frontend = _build_tenant_frontend_base_url(request)
+    public_frontend = getattr(settings, "PUBLIC_FRONTEND_URL", "").rstrip("/") or frontend
+
+    flow = ""
+    if tx is not None and isinstance(tx.gateway_response, dict):
+        flow = str(tx.gateway_response.get("flow", "")).strip().lower()
+
+    if flow == "public_member_signup" or tran_id.upper().startswith("PUBREG-"):
+        target_base = frontend or public_frontend
+        return f"{target_base}/register?payment_status={outcome}&tran_id={tran_id}"
+
+    return f"{frontend}/payments/{outcome}?tran_id={tran_id}"
 
 
 class PaymentIPNView(APIView):
@@ -1590,15 +1723,20 @@ class PaymentSuccessView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    def get(self, request):
+        return self._handle(request)
+
     def post(self, request):
-        tran_id = request.data.get("tran_id", "")
-        val_id = request.data.get("val_id", "")
-        raw_amount = request.data.get("amount", "0")
+        return self._handle(request)
 
-        _process_gateway_callback(tran_id, val_id, raw_amount)
+    def _handle(self, request):
+        tran_id = _request_value(request, "tran_id", "")
+        val_id = _request_value(request, "val_id", "")
+        raw_amount = _request_value(request, "amount", "0")
 
-        frontend = getattr(settings, "FRONTEND_BASE_URL", "").rstrip("/")
-        return redirect(f"{frontend}/payments/success?tran_id={tran_id}")
+        tx = _process_gateway_callback(tran_id, val_id, raw_amount)
+
+        return redirect(_payment_result_redirect_url(request, tx, "success", tran_id))
 
 
 class PaymentFailView(APIView):
@@ -1607,8 +1745,15 @@ class PaymentFailView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    def get(self, request):
+        return self._handle(request)
+
     def post(self, request):
-        tran_id = request.data.get("tran_id", "")
+        return self._handle(request)
+
+    def _handle(self, request):
+        tran_id = _request_value(request, "tran_id", "")
+        tx = None
 
         try:
             with transaction.atomic():
@@ -1619,8 +1764,7 @@ class PaymentFailView(APIView):
         except PaymentTransaction.DoesNotExist:
             pass
 
-        frontend = getattr(settings, "FRONTEND_BASE_URL", "").rstrip("/")
-        return redirect(f"{frontend}/payments/fail?tran_id={tran_id}")
+        return redirect(_payment_result_redirect_url(request, tx, "fail", tran_id))
 
 
 class PaymentCancelView(APIView):
@@ -1629,8 +1773,15 @@ class PaymentCancelView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    def get(self, request):
+        return self._handle(request)
+
     def post(self, request):
-        tran_id = request.data.get("tran_id", "")
+        return self._handle(request)
+
+    def _handle(self, request):
+        tran_id = _request_value(request, "tran_id", "")
+        tx = None
 
         try:
             with transaction.atomic():
@@ -1641,6 +1792,5 @@ class PaymentCancelView(APIView):
         except PaymentTransaction.DoesNotExist:
             pass
 
-        frontend = getattr(settings, "FRONTEND_BASE_URL", "").rstrip("/")
-        return redirect(f"{frontend}/payments/cancel?tran_id={tran_id}")
+        return redirect(_payment_result_redirect_url(request, tx, "cancel", tran_id))
 
