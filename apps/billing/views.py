@@ -272,7 +272,7 @@ def _render_payment_invoice_pdf(payment: Payment, tenant_name: str, generated_by
     pdf.roundRect(badge_x, top - (18 * mm), 58 * mm, 12 * mm, 3 * mm, fill=1, stroke=0)
     pdf.setFillColor(brand_black)
     pdf.setFont(bold_font, 10)
-    pdf.drawCentredString(badge_x + (29 * mm), top - (10.8 * mm), "MANUAL PAYMENT")
+    pdf.drawCentredString(badge_x + (29 * mm), top - (10.8 * mm), payment_method.upper())
     pdf.setFillColor(colors.white)
     pdf.setFont(regular_font, 9)
     pdf.drawRightString(right, top - (24 * mm), payment_date)
@@ -665,12 +665,6 @@ class PaymentInvoicePdfAPIView(APIView):
             Payment.objects.select_related('member', 'member__member_package'),
             pk=pk,
         )
-
-        if payment.payment_method != 'cash':
-            return Response(
-                {'detail': 'PDF invoice is available for manual (cash) payments only.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         tenant_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'Fithive Gym'
         generated_by = getattr(request.user, 'full_name', '') or getattr(request.user, 'email', 'System')
