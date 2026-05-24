@@ -421,6 +421,10 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
+    # Strip the common /api/v1 prefix before deriving tags so that each app
+    # (membership, billing, attendance, etc.) gets its own Swagger section
+    # instead of everything being grouped under the generic 'api' tag.
+    'SCHEMA_PATH_PREFIX': r'/api/v1',
     'SECURITY': [{'bearerAuth': []}],
     'SWAGGER_UI_SETTINGS': {
         'persistAuthorization': True,
