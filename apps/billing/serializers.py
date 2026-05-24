@@ -318,6 +318,7 @@ class PaymentInitiateSerializer(serializers.Serializer):
     """POST /billing/payments/initiate/ request body."""
 
     payment_id = serializers.IntegerField()
+    gateway_slug = serializers.CharField(max_length=50)
 
 
 class TenantSubscriptionInvoiceSerializer(serializers.Serializer):
@@ -336,7 +337,6 @@ class TenantSubscriptionInvoiceSerializer(serializers.Serializer):
     period_end = serializers.DateTimeField(read_only=True)
     validated_at = serializers.DateTimeField(read_only=True)
     created_at = serializers.DateTimeField(read_only=True)
-    gateway_slug = serializers.CharField(max_length=50)
 
 
 class AvailableGatewaySerializer(serializers.Serializer):
