@@ -118,8 +118,6 @@ class Member(BaseModel):
     # ----------------------------
 
     def save(self, *args, **kwargs):
-        is_new = self.pk is None
-
         # Set end_date
         if self.membership_type == 'package' and self.member_package:
             self.end_date = self.start_date + timedelta(days=self.member_package.duration_in_days)
@@ -131,31 +129,6 @@ class Member(BaseModel):
             self.is_active = self.end_date >= timezone.now().date()
 
         super().save(*args, **kwargs)
-
-        # ----------------------------
-        # AUTO CREATE PAYMENT
-        # ----------------------------
-        if is_new:
-            # Admission fee (fixed example)
-            Payment.objects.create(
-                member=self,
-                payment_type='admission',
-                amount=500  # Change as needed
-            )
-
-            # Package or Monthly Payment
-            if self.membership_type == 'package' and self.member_package:
-                Payment.objects.create(
-                    member=self,
-                    payment_type='package',
-                    amount=self.member_package.price
-                )
-            elif self.membership_type == 'monthly':
-                Payment.objects.create(
-                    member=self,
-                    payment_type='monthly',
-                    amount=1000  # Monthly price default
-                )
 
     def __str__(self):
         return self.full_name
