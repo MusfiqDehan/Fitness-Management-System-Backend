@@ -229,10 +229,49 @@ class PublicSiteSettingsView(APIView):
 
     def get(self, request):
         settings_obj = SiteSettings.objects.first()
-        if not settings_obj:
+        from apps.dashboard.models import GymProfile
+
+        gym_profile = GymProfile.objects.filter(pk=1).first()
+
+        if not settings_obj and not gym_profile:
             return Response(status=status.HTTP_204_NO_CONTENT)
-        serializer = SiteSettingsSerializer(settings_obj)
-        return Response(serializer.data)
+
+        payload = SiteSettingsSerializer(settings_obj).data if settings_obj else {
+            "logo_url": "",
+            "logo_width": 120,
+            "logo_height": 40,
+            "company_name": "",
+            "phone": "",
+            "email": "",
+            "address": "",
+            "website": "",
+            "timezone": "",
+            "navbar_pages": [],
+            "footer_pages": [],
+            "updated_at": None,
+        }
+
+        if gym_profile:
+            if not (payload.get("company_name") or "").strip():
+                payload["company_name"] = gym_profile.gym_name or ""
+            if not (payload.get("phone") or "").strip():
+                payload["phone"] = gym_profile.phone or ""
+            if not (payload.get("email") or "").strip():
+                payload["email"] = gym_profile.email or ""
+            if not (payload.get("address") or "").strip():
+                payload["address"] = gym_profile.address or ""
+            if not (payload.get("website") or "").strip():
+                payload["website"] = gym_profile.website or ""
+            if not (payload.get("timezone") or "").strip():
+                payload["timezone"] = gym_profile.timezone or ""
+            if not (payload.get("logo_url") or "").strip():
+                payload["logo_url"] = gym_profile.logo_url or ""
+            if not payload.get("logo_width"):
+                payload["logo_width"] = gym_profile.logo_width
+            if not payload.get("logo_height"):
+                payload["logo_height"] = gym_profile.logo_height
+
+        return Response(payload)
 
 
 # -------------------------------------------------------
