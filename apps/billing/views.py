@@ -27,13 +27,14 @@ from django.utils import timezone
 from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework import status
 from rest_framework.filters import SearchFilter, OrderingFilter
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.access.permissions import HasFeatureMethodPermission
+from apps.access.utils import user_can
 from apps.membership.models import Member, Payment
 from apps.tenancy.models import (
     Feature,
@@ -654,17 +655,47 @@ class PDFRenderer(BaseRenderer):
 
 
 class PaymentInvoicePdfAPIView(APIView):
-    """Generate branded PDF invoice for manual payments."""
+    """Generate branded PDF invoice for manual payments.
+
+    Accessible by:
+    - Staff / admin users who have the ``payments`` or ``payments.invoices``
+      feature permission (RBAC path).
+    - The gym member whose payment this is (self-service path, e.g. the
+      ``/my-subscription`` page).  Ownership is verified via
+      ``User.member`` which resolves the member profile by email/phone.
+    """
 
     feature_keys = ['payments', 'payments.invoices']
-    permission_classes = [HasFeatureMethodPermission]
+    permission_classes = [IsAuthenticated]
     renderer_classes = [PDFRenderer, JSONRenderer]
 
     def get(self, request, pk):
+        from django.core.exceptions import ObjectDoesNotExist
+
         payment = get_object_or_404(
             Payment.objects.select_related('member', 'member__member_package'),
             pk=pk,
         )
+
+        # Allow staff / admin users who hold the feature permission.
+        has_feature_perm = any(
+            user_can(request.user, key, 'view') for key in self.feature_keys
+        )
+        if not has_feature_perm:
+            # Fall back to member self-service: allow only if this payment
+            # belongs to the requesting user's linked member profile.
+            try:
+                member = request.user.member
+                if payment.member_id != member.pk:
+                    return Response(
+                        {'detail': 'You do not have permission to perform this action.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            except ObjectDoesNotExist:
+                return Response(
+                    {'detail': 'You do not have permission to perform this action.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         tenant_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'Fithive Gym'
         generated_by = getattr(request.user, 'full_name', '') or getattr(request.user, 'email', 'System')
