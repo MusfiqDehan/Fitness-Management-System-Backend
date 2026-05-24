@@ -14,8 +14,18 @@ python manage.py migrate_schemas --shared --noinput
 
 echo "Ensuring public/default tenant domains exist..."
 python manage.py shell -c "
+from django.db import connection as _conn
 from django_tenants.utils import get_tenant_model, get_tenant_domain_model
 import os
+
+# Acquire a session-level advisory lock so that concurrent container startups
+# (e.g. rolling deploys, Docker Compose scale) do not race on migrate_schemas
+# for the same tenant schema and deadlock on DDL locks.
+# The lock is released automatically when this process exits (connection closes).
+_BOOTSTRAP_LOCK_KEY = 5432109876
+with _conn.cursor() as _c:
+    _c.execute('SELECT pg_advisory_lock(%s)', [_BOOTSTRAP_LOCK_KEY])
+print('Bootstrap advisory lock acquired.')
 
 
 def to_bool(value, default=False):
