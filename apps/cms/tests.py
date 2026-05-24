@@ -10,11 +10,12 @@ from django_tenants.utils import schema_context
 from rest_framework import status
 from rest_framework.test import APITestCase, APIRequestFactory, force_authenticate
 
+from apps.dashboard.models import GymProfile
 from apps.dashboard.views import FileUploadView
 from apps.identity.models import User
 from apps.tenancy.models import Domain, Feature, Tenant, TenantFeatureFlag
 
-from .models import Blog, BlogCategory, PromoBanner, SiteBanner
+from .models import Blog, BlogCategory, PromoBanner, SiteBanner, SiteSettings
 from .views import (
 	BlogCategoryCreateAPIView,
 	BlogCategoryListAPIView,
@@ -588,3 +589,32 @@ class CMSBannerApiTests(APITestCase):
 		self.assertEqual(public_response.status_code, status.HTTP_200_OK)
 		self.assertEqual(public_response.data['phone'], '+8801234567890')
 		self.assertEqual(public_response.data['timezone'], 'Asia/Dhaka')
+
+	def test_public_site_settings_falls_back_to_gym_profile_when_missing(self):
+		"""Public tenant landing should still receive gym branding without auth."""
+		with schema_context(self.tenant.schema_name):
+			SiteSettings.objects.all().delete()
+			GymProfile.objects.update_or_create(
+				pk=1,
+				defaults={
+					'gym_name': 'Public Ready Gym',
+					'email': 'hello@public-ready.test',
+					'phone': '+8801888000000',
+					'website': 'https://public-ready.test',
+					'address': '123 Landing Street',
+					'timezone': 'Asia/Dhaka',
+					'logo_url': 'https://cdn.public-ready.test/logo.png',
+					'logo_width': 180,
+					'logo_height': 52,
+				},
+			)
+
+		public_response = self._call_tenant_view(
+			PublicSiteSettingsView.as_view(),
+			'get',
+			reverse('cms:public-site-settings'),
+		)
+		self.assertEqual(public_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(public_response.data['company_name'], 'Public Ready Gym')
+		self.assertEqual(public_response.data['phone'], '+8801888000000')
+		self.assertEqual(public_response.data['logo_url'], 'https://cdn.public-ready.test/logo.png')
