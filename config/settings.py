@@ -369,27 +369,27 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.AllowAny",
     ],
     'DEFAULT_THROTTLE_CLASSES': [
-        # Burst guards fire first (short window — blocks rapid automated hits).
-        'utils.throttling.BurstAnonRateThrottle',
-        'utils.throttling.BurstUserRateThrottle',
-        # Sustained guards enforce hourly volume caps.
-        'utils.throttling.SustainedAnonRateThrottle',
-        'utils.throttling.SustainedUserRateThrottle',
+        # # Burst guards fire first (short window — blocks rapid automated hits).
+        # 'utils.throttling.BurstAnonRateThrottle',
+        # 'utils.throttling.BurstUserRateThrottle',
+        # # Sustained guards enforce hourly volume caps.
+        # 'utils.throttling.SustainedAnonRateThrottle',
+        # 'utils.throttling.SustainedUserRateThrottle',
         # Scope-specific overrides on individual views (auth, registration…).
         'rest_framework.throttling.ScopedRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        # --- Global burst limits (short window) ---
-        # Unauthenticated: env THROTTLE_BURST_ANON, default 20/min
-        'burst_anon': os.environ.get('THROTTLE_BURST_ANON', '20/min'),
-        # Authenticated: env THROTTLE_BURST_USER, default 60/min
-        'burst_user': os.environ.get('THROTTLE_BURST_USER', '60/min'),
+        # # --- Global burst limits (short window) ---
+        # # Unauthenticated: env THROTTLE_BURST_ANON, default 20/min
+        # 'burst_anon': os.environ.get('THROTTLE_BURST_ANON', '20/min'),
+        # # Authenticated: env THROTTLE_BURST_USER, default 60/min
+        # 'burst_user': os.environ.get('THROTTLE_BURST_USER', '60/min'),
 
-        # --- Global sustained limits (hourly volume) ---
-        # Unauthenticated: env THROTTLE_SUSTAINED_ANON, default 500/hour
-        'sustained_anon': os.environ.get('THROTTLE_SUSTAINED_ANON', '500/hour'),
-        # Authenticated: env THROTTLE_SUSTAINED_USER, default 2000/hour
-        'sustained_user': os.environ.get('THROTTLE_SUSTAINED_USER', '2000/hour'),
+        # # --- Global sustained limits (hourly volume) ---
+        # # Unauthenticated: env THROTTLE_SUSTAINED_ANON, default 500/hour
+        # 'sustained_anon': os.environ.get('THROTTLE_SUSTAINED_ANON', '500/hour'),
+        # # Authenticated: env THROTTLE_SUSTAINED_USER, default 2000/hour
+        # 'sustained_user': os.environ.get('THROTTLE_SUSTAINED_USER', '2000/hour'),
 
         # --- Scope-specific overrides (applied per view via throttle_scope) ---
         'tenant_registration': '10/hour',
@@ -398,7 +398,7 @@ REST_FRAMEWORK = {
         'tenant_password_setup': '20/hour',
         'superadmin_invitation': '60/hour',
     },
-    'EXCEPTION_HANDLER': 'utils.throttling.throttle_exception_handler',
+    # 'EXCEPTION_HANDLER': 'utils.throttling.throttle_exception_handler',
     'DEFAULT_FILTER_BACKENDS': [
         'django_filters.rest_framework.DjangoFilterBackend',
         'rest_framework.filters.SearchFilter',
