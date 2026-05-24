@@ -15,12 +15,12 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
-from utils.throttling import (
-	BurstAnonRateThrottle,
-	BurstUserRateThrottle,
-	SustainedAnonRateThrottle,
-	SustainedUserRateThrottle,
-)
+# from utils.throttling import (
+# 	BurstAnonRateThrottle,
+# 	BurstUserRateThrottle,
+# 	SustainedAnonRateThrottle,
+# 	SustainedUserRateThrottle,
+# )
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -431,10 +431,10 @@ def _count_tenant_admin_users():
 class TenantSelfRegistrationAPIView(APIView):
 	permission_classes = [AllowAny]
 	throttle_classes = [
-		BurstAnonRateThrottle,
-		BurstUserRateThrottle,
-		SustainedAnonRateThrottle,
-		SustainedUserRateThrottle,
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
 		ScopedRateThrottle,
 	]
 	throttle_scope = "tenant_registration"
@@ -502,10 +502,10 @@ class SuperadminInvitationAPIView(APIView):
 		IsPlatformFeaturePermission.require("platform.tenants", "edit"),
 	]
 	throttle_classes = [
-		BurstAnonRateThrottle,
-		BurstUserRateThrottle,
-		SustainedAnonRateThrottle,
-		SustainedUserRateThrottle,
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
 		ScopedRateThrottle,
 	]
 	throttle_scope = "superadmin_invitation"
@@ -684,10 +684,10 @@ class InvitationValidationAPIView(APIView):
 class PasswordSetupAPIView(APIView):
 	permission_classes = [AllowAny]
 	throttle_classes = [
-		BurstAnonRateThrottle,
-		BurstUserRateThrottle,
-		SustainedAnonRateThrottle,
-		SustainedUserRateThrottle,
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
 		ScopedRateThrottle,
 	]
 	throttle_scope = "tenant_password_setup"
@@ -876,10 +876,10 @@ class PasswordSetupAPIView(APIView):
 class TenantAuthenticationAPIView(APIView):
 	permission_classes = [AllowAny]
 	throttle_classes = [
-		BurstAnonRateThrottle,
-		BurstUserRateThrottle,
-		SustainedAnonRateThrottle,
-		SustainedUserRateThrottle,
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
 		ScopedRateThrottle,
 	]
 	throttle_scope = "tenant_auth"
@@ -966,10 +966,10 @@ class TenantAuthenticationAPIView(APIView):
 class PasswordResetRequestAPIView(APIView):
 	permission_classes = [AllowAny]
 	throttle_classes = [
-		BurstAnonRateThrottle,
-		BurstUserRateThrottle,
-		SustainedAnonRateThrottle,
-		SustainedUserRateThrottle,
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
 		ScopedRateThrottle,
 	]
 	throttle_scope = "tenant_password_reset"
