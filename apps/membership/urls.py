@@ -9,6 +9,7 @@ from .views import (
     CompleteMemberRegistrationAPIView,
     PaymentView,
     PaymentAnalyticsAPIView,
+    MemberMySubscriptionAPIView,
     AttendanceView,
     GymClassView,
     GymScheduleView,
@@ -43,6 +44,7 @@ urlpatterns = [
     path('payments/', PaymentView.as_view(), name='payment-list'),
     path('payments/<int:pk>/', PaymentView.as_view(), name='payment-detail'),
     path('payments/analytics/', PaymentAnalyticsAPIView.as_view(), name='payment-analytics'),
+    path('my-subscription/', MemberMySubscriptionAPIView.as_view(), name='member-my-subscription'),
 
     # ========== ATTENDANCE ==========
     path('attendance/', AttendanceView.as_view(), name='attendance-list'),
