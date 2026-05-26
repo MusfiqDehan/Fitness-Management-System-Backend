@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.cms.models import SiteSettings
 from apps.identity.serializers import CurrentUserSerializer, CurrentUserUpdateSerializer
 from apps.membership.models import Member
 
@@ -46,6 +47,25 @@ class GymProfileAPIView(APIView):
         serializer = GymProfileSerializer(self._obj(), data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+
+        # Auto-sync to SiteSettings so the public homepage/navbar/footer stays current.
+        profile = serializer.instance
+        site_settings, _ = SiteSettings.objects.get_or_create(pk=1)
+        site_settings.company_name = profile.gym_name
+        site_settings.email = profile.email
+        site_settings.phone = profile.phone
+        site_settings.address = profile.address
+        site_settings.website = profile.website
+        site_settings.timezone = profile.timezone
+        if profile.logo_url:
+            site_settings.logo_url = profile.logo_url
+        site_settings.logo_width = profile.logo_width
+        site_settings.logo_height = profile.logo_height
+        site_settings.save(update_fields=[
+            "company_name", "email", "phone", "address", "website", "timezone",
+            "logo_url", "logo_width", "logo_height",
+        ])
+
         return Response(serializer.data)
 
 

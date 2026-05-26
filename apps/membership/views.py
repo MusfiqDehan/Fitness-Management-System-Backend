@@ -8,13 +8,18 @@ Handles all member and package lifecycle operations including:
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.db.models import Q
 from django.db import transaction
 from django.utils import timezone
-from django.core.mail import send_mail
+from django_tenants.utils import schema_context
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
 from django.conf import settings
 from datetime import timedelta
+from decimal import Decimal
+from urllib.parse import urlparse
+import uuid
 import secrets
 
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
@@ -31,6 +36,9 @@ from .serializers import (
 )
 from utils.base_view import ModelCRUDView
 from apps.access.permissions import HasFeatureMethodPermission
+from apps.tenancy.models import PaymentGateway
+from apps.billing.models import TenantPaymentGateway, PaymentTransaction
+from apps.billing.services import get_gateway
 
 
 def _build_member_invite_url(request, token: str) -> str:
@@ -64,22 +72,65 @@ def _send_member_invitation_email(member: Member, request, invited_by=None, forc
     ])
 
     invite_url = _build_member_invite_url(request, member.invitation_token)
-    tenant_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'our gym'
-
-    send_mail(
-        subject=f"Complete your member registration at {tenant_name}",
-        message=(
-            f"Hi {member.full_name or 'there'},\n\n"
-            f"You have been invited to complete your member registration. "
-            f"Use the link below to verify your invitation and set your password:\n\n"
-            f"{invite_url}\n\n"
-            f"This link expires in 7 days."
-        ),
-        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
-        recipient_list=[member.email],
-        fail_silently=False,
+    company_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'our gym'
+    invited_by_name = (
+        getattr(invited_by, 'full_name', None) or getattr(invited_by, 'email', None)
+        if invited_by is not None else None
     )
+
+    context = {
+        'member_name': member.full_name or '',
+        'invited_by_name': invited_by_name,
+        'company_name': company_name,
+        'invitation_url': invite_url,
+        'expires_at': member.invitation_expires_at,
+    }
+    html_body = render_to_string('membership/emails/member_invitation_email.html', context)
+    fallback_text = (
+        f"Hi {member.full_name or 'there'},\n\n"
+        f"You have been invited to complete your member registration at {company_name}. "
+        f"Use the link below to verify your invitation and set your password:\n\n"
+        f"{invite_url}\n\n"
+        f"This link expires on {member.invitation_expires_at}."
+    )
+    email = EmailMultiAlternatives(
+        subject=f"Complete your member registration at {company_name}",
+        body=fallback_text,
+        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
+        to=[member.email],
+    )
+    email.attach_alternative(html_body, 'text/html')
+    email.send(fail_silently=False)
     return invite_url
+
+
+def _is_gateway_credentials_complete(gateway: PaymentGateway, credentials: dict) -> bool:
+    required_keys = [
+        field.get('key')
+        for field in (gateway.config_schema or [])
+        if field.get('required') and field.get('key')
+    ]
+    return all(str((credentials or {}).get(key, '')).strip() for key in required_keys)
+
+
+def _build_tenant_backend_base_url(request) -> str:
+    fallback = request.build_absolute_uri('/').rstrip('/')
+    tenant = getattr(request, 'tenant', None)
+    if tenant is None:
+        return fallback
+
+    primary_domain = tenant.domains.filter(is_primary=True).values_list('domain', flat=True).first()
+    if not primary_domain:
+        return fallback
+
+    backend_base = (getattr(settings, 'BACKEND_BASE_URL', '') or '').strip().rstrip('/')
+    if not backend_base:
+        return f"{request.scheme}://{primary_domain}"
+
+    parsed = urlparse(backend_base)
+    scheme = parsed.scheme or request.scheme
+    port_suffix = f":{parsed.port}" if parsed.port and ':' not in primary_domain else ''
+    return f"{scheme}://{primary_domain}{port_suffix}"
 
 
 # =============================================================================
@@ -256,8 +307,65 @@ class PublicMemberRegistrationAPIView(APIView):
         if not request.data.get('email'):
             return Response({'error': 'Email is required for registration'}, status=status.HTTP_400_BAD_REQUEST)
 
+        start_checkout = str(request.data.get('start_checkout', '')).strip().lower() in ('1', 'true', 'yes')
+        gateway_slug = str(request.data.get('gateway_slug', 'sslcommerz')).strip().lower() or 'sslcommerz'
+
+        if start_checkout and gateway_slug != 'sslcommerz':
+            return Response(
+                {'detail': "Only 'sslcommerz' is supported for public package checkout."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        gateway = None
+        tenant_gateway = None
+        if start_checkout:
+            with schema_context('public'):
+                gateway = PaymentGateway.objects.filter(
+                    slug=gateway_slug,
+                    is_enabled_for_tenants=True,
+                ).first()
+
+            if gateway is None:
+                return Response(
+                    {'detail': f"Gateway '{gateway_slug}' is not enabled by the platform."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            tenant_gateway = TenantPaymentGateway.objects.filter(
+                gateway_slug=gateway_slug,
+                is_active=True,
+            ).first()
+            if tenant_gateway is None:
+                return Response(
+                    {'detail': f"Gateway '{gateway_slug}' is not configured for this gym."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if not _is_gateway_credentials_complete(gateway, tenant_gateway.credentials):
+                required_keys = [
+                    field.get('key')
+                    for field in (gateway.config_schema or [])
+                    if field.get('required') and field.get('key')
+                ]
+                missing_keys = [
+                    key for key in required_keys
+                    if not str((tenant_gateway.credentials or {}).get(key, '')).strip()
+                ]
+                return Response(
+                    {
+                        'detail': 'Gateway credentials are incomplete for this gym.',
+                        'missing_fields': missing_keys,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         serializer = MemberPublicSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        member = None
+        invite_url = None
+        package_payment = None
+        tx = None
 
         try:
             with transaction.atomic():
@@ -268,11 +376,96 @@ class PublicMemberRegistrationAPIView(APIView):
                     invited_by=None,
                     force_new_token=True,
                 )
+
+                if start_checkout:
+                    package_payment = (
+                        Payment.objects
+                        .filter(member=member, payment_type='package')
+                        .order_by('-created_at')
+                        .first()
+                    )
+                    if package_payment is None and member.member_package is not None:
+                        package_payment = Payment.objects.create(
+                            member=member,
+                            payment_type='package',
+                            amount=member.member_package.price,
+                        )
+
+                    if package_payment is None:
+                        raise ValueError('Could not prepare package payment for checkout.')
+
+                    package_payment.payment_method = 'sslcommerz'
+                    package_payment.payment_status = Payment.STATUS_DUE
+                    package_payment.is_paid = False
+                    package_payment.save(update_fields=['payment_method', 'payment_status', 'is_paid', 'updated_at'])
+
+                    tran_id = f"PUBREG-{member.id}-{uuid.uuid4().hex[:8].upper()}"
+                    tx = PaymentTransaction.objects.create(
+                        tran_id=tran_id,
+                        gateway_slug=gateway_slug,
+                        amount=Decimal(package_payment.amount),
+                        currency='BDT',
+                        status=PaymentTransaction.STATUS_INIT,
+                        source_payment=package_payment,
+                        gateway_response={
+                            'flow': 'public_member_signup',
+                            'member_id': member.id,
+                        },
+                    )
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as exc:
             return Response(
                 {'error': f'Failed to send invitation email: {str(exc)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        if start_checkout and tx is not None and package_payment is not None and tenant_gateway is not None:
+            base = _build_tenant_backend_base_url(request)
+            prefix = f"{base}/api/v1/billing/payments"
+            success_url = f"{prefix}/success/"
+            fail_url = f"{prefix}/fail/"
+            cancel_url = f"{prefix}/cancel/"
+            ipn_url = f"{prefix}/ipn/"
+
+            svc = get_gateway(
+                gateway_slug,
+                tenant_gateway.credentials,
+                tenant_gateway.is_sandbox,
+                success_url=success_url,
+                fail_url=fail_url,
+                cancel_url=cancel_url,
+                ipn_url=ipn_url,
+            )
+
+            try:
+                result = svc.initiate(tx)
+            except ValueError as exc:
+                tx.status = PaymentTransaction.STATUS_FAILED
+                tx.gateway_response = {
+                    'flow': 'public_member_signup',
+                    'member_id': member.id,
+                    'error': str(exc),
+                }
+                tx.save(update_fields=['status', 'gateway_response', 'updated_at'])
+                return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+            tx.status = PaymentTransaction.STATUS_PENDING
+            tx.gateway_response = {
+                'flow': 'public_member_signup',
+                'member_id': member.id,
+                'raw': result.get('raw', {}),
+            }
+            tx.save(update_fields=['status', 'gateway_response', 'updated_at'])
+
+            return Response({
+                'message': 'Registration received. Redirecting to secure checkout.',
+                'member_id': member.id,
+                'invitation_sent': bool(invite_url),
+                'invite_url': invite_url,
+                'gateway_url': result['gateway_url'],
+                'tran_id': tx.tran_id,
+            }, status=status.HTTP_201_CREATED)
 
         return Response({
             'message': 'Registration received. Please check your email to verify and set password.',
@@ -489,6 +682,29 @@ class CompleteMemberRegistrationAPIView(APIView):
                 'invited_by', 'is_active', 'full_name',
             ])
 
+        try:
+            from apps.reminder.utils import create_notification
+            # Broadcast to admins: a new member joined
+            create_notification(
+                notification_type='member_onboarded',
+                title=f'New member joined: {member.full_name or member.email}',
+                actor_name=member.full_name or '',
+                actor_email=member.email or '',
+                target_type='member',
+                target_id=str(member.id),
+            )
+            # Personal to the new member: welcome message
+            create_notification(
+                notification_type='welcome_member',
+                title=f'Welcome, {member.full_name or member.email}!',
+                message='Your gym membership is now active. Start exploring your dashboard.',
+                recipient=user,
+                target_type='member',
+                target_id=str(member.id),
+            )
+        except Exception:
+            pass  # Notifications are best-effort
+
         return Response({'message': 'Registration completed successfully', 'member_id': member.id})
 
 
@@ -502,6 +718,35 @@ class PaymentView(ModelCRUDView):
     queryset = Payment.objects.all().order_by('-payment_date')
     serializer_class = PaymentSerializer
     permission_classes = [HasFeatureMethodPermission]
+
+
+# =============================================================================
+# MEMBER SELF-SERVICE: MY SUBSCRIPTION
+# =============================================================================
+
+class MemberMySubscriptionAPIView(APIView):
+    """GET /api/v1/membership/my-subscription/ — returns the authenticated member's
+    own subscription details and payment history. Accessible by student/member role."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.core.exceptions import ObjectDoesNotExist
+        try:
+            member = request.user.member
+        except ObjectDoesNotExist:
+            return Response(
+                {'detail': 'No member profile linked to this account.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        member_data = MemberSerializer(member).data
+        payments = Payment.objects.filter(member=member, is_deleted=False).order_by('-payment_date')
+        payments_data = PaymentSerializer(payments, many=True).data
+
+        return Response({
+            'member': member_data,
+            'payments': payments_data,
+        })
 
 
 # =============================================================================
@@ -648,3 +893,27 @@ class GymScheduleView(ModelCRUDView):
     queryset = GymSchedule.objects.filter(is_deleted=False).order_by('day_of_week', 'start_time')
     serializer_class = GymScheduleSerializer
     permission_classes = [HasFeatureMethodPermission]
+
+
+# =============================================================================
+# PUBLIC GYM CLASS + SCHEDULE (for landing page)
+# =============================================================================
+
+class PublicGymClassListAPIView(APIView):
+    """GET /api/v1/membership/public/gym-classes/ — public list of active classes."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        classes = GymClass.objects.filter(is_active=True, is_deleted=False).order_by('name')
+        serializer = GymClassSerializer(classes, many=True)
+        return Response(serializer.data)
+
+
+class PublicGymScheduleListAPIView(APIView):
+    """GET /api/v1/membership/public/gym-schedules/ — public schedules for landing page."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        schedules = GymSchedule.objects.filter(is_deleted=False).order_by('day_of_week', 'start_time')
+        serializer = GymScheduleSerializer(schedules, many=True)
+        return Response(serializer.data)

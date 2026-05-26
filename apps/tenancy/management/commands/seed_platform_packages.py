@@ -1,7 +1,7 @@
 """Seed core feature catalog and the three default packages.
 
 Defines the canonical feature keys the platform supports and creates
-Trial / Starter / Enterprise packages that map to them. Idempotent.
+Starter / Growth / Enterprise packages that map to them. Idempotent.
 """
 from decimal import Decimal
 
@@ -34,6 +34,7 @@ CORE_FEATURES = [
     ("classes.bookings", "Class Bookings", "classes"),
     ("payments", "Payments & Billing", None),
     ("payments.invoices", "Invoices", "payments"),
+    ("payments.gateways", "Payment Gateways", "payments"),
     ("crm.contacts", "Contacts", None),
     ("crm.inquiries", "Inquiries", None),
     ("cms.banners", "Banners", None),
@@ -47,64 +48,122 @@ CORE_FEATURES = [
 
 
 PACKAGES = {
-    "trial": {
-        "name": "Free Trial",
-        "description": "7-day full-feature trial. Convert to a paid plan to keep your data flowing.",
-        "price_monthly": Decimal("0.00"),
-        "price_yearly": Decimal("0.00"),
-        "max_users": 5,
+    "starter": {
+        "name": "Starter",
+        "description": "Only dashboard management system",
+        "price_monthly": Decimal("2490.00"),
+        "price_yearly": Decimal("23904.00"),  # 2490 * 12 * 0.80
+        "max_users": 175,
         "max_branches": 1,
-        "trial_days": 7,
+        "trial_days": 14,
         "is_public": True,
         "highlight": False,
         "sort_order": 1,
-        "features": [
-            "dashboard", "members", "members.attendance", "members.packages",
-            "attendance.devices", "attendance.access_gate", "attendance.fingerprints",
-            "instructors", "classes", "classes.bookings",
-            "payments", "crm.contacts", "crm.inquiries",
-            "reminders", "settings",
+        "badge_label": "14 Days Free Trial",
+        "cta_label": "Book a Free Demo",
+        "setup_fee": "Tk. 9,990",
+        "original_setup_fee": "",
+        "original_price_monthly": Decimal("3490.00"),
+        "original_price_yearly": None,
+        "included_items": [
+            "Member Limit - 175",
+            "Member Management",
+            "Attendance",
+            "Payments",
+            "Reports",
+            "Packages",
+            "Instructor",
+            "Sms Management",
+            "1 Branch",
+            "3 Admin",
         ],
-    },
-    "starter": {
-        "name": "Starter",
-        "description": "For growing studios — full member management plus marketing tools.",
-        "price_monthly": Decimal("29.00"),
-        "price_yearly": Decimal("290.00"),
-        "max_users": 25,
-        "max_branches": 1,
-        "trial_days": 0,
-        "is_public": True,
-        "highlight": True,
-        "sort_order": 2,
+        "yearly_discount_percent": None,
+        "price_custom_label": "",
+        "price_period_label": "",
         "features": [
             "dashboard", "members", "members.attendance", "members.packages",
             "attendance.devices", "attendance.access_gate", "attendance.fingerprints", "attendance.iclock",
             "instructors", "classes", "classes.bookings",
             "payments", "payments.invoices",
             "crm.contacts", "crm.inquiries",
+            "reminders", "settings",
+        ],
+    },
+    "growth": {
+        "name": "Growth",
+        "description": "Dashboard + Website",
+        "price_monthly": Decimal("3490.00"),
+        "price_yearly": Decimal("33504.00"),  # 3490 * 12 * 0.80
+        "max_users": 300,
+        "max_branches": 3,
+        "trial_days": 0,
+        "is_public": True,
+        "highlight": True,
+        "sort_order": 2,
+        "badge_label": "Most Popular",
+        "cta_label": "Book Demo",
+        "setup_fee": "Tk. 9,990",
+        "original_setup_fee": "",
+        "original_price_monthly": Decimal("5490.00"),
+        "original_price_yearly": None,
+        "included_items": [
+            "Include Everything In Starter +",
+            "Member Limit - 300",
+            "Public Website",
+            "Class Booking System",
+            "Trainer Profiles",
+            "Package Display",
+            "Inquiry System",
+            "Collect lead",
+            "Blog, Content & Branding",
+        ],
+        "yearly_discount_percent": None,
+        "price_custom_label": "",
+        "price_period_label": "",
+        "features": [
+            "dashboard", "members", "members.attendance", "members.packages",
+            "attendance.devices", "attendance.access_gate", "attendance.fingerprints", "attendance.iclock",
+            "instructors", "classes", "classes.bookings",
+            "payments", "payments.invoices", "payments.gateways",
+            "crm.contacts", "crm.inquiries",
             "cms.banners", "cms.blogs",
-            "reports", "reminders", "settings", "permissions",
+            "clubs", "reports", "reminders", "settings", "permissions",
         ],
     },
     "enterprise": {
         "name": "Enterprise",
-        "description": "Multi-branch chains with full RBAC, advanced reports, and priority support.",
-        "price_monthly": Decimal("99.00"),
-        "price_yearly": Decimal("990.00"),
+        "description": "For gym chains / franchises",
+        "price_monthly": Decimal("0.00"),
+        "price_yearly": Decimal("0.00"),
         "max_users": 0,  # unlimited
         "max_branches": 0,  # unlimited
         "trial_days": 0,
         "is_public": True,
         "highlight": False,
         "sort_order": 3,
+        "badge_label": "",
+        "cta_label": "Book Demo",
+        "setup_fee": "Tk. 9,990",
+        "original_setup_fee": "",
+        "original_price_monthly": None,
+        "original_price_yearly": None,
+        "included_items": [
+            "Multi-Branch System",
+            "Custom Features",
+            "API / Integrations",
+            "Dedicated Support",
+            "On-Site Setup (Optional)",
+        ],
+        "yearly_discount_percent": None,
+        "price_custom_label": "Custom",
+        "price_period_label": "(10k \u2013 30k+)/Month",
         "features": [k for k, _, _ in CORE_FEATURES],  # everything
     },
 }
 
 
 class Command(BaseCommand):
-    help = "Seed core features and Trial/Starter/Enterprise packages."
+    help = "Seed core features and Starter/Growth/Enterprise packages."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -159,6 +218,16 @@ class Command(BaseCommand):
                     "is_public": info["is_public"],
                     "highlight": info["highlight"],
                     "sort_order": info["sort_order"],
+                    "badge_label": info.get("badge_label", ""),
+                    "cta_label": info.get("cta_label", ""),
+                    "setup_fee": info.get("setup_fee", ""),
+                    "original_setup_fee": info.get("original_setup_fee", ""),
+                    "original_price_monthly": info.get("original_price_monthly"),
+                    "original_price_yearly": info.get("original_price_yearly"),
+                    "included_items": info.get("included_items", []),
+                    "yearly_discount_percent": info.get("yearly_discount_percent"),
+                    "price_custom_label": info.get("price_custom_label", ""),
+                    "price_period_label": info.get("price_period_label", ""),
                 },
             )
             if created:

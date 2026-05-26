@@ -532,7 +532,7 @@ ALLOWED_MIME_TYPES = {
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
     'video/mp4', 'video/webm', 'video/ogg',
 }
-MAX_UPLOAD_SIZE_MB = 50
+MAX_UPLOAD_SIZE_MB = 100
 
 
 class FileUploadView(APIView):

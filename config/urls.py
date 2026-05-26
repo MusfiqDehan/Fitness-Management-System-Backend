@@ -37,6 +37,7 @@ urlpatterns = [
     path('api/v1/membership/', include(('apps.membership.urls', 'membership'), namespace='membership')),
     path('api/v1/access/', include(('apps.access.urls', 'access'), namespace='access')),
     path('api/v1/billing/', include(('apps.billing.urls', 'billing'), namespace='billing')),
+    path('api/v1/reminder/', include(('apps.reminder.urls', 'reminder'), namespace='reminder')),
     path('api/v1/attendance/', include(('apps.attendance.urls', 'attendance'), namespace='attendance')),
     path('api/v1/trainer/', include(('apps.trainer.urls', 'trainer'), namespace='trainer')),
 

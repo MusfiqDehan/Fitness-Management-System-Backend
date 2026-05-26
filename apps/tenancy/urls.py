@@ -13,6 +13,7 @@ from .views import (
 	TenantAdminActivationAPIView,
 	TenantAuditLogListAPIView,
 	TenantMemberInviteAPIView,
+	ChangePasswordView,
 )
 from .rbac_views import (
 	PlatformModuleListView,
@@ -24,6 +25,7 @@ from .rbac_views import (
 	FeatureListCreateView,
 	FeatureDetailView,
 	PublicPlatformPackageListView,
+	PublicPlatformPricingConfigView,
 	PlatformPackageListCreateView,
 	PlatformPackageDetailView,
 	PlatformPackageFeaturesView,
@@ -51,12 +53,16 @@ urlpatterns = [
 
 	# Public packages (landing page pricing)
 	path('packages/', PublicPlatformPackageListView.as_view(), name='public-packages'),
+	path('packages/pricing-config/', PublicPlatformPricingConfigView.as_view(), name='public-pricing-config'),
 
 	# Authenticated tenant feature lookup (used by frontend to know which features to show)
 	path('me/features/', CurrentTenantFeatureListView.as_view(), name='current-tenant-features'),
 
 	# Tenant staff member invitations (from Permissions page)
 	path('members/invite/', TenantMemberInviteAPIView.as_view(), name='tenant-member-invite'),
+
+	# Change password — available in both tenant and public schemas
+	path('password/change/', ChangePasswordView.as_view(), name='password-change'),
 
 	# Authenticated platform permission lookup (used by frontend to filter Platform Admin sidebar)
 	path('admin/me/platform-permissions/', MyPlatformPermissionsView.as_view(), name='me-platform-permissions'),

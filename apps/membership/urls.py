@@ -9,12 +9,15 @@ from .views import (
     CompleteMemberRegistrationAPIView,
     PaymentView,
     PaymentAnalyticsAPIView,
+    MemberMySubscriptionAPIView,
     AttendanceView,
     GymClassView,
     GymScheduleView,
     PublicMemberRegistrationAPIView,
     PublicPackageListAPIView,
     PublicPackageRetrieveAPIView,
+    PublicGymClassListAPIView,
+    PublicGymScheduleListAPIView,
 )
 
 app_name = 'membership'
@@ -41,6 +44,7 @@ urlpatterns = [
     path('payments/', PaymentView.as_view(), name='payment-list'),
     path('payments/<int:pk>/', PaymentView.as_view(), name='payment-detail'),
     path('payments/analytics/', PaymentAnalyticsAPIView.as_view(), name='payment-analytics'),
+    path('my-subscription/', MemberMySubscriptionAPIView.as_view(), name='member-my-subscription'),
 
     # ========== ATTENDANCE ==========
     path('attendance/', AttendanceView.as_view(), name='attendance-list'),
@@ -57,4 +61,6 @@ urlpatterns = [
     path('public/packages/<int:pk>/', PublicPackageRetrieveAPIView.as_view(), name='public-packages-detail'),
     path('public/verify-invitation/', VerifyInvitationAPIView.as_view(), name='verify-invitation'),
     path('public/complete-registration/', CompleteMemberRegistrationAPIView.as_view(), name='complete-registration'),
+    path('public/gym-classes/', PublicGymClassListAPIView.as_view(), name='public-gymclass-list'),
+    path('public/gym-schedules/', PublicGymScheduleListAPIView.as_view(), name='public-gymschedule-list'),
 ]

@@ -68,6 +68,12 @@ PLATFORM_REGISTRY: list[RegistryItem] = [
                 "icon": "UserCheck",
             },
             {
+                "key": "platform.email_settings",
+                "name": "Email Settings",
+                "route": "/platform/email",
+                "icon": "Mail",
+            },
+            {
                 "key": "platform.settings",
                 "name": "Settings",
                 "route": "/settings",
@@ -91,11 +97,16 @@ PLATFORM_REGISTRY: list[RegistryItem] = [
                 "route": None,
                 "icon": "LifeBuoy",
             },
-            {
-                "key": "platform.billing",
+            {"key": "platform.billing",
                 "name": "Platform Billing",
-                "route": None,
+                "route": "/platform/billing",
                 "icon": "CreditCard",
+            },
+            {
+                "key": "platform.payments",
+                "name": "Platform Payments",
+                "route": "/platform/payments",
+                "icon": "ReceiptText",
             },
             {
                 "key": "platform.tenant_management",
@@ -124,16 +135,17 @@ TENANT_REGISTRY: list[RegistryItem] = [
         "group": "Members",
         "children": [
             {"key": "members", "name": "Members Overview", "route": "/members",     "icon": "PieChart"},
-            {"key": "members", "name": "All Members",      "route": "/members/all", "icon": "Users", "badge": "100"},
+            {"key": "members", "name": "All Members",      "route": "/members/all", "icon": "Users"},
         ],
     },
     {
         "group": "Finance",
         "children": [
-            {"key": "payments",          "name": "Payments",  "route": "/payments",  "icon": "CreditCard"},
-            {"key": "payments.invoices", "name": "Invoices",  "route": None,         "icon": "FileText"},
-            {"key": "members.packages",  "name": "Packages",  "route": "/packages",  "icon": "Boxes"},
-            {"key": "reminders",         "name": "Reminders", "route": "/reminders", "icon": "Bell"},
+            {"key": "payments",          "name": "Payments",         "route": "/payments",         "icon": "CreditCard"},
+            {"key": "payments.invoices", "name": "Invoices",          "route": None,                "icon": "FileText"},
+            {"key": "payments.gateways", "name": "Payment Gateways",  "route": "/payment-gateways", "icon": "Landmark"},
+            {"key": "members.packages",  "name": "Packages",          "route": "/packages",         "icon": "Boxes"},
+            {"key": "reminders",         "name": "Reminders",         "route": "/reminders",        "icon": "Bell"},
         ],
     },
     {
@@ -150,7 +162,7 @@ TENANT_REGISTRY: list[RegistryItem] = [
             {"key": "crm.inquiries",    "name": "Manage Inquiries", "route": "/inquiries", "icon": "FileText"},
             {"key": "classes",          "name": "Class Manager",    "route": "/classes",   "icon": "Server"},
             {"key": "classes.bookings", "name": "Booking Manager",  "route": "/bookings",  "icon": "CalendarRange"},
-            {"key": "cms.blogs",        "name": "Blog Manager",     "route": "/blogs",     "icon": "CircleDashed"},
+            {"key": "cms.blogs",        "name": "Blog Manager",     "route": "/blogs",     "icon": "Rows3"},
             {"key": "clubs",            "name": "Club Manager",     "route": "/clubs",     "icon": "Cloud"},
             {"key": "cms.banners",      "name": "Banner Manager",   "route": "/banners",   "icon": "MonitorPlay"},
         ],
@@ -197,8 +209,14 @@ def iter_platform_leaf_keys() -> list[str]:
     return seen
 
 
-def build_api_payload() -> dict:
-    """The exact JSON the frontend consumes via /admin/feature-registry/."""
+def build_api_payload(badge_overrides: dict[tuple[str, str | None], str] | None = None) -> dict:
+    """The exact JSON the frontend consumes via /admin/feature-registry/.
+
+    badge_overrides maps (key, route) -> badge string so callers can inject
+    live counts without polluting the static registry definition.
+    """
+    overrides = badge_overrides or {}
+
     def _strip(items: list[RegistryItem]) -> list[dict]:
         out: list[dict] = []
         for grp in items:
@@ -211,7 +229,9 @@ def build_api_payload() -> dict:
                             "name": it["name"],
                             "route": it.get("route"),
                             "icon": it.get("icon"),
-                            "badge": it.get("badge"),
+                            "badge": overrides.get(
+                                (it["key"], it.get("route")), it.get("badge")
+                            ),
                         }
                         for it in grp.get("children", [])
                         if it.get("route")  # only ship items that have a route

@@ -19,6 +19,7 @@ from .models import (
     Invitation,
     PlatformPackage,
     PlatformPackageFeature,
+    PlatformPricingConfig,
     PlatformRole,
     PlatformRolePermission,
     PlatformUserRole,
@@ -35,6 +36,7 @@ from .rbac_serializers import (
     FeatureSerializer,
     PlatformPackageFeatureBulkSerializer,
     PlatformPackageSerializer,
+    PlatformPricingConfigSerializer,
     PlatformRolePermissionsBulkSerializer,
     PlatformRoleSerializer,
     PlatformUserRoleSerializer,
@@ -235,6 +237,18 @@ class PublicPlatformPackageListView(generics.ListAPIView):
     queryset = PlatformPackage.objects.filter(is_active=True, is_public=True)
     serializer_class = PublicPlatformPackageSerializer
     permission_classes = [AllowAny]
+
+
+class PublicPlatformPricingConfigView(APIView):
+    """Public endpoint: returns the global yearly discount for the pricing page billing toggle."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        config = PlatformPricingConfig.get_instance()
+        return Response({
+            "default_yearly_discount_percent": config.default_yearly_discount_percent,
+        })
 
 
 class PlatformPackageListCreateView(generics.ListCreateAPIView):
@@ -654,4 +668,10 @@ class FeatureRegistryView(APIView):
 
     def get(self, request):
         from .feature_registry import build_api_payload
-        return Response(build_api_payload())
+        from django_tenants.utils import get_public_schema_name
+        badge_overrides: dict = {}
+        if request.tenant.schema_name != get_public_schema_name():
+            from apps.membership.models import Member
+            member_count = Member.objects.count()
+            badge_overrides[("members", "/members/all")] = str(member_count)
+        return Response(build_api_payload(badge_overrides=badge_overrides))

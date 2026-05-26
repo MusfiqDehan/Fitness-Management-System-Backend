@@ -6,7 +6,12 @@ list. CI catches drift before deploy.
 """
 from django.test import SimpleTestCase
 
-from apps.tenancy.constants import PLATFORM_MODULE_KEYS
+from apps.tenancy.constants import (
+    PLATFORM_MODULE_EMAIL_SETTINGS,
+    PLATFORM_MODULE_KEYS,
+    PLATFORM_ROLE_PLATFORM_MANAGER,
+    PREDEFINED_PLATFORM_ROLE_PERMISSIONS,
+)
 from apps.tenancy.feature_registry import (
     PLATFORM_REGISTRY,
     SHARED_FEATURES,
@@ -103,4 +108,14 @@ class FeatureRegistryConsistencyTests(SimpleTestCase):
             missing,
             [],
             f"FULL_ACCESS_FEATURE_KEYS not present in TENANT_REGISTRY or SHARED_FEATURES: {missing}",
+        )
+
+    def test_platform_manager_default_can_see_email_settings(self):
+        level = PREDEFINED_PLATFORM_ROLE_PERMISSIONS[PLATFORM_ROLE_PLATFORM_MANAGER][
+            PLATFORM_MODULE_EMAIL_SETTINGS
+        ]
+        self.assertIn(
+            level,
+            {"view", "edit", "full"},
+            "Platform manager must have at least view access to platform.email_settings",
         )

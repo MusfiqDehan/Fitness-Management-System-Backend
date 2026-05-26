@@ -1,3 +1,5 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import URLValidator
 from rest_framework import serializers
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
 from datetime import date
@@ -29,7 +31,7 @@ class MemberPackagePublicSerializer(serializers.ModelSerializer):
         model = MemberPackage
         fields = (
             'id', 'name', 'package_type', 'duration_in_days', 'price',
-            'description', 'features', 'add_ons',
+            'description', 'features', 'add_ons', 'display_order', 'is_highlighted',
         )
 
 
@@ -158,16 +160,33 @@ class MemberMinimalSerializer(serializers.ModelSerializer):
 class GymClassSerializer(serializers.ModelSerializer):
     class_type_display = serializers.CharField(source='get_class_type_display', read_only=True)
     level_display = serializers.CharField(source='get_level_display', read_only=True)
+    image_url = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = GymClass
         fields = (
             'id', 'name', 'class_type', 'class_type_display',
             'level', 'level_display', 'instructor',
-            'duration_minutes', 'capacity', 'description',
+            'duration_minutes', 'capacity', 'description', 'image_url',
             'is_active', 'created_at', 'updated_at',
         )
         read_only_fields = ['created_at', 'updated_at']
+
+    def validate_image_url(self, value):
+        normalized = (value or '').strip()
+        if not normalized:
+            return ''
+
+        if normalized.startswith('/media/'):
+            return normalized
+
+        validator = URLValidator()
+        try:
+            validator(normalized)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError('Enter a valid image URL.') from exc
+
+        return normalized
 
 
 # ----------------------------

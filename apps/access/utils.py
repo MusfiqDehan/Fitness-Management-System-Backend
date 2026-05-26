@@ -58,7 +58,8 @@ def user_can(user, feature_key: str, required_level: str = "view") -> bool:
     """
     if not is_in_tenant_schema():
         return False
-    tenant = getattr(user, "tenant", None) or _resolve_current_tenant()
+    # Prefer the active schema tenant over user.tenant to avoid stale assignments.
+    tenant = _resolve_current_tenant() or getattr(user, "tenant", None)
     if tenant is None:
         return False
     if not tenant_has_feature(tenant, feature_key):

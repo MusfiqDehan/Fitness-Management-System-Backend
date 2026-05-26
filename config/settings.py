@@ -78,6 +78,8 @@ SHARED_APPS = [
     'rest_framework',
     'corsheaders',
     'drf_spectacular',
+    'apps.crm.apps.CrmConfig',
+    'apps.reminder.apps.ReminderConfig',
 ]
 
 # Apps whose tables are replicated inside EACH tenant schema
@@ -90,10 +92,10 @@ TENANT_APPS = [
     'apps.membership.apps.MembershipConfig',
     'apps.quick_action.apps.QuickActionConfig',
     'apps.cms.apps.CmsConfig',
-    'apps.crm.apps.CrmConfig',
     'apps.billing.apps.BillingConfig',
     'apps.attendance.apps.AttendanceConfig',
     'apps.trainer.apps.TrainerConfig',
+    'apps.reminder.apps.ReminderConfig',
 ]
 
 # Django requires a flat INSTALLED_APPS list; django-tenants merges both lists
@@ -163,7 +165,7 @@ if _cors_allowed_origin_regexes:
     CORS_ALLOWED_ORIGIN_REGEXES = _cors_allowed_origin_regexes
 elif not DEBUG:
     # Production-friendly default to allow wildcard tenant subdomains.
-    root_domain = os.environ.get('TENANT_ROOT_DOMAIN', 'musfiqdehan.com').strip().replace('.', r'\.')
+    root_domain = os.environ.get('TENANT_ROOT_DOMAIN', 'fitssort.com').strip().replace('.', r'\.')
     CORS_ALLOWED_ORIGIN_REGEXES = [
         rf'^https://([a-z0-9-]+\.)?{root_domain}$',
     ]
@@ -192,6 +194,11 @@ TENANT_FRONTEND_BASE_DOMAIN = os.environ.get('TENANT_FRONTEND_BASE_DOMAIN', TENA
 TENANT_FRONTEND_SCHEME = os.environ.get('TENANT_FRONTEND_SCHEME', 'http' if DEBUG else 'https').strip().lower() or ('http' if DEBUG else 'https')
 TENANT_FRONTEND_PORT = os.environ.get('TENANT_FRONTEND_PORT', '').strip()
 TENANT_ONBOARDING_LINKS_PUBLIC = os.environ.get('TENANT_ONBOARDING_LINKS_PUBLIC', 'false').lower() in ('true', '1')
+# Public URL of this backend used to build payment-gateway callback URLs.
+# Must be the real Django port — NOT the Vite proxy port.
+# Local dev default: http://localhost:8021
+# Production: set BACKEND_BASE_URL=https://api.yourdomain.com in .env.prod
+BACKEND_BASE_URL = os.environ.get('BACKEND_BASE_URL', 'http://localhost:8021').strip().rstrip('/')
 
 ROOT_URLCONF = 'config.urls'
 
@@ -362,15 +369,36 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.AllowAny",
     ],
     'DEFAULT_THROTTLE_CLASSES': [
+        # # Burst guards fire first (short window — blocks rapid automated hits).
+        # 'utils.throttling.BurstAnonRateThrottle',
+        # 'utils.throttling.BurstUserRateThrottle',
+        # # Sustained guards enforce hourly volume caps.
+        # 'utils.throttling.SustainedAnonRateThrottle',
+        # 'utils.throttling.SustainedUserRateThrottle',
+        # Scope-specific overrides on individual views (auth, registration…).
         'rest_framework.throttling.ScopedRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
+        # # --- Global burst limits (short window) ---
+        # # Unauthenticated: env THROTTLE_BURST_ANON, default 20/min
+        # 'burst_anon': os.environ.get('THROTTLE_BURST_ANON', '20/min'),
+        # # Authenticated: env THROTTLE_BURST_USER, default 60/min
+        # 'burst_user': os.environ.get('THROTTLE_BURST_USER', '60/min'),
+
+        # # --- Global sustained limits (hourly volume) ---
+        # # Unauthenticated: env THROTTLE_SUSTAINED_ANON, default 500/hour
+        # 'sustained_anon': os.environ.get('THROTTLE_SUSTAINED_ANON', '500/hour'),
+        # # Authenticated: env THROTTLE_SUSTAINED_USER, default 2000/hour
+        # 'sustained_user': os.environ.get('THROTTLE_SUSTAINED_USER', '2000/hour'),
+
+        # --- Scope-specific overrides (applied per view via throttle_scope) ---
         'tenant_registration': '10/hour',
         'tenant_auth': '30/minute',
         'tenant_password_reset': '10/hour',
         'tenant_password_setup': '20/hour',
         'superadmin_invitation': '60/hour',
     },
+    # 'EXCEPTION_HANDLER': 'utils.throttling.throttle_exception_handler',
     'DEFAULT_FILTER_BACKENDS': [
         'django_filters.rest_framework.DjangoFilterBackend',
         'rest_framework.filters.SearchFilter',
@@ -393,6 +421,10 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
+    # Strip the common /api/v1 prefix before deriving tags so that each app
+    # (membership, billing, attendance, etc.) gets its own Swagger section
+    # instead of everything being grouped under the generic 'api' tag.
+    'SCHEMA_PATH_PREFIX': r'/api/v1',
     'SECURITY': [{'bearerAuth': []}],
     'SWAGGER_UI_SETTINGS': {
         'persistAuthorization': True,
@@ -409,6 +441,8 @@ EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', 15))
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', os.environ.get('EMAIL_HOST_USER', 'noreply@example.com'))
+# Recipient address for contact-form query notifications
+CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', os.environ.get('EMAIL_HOST_USER', 'contact@fitssort.com'))
 
 # ADMS device logging
 LOGGING = {

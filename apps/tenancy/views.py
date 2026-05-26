@@ -15,11 +15,17 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
+# from utils.throttling import (
+# 	BurstAnonRateThrottle,
+# 	BurstUserRateThrottle,
+# 	SustainedAnonRateThrottle,
+# 	SustainedUserRateThrottle,
+# )
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.identity.models import User
-from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog
+from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage
 from .permissions import IsPlatformFeaturePermission
 from .serializers import (
 	TenantSelfRegistrationSerializer,
@@ -33,6 +39,7 @@ from .serializers import (
 	SuperadminInvitationSerializer,
 	full_domain_for_subdomain,
 )
+from .services import normalize_plan_slug
 
 
 def _is_superadmin(user):
@@ -132,10 +139,12 @@ def _request_host(request):
 
 
 def _public_request_hosts():
+	public_domain = getattr(settings, "PUBLIC_DOMAIN", "").strip().lower()
 	return {
 		host
 		for host in {
-			getattr(settings, "PUBLIC_DOMAIN", "").strip().lower(),
+			public_domain,
+			f"www.{public_domain}" if public_domain else "",
 			"localhost",
 			"127.0.0.1",
 			"testserver",
@@ -173,10 +182,105 @@ def _assert_token_request_scope(request, invitation):
 	return expected_domain
 
 
-def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_domain="", primary_domain="", max_users=10,
-								max_branches=1, plan="free"):
+def _get_package_trial_days(plan_slug: str) -> int:
+	"""Return trial_days from PlatformPackage, defaulting to 14 if not found."""
+	resolved_plan_slug = normalize_plan_slug(plan_slug)
+	if not resolved_plan_slug:
+		return 14
 	public_schema = get_public_schema_name()
 	with schema_context(public_schema):
+		pkg = PlatformPackage.objects.filter(slug=resolved_plan_slug, is_active=True).first()
+		if pkg:
+			return max(0, pkg.trial_days)
+	return 14
+
+
+def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dict:
+	"""Initiate a SaaS subscription payment for a newly created tenant.
+
+	Returns a dict with `payment_url` (str or None) and `trial_days` (int).
+	Only initiates payment when:
+	  - The package has price_monthly > 0
+	  - The package has trial_days == 0 (no free trial)
+	  - The platform has a default gateway with credentials configured
+
+	When trial_days > 0, no payment is initiated — the tenant is billed
+	after the trial period ends (via a separate renewal flow).
+	"""
+	public_schema = get_public_schema_name()
+	with schema_context(public_schema):
+		pkg = PlatformPackage.objects.filter(slug=plan_slug, is_active=True).first()
+		if pkg is None:
+			return {"payment_url": None, "trial_days": 14, "is_trial": True}
+
+		trial_days = max(0, pkg.trial_days)
+
+		if trial_days > 0:
+			# Free trial — no immediate payment required
+			return {"payment_url": None, "trial_days": trial_days, "is_trial": True}
+
+		from decimal import Decimal
+		if pkg.price_monthly <= Decimal("0"):
+			# Free plan — no charge
+			return {"payment_url": None, "trial_days": 0, "is_trial": False}
+
+		# Paid plan with no trial — initiate payment now
+		gateway = PaymentGateway.objects.filter(
+			is_default_for_subscriptions=True,
+		).first()
+		if gateway is None or not (gateway.platform_credentials or {}):
+			# No gateway configured yet — let them in anyway (admin can collect payment manually)
+			return {"payment_url": None, "trial_days": 0, "is_trial": False}
+
+		from apps.billing.services import get_gateway
+		from apps.tenancy.models import TenantSubscriptionInvoice
+		import uuid as _uuid
+
+		tran_id = f"SUB-{tenant.schema_name.upper()}-{_uuid.uuid4().hex[:12].upper()}"
+		backend_base = getattr(settings, "BACKEND_BASE_URL", request.build_absolute_uri("/").rstrip("/"))
+		invoice = TenantSubscriptionInvoice.objects.create(
+			tenant=tenant,
+			package_slug=pkg.slug,
+			package_name=pkg.name,
+			amount=pkg.price_monthly,
+			currency="BDT",
+			tran_id=tran_id,
+			gateway_slug=gateway.slug,
+			status=TenantSubscriptionInvoice.STATUS_PENDING,
+			period_start=timezone.now(),
+			period_end=timezone.now() + timedelta(days=30),
+			is_trial=False,
+		)
+
+		try:
+			svc = get_gateway(
+				gateway.slug,
+				credentials=gateway.platform_credentials,
+				is_sandbox=gateway.is_sandbox,
+				success_url=f"{backend_base}/api/v1/billing/subscription/success/",
+				fail_url=f"{backend_base}/api/v1/billing/subscription/fail/",
+				cancel_url=f"{backend_base}/api/v1/billing/subscription/cancel/",
+				ipn_url=f"{backend_base}/api/v1/billing/subscription/ipn/",
+			)
+			result = svc.initiate(invoice)
+			return {
+				"payment_url": result.get("gateway_url"),
+				"tran_id": tran_id,
+				"trial_days": 0,
+				"is_trial": False,
+			}
+		except Exception:
+			# If payment initiation fails, don't block tenant creation; admin can follow up
+			invoice.status = TenantSubscriptionInvoice.STATUS_FAILED
+			invoice.save(update_fields=["status", "updated_at"])
+			return {"payment_url": None, "trial_days": 0, "is_trial": False}
+
+
+def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_domain="", primary_domain="", max_users=10,
+								max_branches=1, plan="starter"):
+	public_schema = get_public_schema_name()
+	with schema_context(public_schema):
+		resolved_plan_slug = normalize_plan_slug(plan)
 		schema_name = _derive_schema_name(subdomain)
 		if Tenant.objects.filter(schema_name=schema_name).exists():
 			raise ValidationError({"subdomain": "This subdomain conflicts with an existing tenant schema."})
@@ -202,10 +306,10 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 			code=final_code,
 			owner_email=owner_email,
 			billing_email=owner_email,
-			plan=(plan or "free"),
+			plan=resolved_plan_slug,
 			status="trial",
 			is_trial=True,
-			trial_ends_at=timezone.now() + timedelta(days=14),
+			trial_ends_at=timezone.now() + timedelta(days=_get_package_trial_days(resolved_plan_slug)),
 			max_users=max_users,
 			max_branches=max_branches,
 			is_enabled=True,
@@ -223,6 +327,29 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 			Domain.objects.create(domain=custom_domain, tenant=tenant, is_primary=False)
 
 	return tenant, domain
+
+
+def _bootstrap_tenant_branding_defaults(tenant):
+	"""Initialize tenant-local branding records from the tenant company name."""
+	with schema_context(tenant.schema_name):
+		from apps.cms.models import SiteSettings
+		from apps.dashboard.models import GymProfile
+
+		gym_profile, _ = GymProfile.objects.get_or_create(
+			pk=1,
+			defaults={"gym_name": tenant.name},
+		)
+		if not (gym_profile.gym_name or "").strip():
+			gym_profile.gym_name = tenant.name
+			gym_profile.save(update_fields=["gym_name"])
+
+		site_settings, _ = SiteSettings.objects.get_or_create(
+			pk=1,
+			defaults={"company_name": tenant.name},
+		)
+		if not (site_settings.company_name or "").strip():
+			site_settings.company_name = tenant.name
+			site_settings.save(update_fields=["company_name"])
 
 
 def _build_frontend_url(path_suffix, *, subdomain="", domain="", prefer_public=False):
@@ -267,16 +394,26 @@ def _tenant_entry_blocked_response():
 	return Response({"detail": "Tenant workspace is suspended."}, status=status.HTTP_403_FORBIDDEN)
 
 
-def _password_setup_success_response(invitation, *, domain, message="Password configured successfully."):
+def _password_setup_success_response(invitation, *, domain, message="Password configured successfully.", payment_info=None):
 	tenant = invitation.tenant
-	return Response(
-		{
-			"message": message,
-			"tenant_schema": tenant.schema_name if tenant else "",
-			"tenant_domain": domain,
-			"login_url": _build_login_url(subdomain=invitation.subdomain, domain=domain),
-		}
-	)
+	data = {
+		"message": message,
+		"tenant_schema": tenant.schema_name if tenant else "",
+		"tenant_domain": domain,
+		"login_url": _build_login_url(subdomain=invitation.subdomain, domain=domain),
+	}
+	if payment_info:
+		data.update({
+			"payment_required": bool(payment_info.get("payment_url")),
+			"payment_url": payment_info.get("payment_url"),
+			"tran_id": payment_info.get("tran_id"),
+			"is_trial": payment_info.get("is_trial", True),
+			"trial_days": payment_info.get("trial_days", 0),
+			"trial_ends_at": (
+				tenant.trial_ends_at.isoformat() if tenant and tenant.trial_ends_at else None
+			),
+		})
+	return Response(data)
 
 
 def _count_tenant_admin_users():
@@ -293,13 +430,20 @@ def _count_tenant_admin_users():
 
 class TenantSelfRegistrationAPIView(APIView):
 	permission_classes = [AllowAny]
-	throttle_classes = [ScopedRateThrottle]
+	throttle_classes = [
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
+		ScopedRateThrottle,
+	]
 	throttle_scope = "tenant_registration"
 
 	def post(self, request):
 		serializer = TenantSelfRegistrationSerializer(data=request.data, context={"request": request})
 		serializer.is_valid(raise_exception=True)
 		payload = serializer.validated_data
+		selected_plan = normalize_plan_slug(payload.get("plan"))
 
 		domain = full_domain_for_subdomain(payload["subdomain"], request=request)
 		with transaction.atomic():
@@ -312,7 +456,7 @@ class TenantSelfRegistrationAPIView(APIView):
 				ttl_minutes=120,
 				metadata={
 					"domain": domain,
-					"plan": payload.get("plan", "trial") or "trial",
+					"plan": selected_plan,
 					"max_users": 10,
 					"max_branches": 1,
 					"contact_phone": payload.get("contact_phone", ""),
@@ -357,7 +501,13 @@ class SuperadminInvitationAPIView(APIView):
 	permission_classes = [
 		IsPlatformFeaturePermission.require("platform.tenants", "edit"),
 	]
-	throttle_classes = [ScopedRateThrottle]
+	throttle_classes = [
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
+		ScopedRateThrottle,
+	]
 	throttle_scope = "superadmin_invitation"
 
 	def post(self, request):
@@ -451,7 +601,7 @@ class SuperadminInvitationAPIView(APIView):
 				metadata={
 					"domain": domain,
 					"custom_domain": payload.get("custom_domain", ""),
-					"plan": payload.get("plan", "pro") or "pro",
+					"plan": normalize_plan_slug(payload.get("plan") or "pro"),
 					"max_users": payload.get("max_users", 10),
 					"max_branches": payload.get("max_branches", 1),
 				},
@@ -533,7 +683,13 @@ class InvitationValidationAPIView(APIView):
 
 class PasswordSetupAPIView(APIView):
 	permission_classes = [AllowAny]
-	throttle_classes = [ScopedRateThrottle]
+	throttle_classes = [
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
+		ScopedRateThrottle,
+	]
 	throttle_scope = "tenant_password_setup"
 
 	def post(self, request):
@@ -594,6 +750,7 @@ class PasswordSetupAPIView(APIView):
 					return Response({"detail": "Tenant context not found."}, status=status.HTTP_400_BAD_REQUEST)
 
 				metadata = invitation.metadata or {}
+				plan_slug = normalize_plan_slug(metadata.get("plan"))
 				tenant, domain = _create_tenant_with_domains(
 					company_name=invitation.company_name,
 					subdomain=invitation.subdomain,
@@ -602,11 +759,13 @@ class PasswordSetupAPIView(APIView):
 					primary_domain=metadata.get("domain", ""),
 					max_users=int(metadata.get("max_users", 10) or 10),
 					max_branches=int(metadata.get("max_branches", 1) or 1),
-					plan=metadata.get("plan", "trial") or "trial",
+					plan=plan_slug,
 				)
 				invitation.tenant = tenant
 				invitation.save(update_fields=["tenant"])
+				_bootstrap_tenant_branding_defaults(tenant)
 			else:
+				plan_slug = None  # existing tenant — no subscription payment needed
 				domain = tenant.domains.filter(is_primary=True).values_list("domain", flat=True).first() or domain
 
 			metadata = invitation.metadata or {}
@@ -677,12 +836,52 @@ class PasswordSetupAPIView(APIView):
 			invitation.used_at = setup_time
 			invitation.save(update_fields=["used_at"])
 
-		return _password_setup_success_response(invitation, domain=domain)
+		# Fire platform-admin notification for new tenant registrations
+		if plan_slug is not None:
+			try:
+				from apps.reminder.utils import create_notification
+				create_notification(
+					notification_type='tenant_registered',
+					title=f'New gym registered: {tenant.name}',
+					actor_name=tenant.name,
+					actor_email=email,
+					target_type='tenant',
+					target_id=str(tenant.id),
+				)
+			except Exception:
+				pass  # Notifications are best-effort; do not break the registration flow
 
+		# For new owner onboarding flows, optionally initiate subscription payment
+		# when the selected package requires immediate charge.
+		payment_info = None
+		if plan_slug and is_owner_setup and not is_member_invite:
+			payment_info = _maybe_initiate_subscription_payment(tenant, plan_slug, request)
+			if payment_info and not payment_info.get('is_trial', True):
+				try:
+					from apps.reminder.utils import create_notification
+					create_notification(
+						notification_type='tenant_subscribed',
+						title=f'{tenant.name} subscribed to {plan_slug}',
+						actor_name=tenant.name,
+						actor_email=email,
+						target_type='tenant',
+						target_id=str(tenant.id),
+						metadata={'plan': plan_slug},
+					)
+				except Exception:
+					pass  # Notifications are best-effort
+
+		return _password_setup_success_response(invitation, domain=domain, payment_info=payment_info)
 
 class TenantAuthenticationAPIView(APIView):
 	permission_classes = [AllowAny]
-	throttle_classes = [ScopedRateThrottle]
+	throttle_classes = [
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
+		ScopedRateThrottle,
+	]
 	throttle_scope = "tenant_auth"
 
 	def post(self, request):
@@ -766,7 +965,13 @@ class TenantAuthenticationAPIView(APIView):
 
 class PasswordResetRequestAPIView(APIView):
 	permission_classes = [AllowAny]
-	throttle_classes = [ScopedRateThrottle]
+	throttle_classes = [
+		# BurstAnonRateThrottle,
+		# BurstUserRateThrottle,
+		# SustainedAnonRateThrottle,
+		# SustainedUserRateThrottle,
+		ScopedRateThrottle,
+	]
 	throttle_scope = "tenant_password_reset"
 
 	def post(self, request):
@@ -1087,3 +1292,45 @@ class TenantMemberInviteAPIView(APIView):
 			{"message": f"Invitation sent to {email}.", "email": email, "role": role_slug},
 			status=status.HTTP_201_CREATED,
 		)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Change Password — available in both tenant and public schemas
+# Any authenticated user may change their own password.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ChangePasswordView(APIView):
+	"""Allow any authenticated user (tenant or platform admin) to change their password.
+
+	POST /api/v1/tenancy/password/change/
+	Body: { current_password, new_password }
+	"""
+
+	permission_classes = [IsAuthenticated]
+
+	def post(self, request):
+		current_password = (request.data.get("current_password") or "").strip()
+		new_password = (request.data.get("new_password") or "").strip()
+
+		if not current_password or not new_password:
+			return Response(
+				{"detail": "current_password and new_password are required."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		if not request.user.check_password(current_password):
+			return Response(
+				{"detail": "Current password is incorrect."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		if len(new_password) < 8:
+			return Response(
+				{"detail": "New password must be at least 8 characters."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		request.user.set_password(new_password)
+		request.user.password_set_at = timezone.now()
+		request.user.save(update_fields=["password", "password_set_at"])
+		return Response({"detail": "Password changed successfully."})

@@ -94,6 +94,11 @@ class SiteSettings(models.Model):
     logo_width = models.PositiveIntegerField(default=120, help_text="Logo display width in pixels")
     logo_height = models.PositiveIntegerField(default=40, help_text="Logo display height in pixels")
     company_name = models.CharField(max_length=200, blank=True, help_text="Optional company name shown in navbar/footer")
+    phone = models.CharField(max_length=20, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    address = models.TextField(blank=True, default="")
+    website = models.URLField(blank=True, default="")
+    timezone = models.CharField(max_length=50, blank=True, default="")
     navbar_pages = models.JSONField(
         default=list,
         blank=True,

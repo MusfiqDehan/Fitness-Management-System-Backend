@@ -9,6 +9,7 @@ from .models import (
     Feature,
     PlatformPackage,
     PlatformPackageFeature,
+    PlatformPricingConfig,
     PlatformRole,
     PlatformRolePermission,
     PlatformUserRole,
@@ -118,6 +119,11 @@ class PlatformPackageSerializer(serializers.ModelSerializer):
             "price_monthly", "price_yearly",
             "max_users", "max_branches", "trial_days",
             "is_active", "is_public", "sort_order", "highlight",
+            "badge_label", "cta_label",
+            "setup_fee", "original_setup_fee",
+            "original_price_monthly", "original_price_yearly",
+            "included_items", "yearly_discount_percent",
+            "price_custom_label", "price_period_label",
             "features",
             "created_at", "updated_at",
         ]
@@ -135,6 +141,11 @@ class PublicPlatformPackageSerializer(serializers.ModelSerializer):
             "price_monthly", "price_yearly",
             "max_users", "max_branches", "trial_days",
             "highlight", "sort_order",
+            "badge_label", "cta_label",
+            "setup_fee", "original_setup_fee",
+            "original_price_monthly", "original_price_yearly",
+            "included_items", "yearly_discount_percent",
+            "price_custom_label", "price_period_label",
             "feature_names",
         ]
 
@@ -144,6 +155,15 @@ class PublicPlatformPackageSerializer(serializers.ModelSerializer):
             .order_by("feature__sort_order")
             .values_list("feature__name", flat=True)
         )
+
+
+class PlatformPricingConfigSerializer(serializers.ModelSerializer):
+    """Read/write serializer for the singleton PlatformPricingConfig."""
+
+    class Meta:
+        model = PlatformPricingConfig
+        fields = ["id", "default_yearly_discount_percent", "updated_at"]
+        read_only_fields = ["id", "updated_at"]
 
 
 class PlatformPackageFeatureBulkSerializer(serializers.Serializer):

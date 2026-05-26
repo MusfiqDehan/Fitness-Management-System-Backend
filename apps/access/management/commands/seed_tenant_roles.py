@@ -97,7 +97,7 @@ FULL_ACCESS_FEATURE_KEYS = [
     "attendance.devices", "attendance.access_gate", "attendance.fingerprints", "attendance.iclock",
     "instructors",
     "classes", "classes.bookings",
-    "payments", "payments.invoices",
+    "payments", "payments.invoices", "payments.gateways",
     "crm.contacts", "crm.inquiries",
     "cms.banners", "cms.blogs",
     "clubs",

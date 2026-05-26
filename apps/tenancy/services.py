@@ -20,13 +20,14 @@ from .models import (
 
 
 PLAN_PACKAGE_ALIASES = {
-    "free": "trial",
+    "trial": "starter",
+    "free": "starter",
     "pro": "starter",
 }
 
 
 def normalize_plan_slug(plan: str | None) -> str:
-    plan_slug = (plan or "trial").strip().lower()
+    plan_slug = (plan or "starter").strip().lower()
     return PLAN_PACKAGE_ALIASES.get(plan_slug, plan_slug)
 
 

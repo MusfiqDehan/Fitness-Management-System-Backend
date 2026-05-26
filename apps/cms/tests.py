@@ -10,11 +10,12 @@ from django_tenants.utils import schema_context
 from rest_framework import status
 from rest_framework.test import APITestCase, APIRequestFactory, force_authenticate
 
+from apps.dashboard.models import GymProfile
 from apps.dashboard.views import FileUploadView
 from apps.identity.models import User
 from apps.tenancy.models import Domain, Feature, Tenant, TenantFeatureFlag
 
-from .models import Blog, BlogCategory, PromoBanner, SiteBanner
+from .models import Blog, BlogCategory, PromoBanner, SiteBanner, SiteSettings
 from .views import (
 	BlogCategoryCreateAPIView,
 	BlogCategoryListAPIView,
@@ -37,6 +38,8 @@ from .views import (
 	SiteBannerListAPIView,
 	SiteBannerRetrieveAPIView,
 	SiteBannerUpdateAPIView,
+	SiteSettingsAPIView,
+	PublicSiteSettingsView,
 )
 
 
@@ -212,6 +215,30 @@ class CMSBannerApiTests(APITestCase):
 
 		self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
 		self.assertEqual(create_response.data["desktop_url"], "/media/uploads/hero-desktop.jpg")
+
+	def test_site_banner_video_create_accepts_uploaded_media_paths(self):
+		create_response = self._call_tenant_view(
+			SiteBannerCreateAPIView.as_view(),
+			"post",
+			reverse("cms:site-banner-create"),
+			{
+				"title": "Hero Video",
+				"subtitle": "Looped gym reel",
+				"media_type": "video",
+				"desktop_url": "/media/uploads/hero-desktop.mp4",
+				"tablet_url": "/media/uploads/hero-tablet.mp4",
+				"mobile_url": "/media/uploads/hero-mobile.mp4",
+				"cta_text": "Watch Now",
+				"cta_link": "/pricing",
+				"alt_text": "Members training in a cinematic hero video",
+				"is_active": True,
+			},
+			user=self.user,
+		)
+
+		self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(create_response.data["media_type"], "video")
+		self.assertEqual(create_response.data["desktop_url"], "/media/uploads/hero-desktop.mp4")
 
 	def test_promo_banner_admin_crud_cycle(self):
 		create_response = self._call_tenant_view(
@@ -529,3 +556,65 @@ class CMSBannerApiTests(APITestCase):
 			slug="draft-recovery",
 		)
 		self.assertEqual(draft_detail_response.status_code, status.HTTP_404_NOT_FOUND)
+
+	def test_site_settings_contact_fields_round_trip(self):
+		"""SiteSettingsAPIView should accept and return the new contact fields."""
+		payload = {
+			'company_name': 'Test Gym',
+			'phone': '+8801234567890',
+			'email': 'gym@test.com',
+			'address': '42 Fitness Ave, Dhaka',
+			'website': 'https://testgym.com',
+			'timezone': 'Asia/Dhaka',
+		}
+		create_response = self._call_tenant_view(
+			SiteSettingsAPIView.as_view(),
+			'patch',
+			reverse('cms:site-settings'),
+			data=payload,
+			user=self.user,
+		)
+		self.assertEqual(create_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(create_response.data['phone'], '+8801234567890')
+		self.assertEqual(create_response.data['email'], 'gym@test.com')
+		self.assertEqual(create_response.data['address'], '42 Fitness Ave, Dhaka')
+		self.assertEqual(create_response.data['website'], 'https://testgym.com')
+		self.assertEqual(create_response.data['timezone'], 'Asia/Dhaka')
+
+		public_response = self._call_tenant_view(
+			PublicSiteSettingsView.as_view(),
+			'get',
+			reverse('cms:public-site-settings'),
+		)
+		self.assertEqual(public_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(public_response.data['phone'], '+8801234567890')
+		self.assertEqual(public_response.data['timezone'], 'Asia/Dhaka')
+
+	def test_public_site_settings_falls_back_to_gym_profile_when_missing(self):
+		"""Public tenant landing should still receive gym branding without auth."""
+		with schema_context(self.tenant.schema_name):
+			SiteSettings.objects.all().delete()
+			GymProfile.objects.update_or_create(
+				pk=1,
+				defaults={
+					'gym_name': 'Public Ready Gym',
+					'email': 'hello@public-ready.test',
+					'phone': '+8801888000000',
+					'website': 'https://public-ready.test',
+					'address': '123 Landing Street',
+					'timezone': 'Asia/Dhaka',
+					'logo_url': 'https://cdn.public-ready.test/logo.png',
+					'logo_width': 180,
+					'logo_height': 52,
+				},
+			)
+
+		public_response = self._call_tenant_view(
+			PublicSiteSettingsView.as_view(),
+			'get',
+			reverse('cms:public-site-settings'),
+		)
+		self.assertEqual(public_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(public_response.data['company_name'], 'Public Ready Gym')
+		self.assertEqual(public_response.data['phone'], '+8801888000000')
+		self.assertEqual(public_response.data['logo_url'], 'https://cdn.public-ready.test/logo.png')
