@@ -1554,12 +1554,17 @@ class PaymentInitiateView(APIView):
         cancel_url = f"{prefix}/cancel/"
         ipn_url = f"{prefix}/ipn/"
 
+        # Determine the dynamic tenant/platform currency configuration
+        from apps.dashboard.models import GymPreferences
+        pref = GymPreferences.objects.filter(pk=1).first()
+        active_currency = pref.currency if pref else "USD"
+
         with transaction.atomic():
             tx = PaymentTransaction.objects.create(
                 tran_id=tran_id,
                 gateway_slug=gateway_slug,
                 amount=payment.amount,
-                currency="BDT",
+                currency=active_currency,
                 status=PaymentTransaction.STATUS_INIT,
                 source_payment=payment,
             )
