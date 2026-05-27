@@ -14,6 +14,7 @@ from .views import (
 	TenantAuditLogListAPIView,
 	TenantMemberInviteAPIView,
 	ChangePasswordView,
+	PlatformSettingsAPIView,
 )
 from .rbac_views import (
 	PlatformModuleListView,
@@ -104,5 +105,8 @@ urlpatterns = [
 	# Per-tenant feature overrides (Phase 1)
 	path('admin/tenants/<int:tenant_id>/features/', TenantFeatureFlagListView.as_view(), name='tenant-features'),
 	path('admin/tenants/<int:tenant_id>/features/resync/', TenantFeatureFlagResyncView.as_view(), name='tenant-features-resync'),
+
+	# Platform-wide settings (singleton, platform.settings feature-gated)
+	path('admin/platform-settings/', PlatformSettingsAPIView.as_view(), name='platform-settings'),
 ]
 
