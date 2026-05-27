@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import SiteBanner, PromoBanner, SiteSettings, PageContent, BlogCategory, Blog
+from .models import SiteBanner, PromoBanner, PageContent, BlogCategory, Blog
 
 
 @admin.register(SiteBanner)
@@ -16,11 +16,6 @@ class PromoBannerAdmin(admin.ModelAdmin):
     list_filter = ['banner_type', 'is_active']
     search_fields = ['link_url']
     ordering = ['-created_at']
-
-
-@admin.register(SiteSettings)
-class SiteSettingsAdmin(admin.ModelAdmin):
-    pass
 
 
 @admin.register(PageContent)
