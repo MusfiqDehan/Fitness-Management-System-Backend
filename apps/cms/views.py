@@ -9,7 +9,6 @@ from django.utils import timezone
 from .models import (
     SiteBanner,
     PromoBanner,
-    SiteSettings,
     PageContent,
     BlogCategory,
     Blog,
@@ -17,7 +16,6 @@ from .models import (
 from .serializers import (
     SiteBannerSerializer,
     PromoBannerSerializer,
-    SiteSettingsSerializer,
     PageContentSerializer,
     BlogCategorySerializer,
     BlogListSerializer,
@@ -181,97 +179,6 @@ class PublicPromoBannerListView(generics.ListAPIView):
             Q(end_date__isnull=True) | Q(end_date__gte=today)
         )
         return qs
-
-
-# -------------------------------------------------------
-# Site Settings (Singleton) - Dashboard CRUD
-# -------------------------------------------------------
-
-class SiteSettingsAPIView(APIView):
-    feature_key = 'settings'
-    """
-    Manage the single SiteSettings record.
-
-    GET  /api/v1/cms/site-settings/
-        Returns the settings object if it exists, or HTTP 204 No Content.
-
-    POST /api/v1/cms/site-settings/
-        Creates the record on first call; updates it on subsequent calls
-        (upsert / get_or_create pattern). All fields are optional on update.
-
-    Permission: admin/staff only.
-    """
-    permission_classes = [HasFeatureMethodPermission]
-
-    def get(self, request):
-        instance = SiteSettings.objects.first()
-        if instance is None:
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        serializer = SiteSettingsSerializer(instance)
-        return Response(serializer.data)
-
-    def post(self, request):
-        instance, _ = SiteSettings.objects.get_or_create(pk=1)
-        serializer = SiteSettingsSerializer(instance, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-# -------------------------------------------------------
-# Site Settings - Public Read
-# -------------------------------------------------------
-
-class PublicSiteSettingsView(APIView):
-    """GET /api/v1/cms/public/site-settings/ — public singleton site settings."""
-    permission_classes = [permissions.AllowAny]
-
-    def get(self, request):
-        settings_obj = SiteSettings.objects.first()
-        from apps.dashboard.models import GymProfile
-
-        gym_profile = GymProfile.objects.filter(pk=1).first()
-
-        if not settings_obj and not gym_profile:
-            return Response(status=status.HTTP_204_NO_CONTENT)
-
-        payload = SiteSettingsSerializer(settings_obj).data if settings_obj else {
-            "logo_url": "",
-            "logo_width": 120,
-            "logo_height": 40,
-            "company_name": "",
-            "phone": "",
-            "email": "",
-            "address": "",
-            "website": "",
-            "timezone": "",
-            "navbar_pages": [],
-            "footer_pages": [],
-            "updated_at": None,
-        }
-
-        if gym_profile:
-            if not (payload.get("company_name") or "").strip():
-                payload["company_name"] = gym_profile.gym_name or ""
-            if not (payload.get("phone") or "").strip():
-                payload["phone"] = gym_profile.phone or ""
-            if not (payload.get("email") or "").strip():
-                payload["email"] = gym_profile.email or ""
-            if not (payload.get("address") or "").strip():
-                payload["address"] = gym_profile.address or ""
-            if not (payload.get("website") or "").strip():
-                payload["website"] = gym_profile.website or ""
-            if not (payload.get("timezone") or "").strip():
-                payload["timezone"] = gym_profile.timezone or ""
-            if not (payload.get("logo_url") or "").strip():
-                payload["logo_url"] = gym_profile.logo_url or ""
-            if not payload.get("logo_width"):
-                payload["logo_width"] = gym_profile.logo_width
-            if not payload.get("logo_height"):
-                payload["logo_height"] = gym_profile.logo_height
-
-        return Response(payload)
 
 
 # -------------------------------------------------------
