@@ -7,8 +7,7 @@ from django_tenants.utils import schema_context
 from rest_framework import status
 from rest_framework.test import APITestCase, APIRequestFactory
 
-from apps.cms.models import SiteSettings
-from apps.dashboard.models import GymProfile
+from apps.dashboard.models import GymPreferences, GymProfile
 from apps.identity.models import User
 from .models import (
 	Domain,
@@ -18,6 +17,7 @@ from .models import (
 	PaymentGateway,
 	PlatformPackage,
 	PlatformPackageFeature,
+	PlatformSettings,
 	Tenant,
 	TenantFeatureFlag,
 )
@@ -173,6 +173,57 @@ class TenancyApiTests(APITestCase):
 		self.assertIn("access", res.data)
 		self.assertIn("refresh", res.data)
 		self.assertEqual(res.data["tenant"]["schema_name"], self.tenant.schema_name)
+
+	def test_platform_tenant_locale_patch_syncs_tenant_preferences_language(self):
+		self.client.force_authenticate(user=self.public_user)
+
+		res = self.client.patch(
+			f"/api/v1/tenancy/admin/tenants/{self.tenant.id}/",
+			{"locale": "bn"},
+			format="json",
+			HTTP_HOST="testserver",
+		)
+		self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+		with schema_context("public"):
+			self.tenant.refresh_from_db()
+			self.assertEqual(self.tenant.locale, "bn")
+
+		with schema_context(self.tenant.schema_name):
+			prefs, _ = GymPreferences.objects.get_or_create(pk=1)
+			self.assertEqual(prefs.language, "bn")
+
+	def test_platform_default_language_patch_updates_tenants_still_on_previous_default(self):
+		with schema_context("public"):
+			PlatformSettings.objects.update_or_create(
+				pk=1,
+				defaults={"default_timezone": "Asia/Dhaka", "default_language": "en"},
+			)
+			self.tenant.locale = "en"
+			self.tenant.save(update_fields=["locale", "updated_at"])
+
+		with schema_context(self.tenant.schema_name):
+			GymPreferences.objects.update_or_create(
+				pk=1,
+				defaults={"language": "en"},
+			)
+
+		self.client.force_authenticate(user=self.public_user)
+		res = self.client.patch(
+			"/api/v1/tenancy/admin/platform-settings/",
+			{"default_language": "hi"},
+			format="json",
+			HTTP_HOST="testserver",
+		)
+		self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+		with schema_context("public"):
+			self.tenant.refresh_from_db()
+			self.assertEqual(self.tenant.locale, "hi")
+
+		with schema_context(self.tenant.schema_name):
+			prefs = GymPreferences.objects.get(pk=1)
+			self.assertEqual(prefs.language, "hi")
 
 	def test_superadmin_invite_requires_authentication(self):
 		payload = {
@@ -554,9 +605,7 @@ class TenancyApiTests(APITestCase):
 
 		with schema_context(tenant.schema_name):
 			profile = GymProfile.objects.get(pk=1)
-			site_settings = SiteSettings.objects.get(pk=1)
 			self.assertEqual(profile.gym_name, "Login Gym")
-			self.assertEqual(site_settings.company_name, "Login Gym")
 
 	def test_password_setup_retry_returns_success_for_already_used_token(self):
 		factory = APIRequestFactory()
