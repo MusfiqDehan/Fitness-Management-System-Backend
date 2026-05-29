@@ -20,6 +20,12 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 from apps.trainer.views import TrainerPublicProfileView, VerifyTrainerInvitationAPIView, CompleteTrainerRegistrationAPIView
+from apps.tenancy.platform_settings_views import (
+    PlatformGymProfileView,
+    PlatformGymPreferencesView,
+    PlatformNotificationPreferencesView,
+    PlatformFileUploadView,
+)
 
 urlpatterns = [
     # Django admin (manages Tenant + Domain records)
@@ -48,6 +54,14 @@ urlpatterns = [
     path('api/v1/trainer/public/profile/<slug:username>/', TrainerPublicProfileView.as_view(), name='trainer-public-profile'),
     path('api/v1/trainer/public/verify-invitation/', VerifyTrainerInvitationAPIView.as_view(), name='trainer-verify-invitation'),
     path('api/v1/trainer/public/complete-registration/', CompleteTrainerRegistrationAPIView.as_view(), name='trainer-complete-registration'),
+
+    # Platform Admin settings — mirror of the tenant dashboard settings endpoints.
+    # Backed by public-schema singleton models so the shared Settings page works
+    # for platform admin users without touching tenant-schema tables.
+    path('api/v1/dashboard/settings/gym-profile/', PlatformGymProfileView.as_view(), name='platform-settings-gym-profile'),
+    path('api/v1/dashboard/settings/preferences/', PlatformGymPreferencesView.as_view(), name='platform-settings-preferences'),
+    path('api/v1/dashboard/settings/notifications/', PlatformNotificationPreferencesView.as_view(), name='platform-settings-notifications'),
+    path('api/v1/dashboard/upload/', PlatformFileUploadView.as_view(), name='platform-file-upload'),
 
     # API Schema & Docs (shared)
     path('api/v1/schema/', SpectacularAPIView.as_view(), name='schema'),
