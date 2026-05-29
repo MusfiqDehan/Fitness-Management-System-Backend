@@ -5,7 +5,6 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import (
     SiteBanner,
     PromoBanner,
-    SiteSettings,
     PageContent,
     BlogCategory,
     Blog,
@@ -185,48 +184,6 @@ class PromoBannerSerializer(serializers.ModelSerializer):
                 {"end_date": "End date must be after start date."}
             )
         return attrs
-
-
-# ---- Site Settings Serializer ----
-
-class SiteSettingsSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the singleton SiteSettings model.
-
-    `navbar_pages` and `footer_pages` are stored as JSON arrays of
-    `{page_name, label, order}` objects.
-    """
-
-    class Meta:
-        model = SiteSettings
-        fields = [
-            'id',
-            'logo_url',
-            'logo_width',
-            'logo_height',
-            'company_name',
-            'phone',
-            'email',
-            'address',
-            'website',
-            'timezone',
-            'navbar_pages',
-            'footer_pages',
-            'updated_at',
-        ]
-        read_only_fields = ['updated_at']
-
-    def validate_logo_width(self, value):
-        """Logo width must be between 40 and 600 pixels."""
-        if not (40 <= value <= 600):
-            raise serializers.ValidationError("Logo width must be between 40 and 600 pixels.")
-        return value
-
-    def validate_logo_height(self, value):
-        """Logo height must be between 20 and 300 pixels."""
-        if not (20 <= value <= 300):
-            raise serializers.ValidationError("Logo height must be between 20 and 300 pixels.")
-        return value
 
 
 # ---- Page Content Serializer ----
