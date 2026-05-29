@@ -30,7 +30,7 @@ class Tenant(TenantMixin):
     code = models.CharField(max_length=50, unique=True)
 
     # Config
-    timezone = models.CharField(max_length=50, default="UTC")
+    timezone = models.CharField(max_length=50, default="Asia/Dhaka")
     currency = models.CharField(max_length=10, default="USD")
     locale = models.CharField(max_length=10, default="en")
 
@@ -631,3 +631,163 @@ class TenantSubscriptionInvoice(models.Model):
 
     def __str__(self):
         return f"Invoice {self.tran_id} — {self.tenant.schema_name} [{self.status}]"
+
+
+# ===============================================================
+# PlatformSettings (public schema — singleton)
+#
+# Stores platform-wide defaults configurable by platform admins.
+# Only one row should ever exist (pk=1).  Views enforce this via
+# get_or_create(pk=1).
+# ===============================================================
+class PlatformSettings(models.Model):
+    """Platform-wide configuration managed by platform admins.
+
+    Acts as a singleton: only one row with pk=1 is expected.
+    """
+
+    default_timezone = models.CharField(
+        max_length=50,
+        default="Asia/Dhaka",
+        help_text="IANA timezone used as the default for all tenants that have not set their own.",
+    )
+    default_language = models.CharField(
+        max_length=10,
+        default="en",
+        help_text="ISO 639-1 language code used as the default for all tenants that have not set their own.",
+    )
+    default_currency = models.CharField(
+        max_length=10,
+        default="USD",
+        help_text="Currency code used as the default for all tenants that have not set their own.",
+    )
+    enable_currency_conversion = models.BooleanField(
+        default=True,
+        help_text="Enable or disable dynamic currency conversion based on the dollar rate or custom rates.",
+    )
+    usd_to_bdt_rate = models.DecimalField(
+        max_digits=10,
+        decimal_places=4,
+        default=120.0000,
+        help_text="Default USD to BDT exchange rate.",
+    )
+    exchange_rates = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Dynamic exchange rate matrix with USD as the base currency. E.g. {'EUR': 0.92, 'INR': 83.50, 'BDT': 120.0}",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Settings"
+        verbose_name_plural = "Platform Settings"
+
+    def __str__(self):
+        return f"Platform Settings (tz={self.default_timezone}, lang={self.default_language})"
+
+
+# ===============================================================
+# Platform-schema counterparts for the tenant-only dashboard
+# settings models.  These three singletons (pk=1 pattern) store
+# the Platform Admin's own gym profile, preferences, and
+# notification preferences in the public schema so the shared
+# Settings page works for platform admin users too.
+# ===============================================================
+
+class PlatformGymProfile(models.Model):
+    """Platform Admin's gym / organisation profile (public schema singleton)."""
+
+    gym_name = models.CharField(max_length=150, default="")
+    email = models.EmailField(blank=True, default="")
+    phone = models.CharField(max_length=20, blank=True, default="")
+    website = models.URLField(blank=True, default="")
+    address = models.TextField(blank=True, default="")
+    timezone = models.CharField(max_length=50, default="Asia/Dhaka")
+    logo_url = models.URLField(max_length=1000, blank=True, default="")
+    logo_width = models.PositiveIntegerField(default=120)
+    logo_height = models.PositiveIntegerField(default=40)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Gym Profile"
+
+    def __str__(self):
+        return self.gym_name or "Platform Gym Profile"
+
+
+class PlatformGymPreferences(models.Model):
+    """Platform Admin's display preferences (public schema singleton)."""
+
+    LANGUAGE_CHOICES = [
+        ("en", "English"),
+        ("bn", "বাংলা (Bengali)"),
+        ("hi", "हिंदी (Hindi)"),
+        ("ar", "العربية (Arabic)"),
+        ("ur", "اردو (Urdu)"),
+        ("zh", "中文 (Chinese)"),
+        ("ja", "日本語 (Japanese)"),
+        ("ko", "한국어 (Korean)"),
+        ("fr", "Français (French)"),
+        ("es", "Español (Spanish)"),
+        ("de", "Deutsch (German)"),
+        ("pt", "Português (Portuguese)"),
+        ("ru", "Русский (Russian)"),
+        ("tr", "Türkçe (Turkish)"),
+    ]
+    CURRENCY_CHOICES = [
+        ("USD", "USD — $"),
+        ("EUR", "EUR — €"),
+        ("GBP", "GBP — £"),
+        ("BDT", "BDT — Tk."),
+        ("INR", "INR — ₹"),
+        ("AUD", "AUD — A$"),
+        ("CAD", "CAD — C$"),
+        ("SGD", "SGD — S$"),
+        ("AED", "AED — AED"),
+        ("SAR", "SAR — SR"),
+        ("OMR", "OMR — OMR"),
+        ("QAR", "QAR — QR"),
+        ("KWD", "KWD — KD"),
+        ("BHD", "BHD — BD"),
+        ("MYR", "MYR — RM"),
+        ("IDR", "IDR — Rp"),
+        ("CNY", "CNY — ¥"),
+        ("JPY", "JPY — ¥"),
+        ("TRY", "TRY — ₺"),
+        ("RUB", "RUB — ₽"),
+        ("ZAR", "ZAR — R"),
+        ("BRL", "BRL — R$"),
+    ]
+    DATE_FORMAT_CHOICES = [("dmy", "DD/MM/YYYY"), ("mdy", "MM/DD/YYYY")]
+    WEEK_START_CHOICES = [("sun", "Sunday"), ("mon", "Monday"), ("sat", "Saturday")]
+    THEME_CHOICES = [("light", "Light"), ("dark", "Dark"), ("system", "System")]
+
+    language = models.CharField(max_length=10, choices=LANGUAGE_CHOICES, default="en")
+    currency = models.CharField(max_length=10, choices=CURRENCY_CHOICES, default="USD")
+    date_format = models.CharField(max_length=20, choices=DATE_FORMAT_CHOICES, default="dmy")
+    week_start = models.CharField(max_length=10, choices=WEEK_START_CHOICES, default="sat")
+    theme = models.CharField(max_length=20, choices=THEME_CHOICES, default="light")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Gym Preferences"
+
+    def __str__(self):
+        return "Platform Gym Preferences"
+
+
+class PlatformNotificationPreferences(models.Model):
+    """Platform Admin's notification preferences (public schema singleton)."""
+
+    payment_received = models.BooleanField(default=True)
+    new_member_signup = models.BooleanField(default=True)
+    reminder_due = models.BooleanField(default=True)
+    weekly_report = models.BooleanField(default=False)
+    push_notifications = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Notification Preferences"
+
+    def __str__(self):
+        return "Platform Notification Preferences"
