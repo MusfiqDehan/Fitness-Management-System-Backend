@@ -1,14 +1,102 @@
+from decimal import Decimal, InvalidOperation
+
+from django.db import connection
+from django_tenants.utils import get_public_schema_name, schema_context
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 from rest_framework import serializers
+
+from apps.dashboard.models import GymPreferences
+from utils.currency import convert_currency
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
 from datetime import date
+
+
+class PackageCurrencyDisplayMixin:
+    """Provide converted display prices while preserving raw stored values."""
+
+    def _get_platform_settings(self):
+        if not hasattr(self, "_platform_settings_cache"):
+            with schema_context(get_public_schema_name()):
+                from apps.tenancy.models import PlatformSettings
+
+                self._platform_settings_cache = PlatformSettings.objects.filter(pk=1).first()
+        return self._platform_settings_cache
+
+    def _get_rate_matrix(self):
+        if hasattr(self, "_rate_matrix_cache"):
+            return self._rate_matrix_cache
+
+        matrix = {"USD": Decimal("1.0000")}
+        settings = self._get_platform_settings()
+        if settings and settings.enable_currency_conversion:
+            try:
+                matrix["BDT"] = Decimal(str(settings.usd_to_bdt_rate))
+            except (TypeError, ValueError, InvalidOperation):
+                matrix["BDT"] = Decimal("120.0000")
+
+            for code, rate in (settings.exchange_rates or {}).items():
+                try:
+                    matrix[str(code).upper()] = Decimal(str(rate))
+                except (TypeError, ValueError, InvalidOperation):
+                    continue
+
+        self._rate_matrix_cache = matrix
+        return matrix
+
+    def _resolve_display_currency(self) -> str:
+        if hasattr(self, "_display_currency_cache"):
+            return self._display_currency_cache
+
+        settings = self._get_platform_settings()
+        matrix = self._get_rate_matrix()
+        tenant = getattr(connection, "tenant", None)
+        tenant_currency = ""
+        if tenant is not None:
+            tenant_currency = str(getattr(tenant, "currency", "") or "").strip().upper()
+
+        # Mirror dashboard settings resolution so package endpoints return the
+        # same effective tenant currency the settings screen exposes.
+        gym_preferences_currency = (
+            GymPreferences.objects.filter(pk=1).values_list("currency", flat=True).first() or ""
+        ).strip().upper()
+        platform_default = str(getattr(settings, "default_currency", "") or "").strip().upper()
+        preferred_currency = tenant_currency or platform_default or gym_preferences_currency or "USD"
+
+        if settings and settings.enable_currency_conversion:
+            if preferred_currency in matrix:
+                self._display_currency_cache = preferred_currency
+            elif platform_default in matrix:
+                self._display_currency_cache = platform_default
+            elif gym_preferences_currency in matrix:
+                self._display_currency_cache = gym_preferences_currency
+            else:
+                self._display_currency_cache = "USD"
+        else:
+            # Conversion disabled: keep amount as-is and preserve resolved label.
+            self._display_currency_cache = preferred_currency
+
+        return self._display_currency_cache
+
+    def _serialize_display_price(self, value):
+        if value in (None, ""):
+            return None
+
+        try:
+            amount = Decimal(str(value))
+        except (TypeError, ValueError, InvalidOperation):
+            return None
+
+        converted = convert_currency(amount, "USD", self._resolve_display_currency())
+        return f"{converted:.2f}"
 
 
 # ----------------------------
 # MemberPackage
 # ----------------------------
-class MemberPackageSerializer(serializers.ModelSerializer):
+class MemberPackageSerializer(PackageCurrencyDisplayMixin, serializers.ModelSerializer):
+    display_currency = serializers.SerializerMethodField()
+    display_price = serializers.SerializerMethodField()
     features = serializers.JSONField(required=False, default=list)
     add_ons = serializers.JSONField(required=False, default=list)
 
@@ -16,14 +104,23 @@ class MemberPackageSerializer(serializers.ModelSerializer):
         model = MemberPackage
         fields = (
             'id', 'name', 'package_type', 'duration_in_days', 'price',
+            'display_currency', 'display_price',
             'description', 'features', 'add_ons', 'display_order',
             'is_active', 'is_highlighted', 'is_published', 'created_at', 'updated_at',
         )
         read_only_fields = ['created_at', 'updated_at']
 
+    def get_display_currency(self, obj):
+        return self._resolve_display_currency()
 
-class MemberPackagePublicSerializer(serializers.ModelSerializer):
+    def get_display_price(self, obj):
+        return self._serialize_display_price(obj.price)
+
+
+class MemberPackagePublicSerializer(PackageCurrencyDisplayMixin, serializers.ModelSerializer):
     """Public serializer for landing page - only published and active packages."""
+    display_currency = serializers.SerializerMethodField()
+    display_price = serializers.SerializerMethodField()
     features = serializers.JSONField(required=False, default=list)
     add_ons = serializers.JSONField(required=False, default=list)
 
@@ -31,8 +128,15 @@ class MemberPackagePublicSerializer(serializers.ModelSerializer):
         model = MemberPackage
         fields = (
             'id', 'name', 'package_type', 'duration_in_days', 'price',
+            'display_currency', 'display_price',
             'description', 'features', 'add_ons', 'display_order', 'is_highlighted',
         )
+
+    def get_display_currency(self, obj):
+        return self._resolve_display_currency()
+
+    def get_display_price(self, obj):
+        return self._serialize_display_price(obj.price)
 
 
 # ----------------------------
