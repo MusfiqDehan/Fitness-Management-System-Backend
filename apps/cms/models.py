@@ -80,45 +80,6 @@ class PromoBanner(models.Model):
         return f"{self.get_banner_type_display()} banner (id={self.pk})"
 
 
-class SiteSettings(models.Model):
-    """
-    Global site-wide configuration. Designed as a singleton: only one row should
-    exist at a time. The view layer enforces this via get_or_create.
-
-    Stores:
-    - Logo URL and display dimensions
-    - Ordered navbar page list as JSON
-    - Ordered footer page list as JSON
-    """
-    logo_url = models.URLField(max_length=1000, blank=True)
-    logo_width = models.PositiveIntegerField(default=120, help_text="Logo display width in pixels")
-    logo_height = models.PositiveIntegerField(default=40, help_text="Logo display height in pixels")
-    company_name = models.CharField(max_length=200, blank=True, help_text="Optional company name shown in navbar/footer")
-    phone = models.CharField(max_length=20, blank=True, default="")
-    email = models.EmailField(blank=True, default="")
-    address = models.TextField(blank=True, default="")
-    website = models.URLField(blank=True, default="")
-    timezone = models.CharField(max_length=50, blank=True, default="")
-    navbar_pages = models.JSONField(
-        default=list,
-        blank=True,
-        help_text="Ordered list of {page_name, label, order} objects for the navbar",
-    )
-    footer_pages = models.JSONField(
-        default=list,
-        blank=True,
-        help_text="Ordered list of {page_name, label, order} objects for the footer",
-    )
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = "Site Settings"
-        verbose_name_plural = "Site Settings"
-
-    def __str__(self):
-        return "Site Settings"
-
-
 class PageContent(models.Model):
     """
     Stores editable content for individually named site pages (e.g. 'Home', 'About').
