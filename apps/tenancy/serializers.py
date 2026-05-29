@@ -9,7 +9,10 @@ from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework import serializers
 
 from apps.identity.models import User
-from .models import Tenant, Domain, Invitation, PlatformRole, PlatformUserRole
+from .models import (
+    Tenant, Domain, Invitation, PlatformRole, PlatformUserRole, PlatformSettings,
+    PlatformGymProfile, PlatformGymPreferences, PlatformNotificationPreferences,
+)
 
 SUBDOMAIN_RE = re.compile(r"^(?!-)[a-z0-9-]{3,63}(?<!-)$")
 
@@ -220,6 +223,8 @@ class TenantListSerializer(serializers.ModelSerializer):
             "plan",
             "status",
             "is_enabled",
+            "timezone",
+            "locale",
             "max_users",
             "max_branches",
             "created_at",
@@ -252,11 +257,80 @@ class TenantUpdateSerializer(serializers.ModelSerializer):
             "plan",
             "status",
             "is_enabled",
+            "timezone",
+            "locale",
             "max_users",
             "max_branches",
             "features",
             "metadata",
         ]
+
+
+class PlatformSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlatformSettings
+        fields = [
+            "id",
+            "default_timezone",
+            "default_language",
+            "default_currency",
+            "enable_currency_conversion",
+            "usd_to_bdt_rate",
+            "exchange_rates",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "updated_at"]
+
+
+# ---------------------------------------------------------------
+# Platform-schema settings serializers
+# (counterparts to the tenant-only dashboard serializers)
+# ---------------------------------------------------------------
+
+class PlatformGymProfileSerializer(serializers.ModelSerializer):
+    logo_url = serializers.CharField(allow_blank=True, required=False)
+    website = serializers.URLField(allow_blank=True, required=False)
+
+    def validate_logo_url(self, value):
+        from django.core.validators import URLValidator
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        normalized = (value or "").strip()
+        if not normalized:
+            return ""
+        if normalized.startswith('/media/'):
+            return normalized
+        validator = URLValidator()
+        try:
+            validator(normalized)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError("Enter a valid URL.") from exc
+        return normalized
+
+    class Meta:
+        model = PlatformGymProfile
+        fields = [
+            "id", "gym_name", "email", "phone", "website", "address", "timezone",
+            "logo_url", "logo_width", "logo_height", "updated_at",
+        ]
+        read_only_fields = ["id", "updated_at"]
+
+
+class PlatformGymPreferencesSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlatformGymPreferences
+        fields = ["id", "language", "currency", "date_format", "week_start", "theme", "updated_at"]
+        read_only_fields = ["id", "updated_at"]
+
+
+class PlatformNotificationPreferencesSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlatformNotificationPreferences
+        fields = [
+            "id", "payment_received", "new_member_signup", "reminder_due",
+            "weekly_report", "push_notifications", "updated_at",
+        ]
+        read_only_fields = ["id", "updated_at"]
 
 
 class PlatformInvitationCreateSerializer(serializers.Serializer):
