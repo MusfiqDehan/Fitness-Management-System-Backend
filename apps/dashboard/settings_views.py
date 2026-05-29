@@ -3,13 +3,14 @@ Settings and Reminders views for the dashboard app.
 Imported and wired in views.py via explicit __all__ re-exports.
 """
 from django.db.models import Sum
+from django.db import connection
 from django.utils import timezone as dj_timezone
+from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.cms.models import SiteSettings
 from apps.identity.serializers import CurrentUserSerializer, CurrentUserUpdateSerializer
 from apps.membership.models import Member
 
@@ -27,6 +28,43 @@ from .serializers import (
     ReminderSerializer,
     ReminderTemplateSerializer,
 )
+
+
+def serialize_gym_branding(profile) -> dict:
+    """Normalized public branding payload for either GymProfile or PlatformGymProfile.
+
+    Returns an empty-shaped payload (with the hardcoded default logo dimensions)
+    when ``profile`` is None so the frontend can rely on a stable schema.
+    """
+    if profile is None:
+        return {
+            "logo_url": "",
+            "logo_width": 120,
+            "logo_height": 40,
+            "company_name": "",
+            "phone": "",
+            "email": "",
+            "address": "",
+            "website": "",
+            "timezone": "",
+            "navbar_pages": [],
+            "footer_pages": [],
+            "updated_at": None,
+        }
+    return {
+        "logo_url": profile.logo_url or "",
+        "logo_width": profile.logo_width or 120,
+        "logo_height": profile.logo_height or 40,
+        "company_name": profile.gym_name or "",
+        "phone": profile.phone or "",
+        "email": profile.email or "",
+        "address": profile.address or "",
+        "website": profile.website or "",
+        "timezone": profile.timezone or "",
+        "navbar_pages": [],
+        "footer_pages": [],
+        "updated_at": profile.updated_at,
+    }
 
 
 # ---------------------------------------------------------------
@@ -48,23 +86,18 @@ class GymProfileAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
 
-        # Auto-sync to SiteSettings so the public homepage/navbar/footer stays current.
         profile = serializer.instance
-        site_settings, _ = SiteSettings.objects.get_or_create(pk=1)
-        site_settings.company_name = profile.gym_name
-        site_settings.email = profile.email
-        site_settings.phone = profile.phone
-        site_settings.address = profile.address
-        site_settings.website = profile.website
-        site_settings.timezone = profile.timezone
-        if profile.logo_url:
-            site_settings.logo_url = profile.logo_url
-        site_settings.logo_width = profile.logo_width
-        site_settings.logo_height = profile.logo_height
-        site_settings.save(update_fields=[
-            "company_name", "email", "phone", "address", "website", "timezone",
-            "logo_url", "logo_width", "logo_height",
-        ])
+
+        # Sync timezone back to the public-schema Tenant row so the TimezoneMiddleware
+        # and PlatformAdmin tenant list both reflect the tenant's chosen timezone.
+        current_tenant = getattr(connection, "tenant", None)
+        if (
+            current_tenant is not None
+            and getattr(current_tenant, "schema_name", None) != get_public_schema_name()
+        ):
+            with schema_context(get_public_schema_name()):
+                from apps.tenancy.models import Tenant
+                Tenant.objects.filter(id=current_tenant.id).update(timezone=profile.timezone)
 
         return Response(serializer.data)
 
@@ -101,13 +134,99 @@ class GymPreferencesAPIView(APIView):
         obj, _ = GymPreferences.objects.get_or_create(pk=1)
         return obj
 
+    def _resolved_language(self, fallback: str) -> str:
+        """Resolve effective tenant language without breaking schema boundaries.
+
+        Priority inside tenant schema:
+          1. Tenant.locale (public schema override / synced tenant choice)
+          2. PlatformSettings.default_language (public schema fallback)
+          3. GymPreferences.language (local fallback)
+        """
+        current_tenant = getattr(connection, "tenant", None)
+        if current_tenant is None:
+            return fallback
+
+        schema_name = getattr(current_tenant, "schema_name", None)
+        if schema_name == get_public_schema_name():
+            return fallback
+
+        locale = (getattr(current_tenant, "locale", "") or "").strip()
+        if locale:
+            return locale
+
+        with schema_context(get_public_schema_name()):
+            from apps.tenancy.models import PlatformSettings
+
+            default_language = (
+                PlatformSettings.objects.filter(pk=1).values_list("default_language", flat=True).first()
+            )
+            if default_language:
+                return default_language
+
+        return fallback
+
+    def _resolved_currency(self, fallback: str) -> str:
+        """Resolve effective tenant currency without breaking schema boundaries.
+
+        Priority inside tenant schema:
+          1. Tenant.currency (public schema override / synced tenant choice)
+          2. PlatformSettings.default_currency (public schema fallback)
+          3. GymPreferences.currency (local fallback)
+        """
+        current_tenant = getattr(connection, "tenant", None)
+        if current_tenant is None:
+            return fallback
+
+        schema_name = getattr(current_tenant, "schema_name", None)
+        if schema_name == get_public_schema_name():
+            return fallback
+
+        currency = (getattr(current_tenant, "currency", "") or "").strip()
+        if currency:
+            return currency
+
+        with schema_context(get_public_schema_name()):
+            from apps.tenancy.models import PlatformSettings
+
+            default_currency = (
+                PlatformSettings.objects.filter(pk=1).values_list("default_currency", flat=True).first()
+            )
+            if default_currency:
+                return default_currency
+
+        return fallback
+
     def get(self, request):
-        return Response(GymPreferencesSerializer(self._obj()).data)
+        data = GymPreferencesSerializer(self._obj()).data
+        data["language"] = self._resolved_language(data.get("language", "en"))
+        data["currency"] = self._resolved_currency(data.get("currency", "USD"))
+        return Response(data)
 
     def patch(self, request):
         serializer = GymPreferencesSerializer(self._obj(), data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+
+        # Sync language and currency back to the public-schema Tenant model so the
+        # Platform Admin tenant list first-class configurations reflect the tenant's choices.
+        current_tenant = getattr(connection, "tenant", None)
+        if (
+            current_tenant is not None
+            and getattr(current_tenant, "schema_name", None) != get_public_schema_name()
+        ):
+            new_locale = serializer.validated_data.get("language")
+            new_currency = serializer.validated_data.get("currency")
+            
+            with schema_context(get_public_schema_name()):
+                from apps.tenancy.models import Tenant
+                update_fields = {}
+                if new_locale:
+                    update_fields["locale"] = new_locale
+                if new_currency:
+                    update_fields["currency"] = new_currency
+                if update_fields:
+                    Tenant.objects.filter(id=current_tenant.id).update(**update_fields)
+
         return Response(serializer.data)
 
 
@@ -301,3 +420,16 @@ class ReminderStatsAPIView(APIView):
             "overdue_amount": str(overdue_amount),
             "active_templates": active_templates,
         })
+
+
+# ---------------------------------------------------------------
+# Public Gym Branding (tenant schema)
+# ---------------------------------------------------------------
+
+class PublicGymBrandingView(APIView):
+    """GET /api/v1/cms/public/site-settings/ — public read of tenant gym branding."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        profile = GymProfile.objects.filter(pk=1).first()
+        return Response(serialize_gym_branding(profile))
