@@ -234,7 +234,11 @@ class FeatureDetailView(generics.RetrieveUpdateDestroyAPIView):
 class PublicPlatformPackageListView(generics.ListAPIView):
     """Public endpoint: lists packages for the landing page pricing section."""
 
-    queryset = PlatformPackage.objects.filter(is_active=True, is_public=True)
+    queryset = (
+        PlatformPackage.objects.filter(is_active=True, is_public=True)
+        .prefetch_related("package_features__feature")
+        .order_by("sort_order", "price_monthly")
+    )
     serializer_class = PublicPlatformPackageSerializer
     permission_classes = [AllowAny]
 
