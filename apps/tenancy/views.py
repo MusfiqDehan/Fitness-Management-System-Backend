@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+import logging
 from urllib.parse import quote
 
 from django.conf import settings
@@ -25,7 +26,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.identity.models import User
-from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage
+from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage, PlatformSettings
 from .permissions import IsPlatformFeaturePermission
 from .serializers import (
 	TenantSelfRegistrationSerializer,
@@ -37,9 +38,13 @@ from .serializers import (
 	TenantListSerializer,
 	TenantUpdateSerializer,
 	SuperadminInvitationSerializer,
+	PlatformSettingsSerializer,
 	full_domain_for_subdomain,
 )
 from .services import normalize_plan_slug
+
+
+logger = logging.getLogger(__name__)
 
 
 def _is_superadmin(user):
@@ -182,6 +187,64 @@ def _assert_token_request_scope(request, invitation):
 	return expected_domain
 
 
+def _sync_tenant_dashboard_settings(*, tenant_id, schema_name, timezone_value=None, locale_value=None):
+	"""Sync platform-side tenant edits into tenant-schema dashboard settings.
+
+	This keeps public-schema Tenant.timezone/locale aligned with tenant-local
+	GymProfile.timezone and GymPreferences.language, which are read by existing
+	tenant APIs and frontend hooks.
+	"""
+	public_schema = get_public_schema_name()
+	if not schema_name or schema_name == public_schema:
+		return
+
+	try:
+		with schema_context(schema_name):
+			from apps.dashboard.models import GymProfile, GymPreferences
+
+			if timezone_value:
+				profile, _ = GymProfile.objects.get_or_create(pk=1)
+				if profile.timezone != timezone_value:
+					profile.timezone = timezone_value
+					profile.save(update_fields=["timezone", "updated_at"])
+
+			if locale_value:
+				prefs, _ = GymPreferences.objects.get_or_create(pk=1)
+				if prefs.language != locale_value:
+					prefs.language = locale_value
+					prefs.save(update_fields=["language", "updated_at"])
+	except Exception:
+		logger.exception(
+			"Failed to sync tenant dashboard settings",
+			extra={"tenant_id": tenant_id, "schema_name": schema_name},
+		)
+
+
+def _propagate_platform_default_language(*, old_language, new_language):
+	"""Apply a new platform default language to tenants still on the old default."""
+	if not old_language or not new_language or old_language == new_language:
+		return
+
+	public_schema = get_public_schema_name()
+	with schema_context(public_schema):
+		tenant_rows = list(
+			Tenant.objects
+			.exclude(schema_name=public_schema)
+			.filter(locale=old_language)
+			.values_list("id", "schema_name")
+		)
+		tenant_ids = [tenant_id for tenant_id, _ in tenant_rows]
+		if tenant_ids:
+			Tenant.objects.filter(id__in=tenant_ids).update(locale=new_language)
+
+	for tenant_id, schema_name in tenant_rows:
+		_sync_tenant_dashboard_settings(
+			tenant_id=tenant_id,
+			schema_name=schema_name,
+			locale_value=new_language,
+		)
+
+
 def _get_package_trial_days(plan_slug: str) -> int:
 	"""Return trial_days from PlatformPackage, defaulting to 14 if not found."""
 	resolved_plan_slug = normalize_plan_slug(plan_slug)
@@ -233,8 +296,18 @@ def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dic
 			return {"payment_url": None, "trial_days": 0, "is_trial": False}
 
 		from apps.billing.services import get_gateway
-		from apps.tenancy.models import TenantSubscriptionInvoice
+		from apps.tenancy.models import TenantSubscriptionInvoice, PlatformSettings
+		from utils.currency import convert_currency
 		import uuid as _uuid
+
+		# Determine the currency dynamically
+		# System currency -> PlatformSettings.default_currency, otherwise fallback to "BDT" or "USD"
+		ps = PlatformSettings.objects.filter(pk=1).first()
+		target_currency = ps.default_currency if ps else "USD"
+
+		# Package price is defined in USD. Let's convert to target currency
+		original_amount = pkg.price_monthly
+		converted_amount = convert_currency(original_amount, "USD", target_currency)
 
 		tran_id = f"SUB-{tenant.schema_name.upper()}-{_uuid.uuid4().hex[:12].upper()}"
 		backend_base = getattr(settings, "BACKEND_BASE_URL", request.build_absolute_uri("/").rstrip("/"))
@@ -242,8 +315,8 @@ def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dic
 			tenant=tenant,
 			package_slug=pkg.slug,
 			package_name=pkg.name,
-			amount=pkg.price_monthly,
-			currency="BDT",
+			amount=converted_amount,
+			currency=target_currency,
 			tran_id=tran_id,
 			gateway_slug=gateway.slug,
 			status=TenantSubscriptionInvoice.STATUS_PENDING,
@@ -281,6 +354,7 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 	public_schema = get_public_schema_name()
 	with schema_context(public_schema):
 		resolved_plan_slug = normalize_plan_slug(plan)
+		platform_settings = PlatformSettings.objects.filter(pk=1).first()
 		schema_name = _derive_schema_name(subdomain)
 		if Tenant.objects.filter(schema_name=schema_name).exists():
 			raise ValidationError({"subdomain": "This subdomain conflicts with an existing tenant schema."})
@@ -306,6 +380,8 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 			code=final_code,
 			owner_email=owner_email,
 			billing_email=owner_email,
+			timezone=(platform_settings.default_timezone if platform_settings else "Asia/Dhaka"),
+			locale=(platform_settings.default_language if platform_settings else "en"),
 			plan=resolved_plan_slug,
 			status="trial",
 			is_trial=True,
@@ -332,7 +408,6 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 def _bootstrap_tenant_branding_defaults(tenant):
 	"""Initialize tenant-local branding records from the tenant company name."""
 	with schema_context(tenant.schema_name):
-		from apps.cms.models import SiteSettings
 		from apps.dashboard.models import GymProfile
 
 		gym_profile, _ = GymProfile.objects.get_or_create(
@@ -342,14 +417,6 @@ def _bootstrap_tenant_branding_defaults(tenant):
 		if not (gym_profile.gym_name or "").strip():
 			gym_profile.gym_name = tenant.name
 			gym_profile.save(update_fields=["gym_name"])
-
-		site_settings, _ = SiteSettings.objects.get_or_create(
-			pk=1,
-			defaults={"company_name": tenant.name},
-		)
-		if not (site_settings.company_name or "").strip():
-			site_settings.company_name = tenant.name
-			site_settings.save(update_fields=["company_name"])
 
 
 def _build_frontend_url(path_suffix, *, subdomain="", domain="", prefer_public=False):
@@ -1096,6 +1163,17 @@ class TenantAdminDetailAPIView(generics.RetrieveUpdateAPIView):
 	def perform_update(self, serializer):
 		with schema_context(get_public_schema_name()):
 			tenant = serializer.save()
+			new_timezone = serializer.validated_data.get("timezone")
+			new_locale = serializer.validated_data.get("locale")
+
+		if new_timezone or new_locale:
+			_sync_tenant_dashboard_settings(
+				tenant_id=tenant.id,
+				schema_name=tenant.schema_name,
+				timezone_value=new_timezone,
+				locale_value=new_locale,
+			)
+
 		_record_audit(
 			self.request,
 			action="tenant.updated",
@@ -1334,3 +1412,45 @@ class ChangePasswordView(APIView):
 		request.user.password_set_at = timezone.now()
 		request.user.save(update_fields=["password", "password_set_at"])
 		return Response({"detail": "Password changed successfully."})
+
+
+class PlatformSettingsAPIView(APIView):
+	"""Singleton platform-wide settings (public schema only).
+
+	GET  /tenants/admin/platform-settings/ — requires platform.settings:view
+	PATCH /tenants/admin/platform-settings/ — requires platform.settings:edit
+	"""
+
+	def get_permissions(self):
+		if self.request.method.upper() in {"PATCH", "PUT"}:
+			return [IsPlatformFeaturePermission.require("platform.settings", "edit")()]
+		return [IsPlatformFeaturePermission.require("platform.settings", "view")()]
+
+	def _obj(self):
+		with schema_context(get_public_schema_name()):
+			obj, _ = PlatformSettings.objects.get_or_create(pk=1)
+			return obj
+
+	def get(self, request):
+		obj = self._obj()
+		return Response(PlatformSettingsSerializer(obj).data)
+
+	def patch(self, request):
+		obj = self._obj()
+		previous_default_language = obj.default_language
+		serializer = PlatformSettingsSerializer(obj, data=request.data, partial=True)
+		serializer.is_valid(raise_exception=True)
+		with schema_context(get_public_schema_name()):
+			serializer.save()
+
+		new_default_language = serializer.instance.default_language
+		if (
+			"default_language" in serializer.validated_data
+			and previous_default_language != new_default_language
+		):
+			_propagate_platform_default_language(
+				old_language=previous_default_language,
+				new_language=new_default_language,
+			)
+
+		return Response(serializer.data)
