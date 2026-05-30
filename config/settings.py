@@ -79,6 +79,7 @@ SHARED_APPS = [
     'corsheaders',
     'drf_spectacular',
     'apps.crm.apps.CrmConfig',
+    'apps.gym_branch.apps.GymBranchConfig',
     'apps.reminder.apps.ReminderConfig',
 ]
 
@@ -96,6 +97,7 @@ TENANT_APPS = [
     'apps.attendance.apps.AttendanceConfig',
     'apps.trainer.apps.TrainerConfig',
     'apps.reminder.apps.ReminderConfig',
+    'apps.gym_branch.apps.GymBranchConfig',
 ]
 
 # Django requires a flat INSTALLED_APPS list; django-tenants merges both lists
