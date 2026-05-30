@@ -119,10 +119,12 @@ DATABASE_ROUTERS = ['django_tenants.routers.TenantSyncRouter']
 SHOW_PUBLIC_IF_NO_TENANT_FOUND = True
 
 MIDDLEWARE = [
-    # TenantMainMiddleware resolves the tenant from the request hostname
-    # and activates the correct PostgreSQL schema before any view runs.
+    # MobileAwareTenantMainMiddleware resolves the tenant from the request
+    # hostname (browser/subdomain flows) AND from a signed JWT tenant_schema
+    # claim or X-Tenant-Subdomain header (hostless native mobile clients),
+    # then activates the correct PostgreSQL schema before any view runs.
     # It must be the very first middleware in the stack.
-    'django_tenants.middleware.main.TenantMainMiddleware',
+    'apps.tenancy.middleware.MobileAwareTenantMainMiddleware',
     # TimezoneMiddleware reads the active tenant's GymProfile.timezone and
     # activates the correct IANA timezone for every request.  Priority:
     #   GymProfile.timezone → Tenant.timezone → PlatformSettings.default_timezone
@@ -160,6 +162,14 @@ if not _cors_allow_all:
 
 # Support cookie/session-based auth flows across origins when needed.
 CORS_ALLOW_CREDENTIALS = os.environ.get('CORS_ALLOW_CREDENTIALS', 'true').lower() in ('true', '1')
+
+# Allow the custom tenant-hint headers used by hostless native clients so that
+# browser-based preflight requests are not rejected when CORS is enforced.
+from corsheaders.defaults import default_headers as _cors_default_headers  # noqa: E402
+CORS_ALLOW_HEADERS = list(_cors_default_headers) + [
+    'x-tenant-subdomain',
+    'x-tenant-schema',
+]
 
 _cors_allowed_origin_regexes = [
     o.strip()
