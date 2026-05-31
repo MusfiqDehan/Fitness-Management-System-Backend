@@ -87,6 +87,28 @@ PREDEFINED_TENANT_ROLES = {
             "reports": "view",
         },
     },
+    "branch_manager": {
+        "name": "Branch Manager",
+        "description": "Manages a single gym branch — its members, trainers, classes and attendance.",
+        "color": "#0891b2",
+        "permissions": {
+            "dashboard": "view",
+            "branches": "view",
+            "members": "edit",
+            "members.attendance": "edit",
+            "members.packages": "view",
+            "attendance.devices": "edit",
+            "attendance.access_gate": "edit",
+            "attendance.fingerprints": "edit",
+            "instructors": "edit",
+            "classes": "edit",
+            "classes.bookings": "edit",
+            "payments": "view",
+            "crm.contacts": "edit",
+            "reports": "view",
+            "reminders": "edit",
+        },
+    },
 }
 
 
@@ -100,7 +122,7 @@ FULL_ACCESS_FEATURE_KEYS = [
     "payments", "payments.invoices", "payments.gateways",
     "crm.contacts", "crm.inquiries",
     "cms.banners", "cms.blogs",
-    "clubs",
+    "branches",
     "reports", "reminders",
     "settings", "permissions",
 ]
