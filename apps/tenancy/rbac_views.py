@@ -255,6 +255,62 @@ class PublicPlatformPricingConfigView(APIView):
         })
 
 
+class TenantCurrentSubscriptionView(APIView):
+    """GET /api/v1/tenancy/subscription/current/
+
+    Returns the authenticated tenant's current plan details including pricing
+    from the matching PlatformPackage.  Reads the public schema for both the
+    Tenant and PlatformPackage records.
+
+    Permission: any authenticated tenant user — no feature gate, since admins
+    need this even when the `payments` feature is disabled.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            return Response({"detail": "Tenant context not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        public_schema = get_public_schema_name()
+        with schema_context(public_schema):
+            # Re-fetch tenant from public schema to get live subscription fields.
+            from .models import Tenant as PublicTenant
+            try:
+                live_tenant = PublicTenant.objects.get(pk=tenant.pk)
+            except PublicTenant.DoesNotExist:
+                return Response({"detail": "Tenant not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            pkg = PlatformPackage.objects.filter(slug=live_tenant.plan, is_active=True).first()
+
+            from .rbac_serializers import PublicPlatformPackageSerializer
+            pkg_data = PublicPlatformPackageSerializer(pkg).data if pkg else {}
+
+            data = {
+                "plan_slug": live_tenant.plan,
+                "plan_name": pkg.name if pkg else live_tenant.plan,
+                "status": live_tenant.status,
+                "subscription_start": live_tenant.subscription_start,
+                "subscription_end": live_tenant.subscription_end,
+                "is_trial": live_tenant.is_trial,
+                "trial_ends_at": live_tenant.trial_ends_at,
+                "max_users": live_tenant.max_users,
+                "max_branches": live_tenant.max_branches,
+                "max_members_per_branch": live_tenant.max_members_per_branch,
+                "max_trainers_per_branch": live_tenant.max_trainers_per_branch,
+                # Pricing from the matched package (already currency-converted by serializer)
+                "price_monthly": pkg_data.get("price_monthly"),
+                "price_yearly": pkg_data.get("price_yearly"),
+                "yearly_discount_percent": pkg_data.get("yearly_discount_percent"),
+                "currency": pkg_data.get("currency"),
+                "highlight": pkg_data.get("highlight", False),
+                "badge_label": pkg_data.get("badge_label", ""),
+                "trial_days": pkg.trial_days if pkg else 0,
+            }
+        return Response(data)
+
+
 class PlatformPackageListCreateView(generics.ListCreateAPIView):
     queryset = PlatformPackage.objects.all().prefetch_related("package_features__feature")
     serializer_class = PlatformPackageSerializer
