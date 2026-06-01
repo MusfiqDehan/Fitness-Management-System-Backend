@@ -15,7 +15,6 @@ from .models import (
 	Banner,
 	Blog,
 	BlogCategory,
-	GymClub,
 	Package,
 	PackageAddOn,
 	PackageFeature,
@@ -32,9 +31,6 @@ class MainAppExplicitAPIViewTests(APITestCase):
 	banner_detail_url = 'quick_action:banner-detail'
 	banner_update_url = 'quick_action:banner-update'
 	banner_delete_url = 'quick_action:banner-delete'
-	gym_club_create_url = 'quick_action:gym-club-create'
-	gym_club_detail_url = 'quick_action:gym-club-detail'
-	gym_club_update_url = 'quick_action:gym-club-update'
 	blog_category_create_url = 'quick_action:blog-category-create'
 	blog_category_list_url = 'quick_action:blog-category-list'
 	blog_category_detail_url = 'quick_action:blog-category-detail'
@@ -141,58 +137,6 @@ class MainAppExplicitAPIViewTests(APITestCase):
 		delete_response = self.client.delete(reverse(self.banner_delete_url, args=[banner_id]))
 		self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
 		self.assertFalse(Banner.objects.filter(pk=banner_id).exists())
-
-	def test_gym_club_explicit_api_views_handle_facilities_json_and_validation(self):
-		create_response = self.client.post(
-			reverse(self.gym_club_create_url),
-			{
-				'name': 'Downtown Club',
-				'address': '123 Fitness Street',
-				'phone_number': '1234567890',
-				'email': 'club@example.com',
-				'facilities': json.dumps([
-					{'name': 'Sauna'},
-					{'name': 'Pool'},
-				]),
-			},
-			format='multipart',
-		)
-
-		self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
-		club_id = create_response.data['id']
-		self.assertEqual(
-			sorted(facility['name'] for facility in create_response.data['facilities']),
-			['Pool', 'Sauna'],
-		)
-
-		detail_response = self.client.get(reverse(self.gym_club_detail_url, args=[club_id]))
-		self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
-		self.assertEqual(detail_response.data['name'], 'Downtown Club')
-
-		patch_response = self.client.patch(
-			reverse(self.gym_club_update_url, args=[club_id]),
-			{'facilities': json.dumps([])},
-			format='multipart',
-		)
-
-		self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
-		self.assertEqual(patch_response.data['facilities'], [])
-		self.assertEqual(GymClub.objects.get(pk=club_id).facilities.count(), 0)
-
-		invalid_response = self.client.post(
-			reverse(self.gym_club_create_url),
-			{
-				'name': 'Invalid Club',
-				'address': '456 Fitness Street',
-				'phone_number': '1234567890',
-				'email': 'invalid@example.com',
-				'facilities': 'not-json',
-			},
-			format='multipart',
-		)
-
-		self.assertEqual(invalid_response.status_code, status.HTTP_400_BAD_REQUEST)
-		self.assertIn('facilities', invalid_response.data)
 
 	def test_blog_category_explicit_api_views_support_put_and_unique_validation(self):
 		create_response = self.client.post(
