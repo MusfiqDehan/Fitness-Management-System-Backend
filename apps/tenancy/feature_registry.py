@@ -163,7 +163,7 @@ TENANT_REGISTRY: list[RegistryItem] = [
             {"key": "classes",          "name": "Class Manager",    "route": "/classes",   "icon": "Server"},
             {"key": "classes.bookings", "name": "Booking Manager",  "route": "/bookings",  "icon": "CalendarRange"},
             {"key": "cms.blogs",        "name": "Blog Manager",     "route": "/blogs",     "icon": "Rows3"},
-            {"key": "clubs",            "name": "Club Manager",     "route": "/clubs",     "icon": "Cloud"},
+            {"key": "branches",         "name": "Branch Manager",   "route": "/branches",  "icon": "Building2"},
             {"key": "cms.banners",      "name": "Banner Manager",   "route": "/banners",   "icon": "MonitorPlay"},
         ],
     },
