@@ -227,6 +227,8 @@ class TenantListSerializer(serializers.ModelSerializer):
             "locale",
             "max_users",
             "max_branches",
+            "max_members_per_branch",
+            "max_trainers_per_branch",
             "created_at",
             "domains",
             "admins",
@@ -261,6 +263,8 @@ class TenantUpdateSerializer(serializers.ModelSerializer):
             "locale",
             "max_users",
             "max_branches",
+            "max_members_per_branch",
+            "max_trainers_per_branch",
             "features",
             "metadata",
         ]
