@@ -89,7 +89,7 @@ class PageContent(models.Model):
     page_name = models.CharField(
         max_length=100,
         unique=True,
-        help_text="Internal page identifier, e.g. 'Home', 'About', 'Clubs'",
+        help_text="Internal page identifier, e.g. 'Home', 'About', 'Branches'",
     )
     title = models.CharField(max_length=255, blank=True)
     subtitle = models.CharField(max_length=255, blank=True)
