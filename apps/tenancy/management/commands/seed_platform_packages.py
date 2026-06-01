@@ -164,7 +164,7 @@ PACKAGES = {
             "On-Site Setup (Optional)",
         ],
         "yearly_discount_percent": None,
-        "price_custom_label": "Custom Pricing",
+        "price_custom_label": "Custom",
         "price_period_label": "(10k \u2013 30k+)/Month",
         "features": [k for k, _, _ in CORE_FEATURES],  # everything
     },
