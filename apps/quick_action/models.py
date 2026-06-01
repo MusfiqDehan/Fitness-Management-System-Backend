@@ -45,60 +45,6 @@ class Banner(models.Model):
     def __str__(self):
         return self.fitness_name
 
-# ---- club manager ---
-class Facility(models.Model):
-    name = models.CharField(max_length=100)
-
-    def __str__(self):
-        return self.name
-
-
-class GymClub(models.Model):
-    name = models.CharField(max_length=150)
-    image = models.ImageField(
-        upload_to='gym_clubs/',
-        blank=True,
-        null=True
-    )
-    location = models.CharField(max_length=250, blank=True, null=True)
-    address = models.TextField()
-    description = models.TextField(blank=True, null=True)
-    phone_number = models.CharField(max_length=20)
-    email = models.EmailField()
-    opening_time = models.TimeField(blank=True,
-        null=True,)
-    closing_time = models.TimeField(blank=True,
-        null=True,)
-    weekdays_hours = models.CharField(
-        max_length=50,
-        blank=True,
-        null=True,
-        help_text="e.g., 6:00AM-10:00PM"
-    )
-    weekend_hours = models.CharField(
-        max_length=50,
-        blank=True,
-        null=True,
-        help_text="e.g., 6:00AM-10:00PM"
-    )
-    facilities = models.ManyToManyField('Facility', related_name="gyms")
-    display_order = models.PositiveIntegerField(default=0)
-    website = models.URLField(blank=True, null=True)
-    homepage_image = models.ImageField(
-        upload_to='gym_clubs/homepage/',
-        blank=True,
-        null=True
-    )
-    show_on_homepage = models.BooleanField(default=False)
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ['display_order', 'name']
-
-    def __str__(self):
-        return self.name
-
 
 # ---- Contact Manager ---
 class Contact(models.Model):
@@ -117,8 +63,8 @@ class Contact(models.Model):
     email = models.EmailField()
     phone = models.CharField(max_length=20)
 
-    preferred_club = models.ForeignKey(
-        'GymClub',
+    preferred_branch = models.ForeignKey(
+        'gym_branch.Branch',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -497,7 +443,7 @@ class PageContent(models.Model):
     page_name = models.CharField(
         max_length=100,
         unique=True,
-        help_text="Internal page identifier, e.g. 'Home', 'About', 'Clubs'",
+        help_text="Internal page identifier, e.g. 'Home', 'About', 'Branches'",
     )
     title = models.CharField(max_length=255, blank=True)
     subtitle = models.CharField(max_length=255, blank=True)
