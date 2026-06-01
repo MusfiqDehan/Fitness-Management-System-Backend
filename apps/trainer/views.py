@@ -9,6 +9,7 @@ from django.db.models import Avg, Sum
 from django.utils import timezone
 
 from utils.base_view import ModelCRUDView
+from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.access.utils import user_can
 from .models import (
@@ -113,6 +114,15 @@ class TrainerProfileView(TrainerModelActions, ModelCRUDView):
     def _create(self, request):
         if _is_trainer_user(request.user):
             return Response({'error': 'Trainer profiles are created through invitation flow only.'}, status=status.HTTP_403_FORBIDDEN)
+
+        total_limit_error = total_capacity_exceeded(
+            TrainerProfile.objects,
+            'max_users',
+            limit_type='trainers',
+        )
+        if total_limit_error is not None:
+            return Response(total_limit_error, status=status.HTTP_403_FORBIDDEN)
+
         return super()._create(request)
 
     def _list(self, request):
@@ -665,6 +675,24 @@ class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
     permission_classes = [HasFeatureMethodPermission]
 
     def _create(self, request):
+        total_limit_error = total_capacity_exceeded(
+            TrainerProfile.objects,
+            'max_users',
+            limit_type='trainers',
+        )
+        if total_limit_error is not None:
+            return Response(total_limit_error, status=status.HTTP_403_FORBIDDEN)
+
+        branch_id = request.data.get('branch_id') or request.data.get('branch')
+        limit_error = branch_capacity_exceeded(
+            TrainerProfile.objects,
+            branch_id,
+            'max_trainers_per_branch',
+            limit_type='trainers_per_branch',
+        )
+        if limit_error is not None:
+            return Response(limit_error, status=status.HTTP_403_FORBIDDEN)
+
         serializer = TrainerInvitationCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         invitation = serializer.save()
