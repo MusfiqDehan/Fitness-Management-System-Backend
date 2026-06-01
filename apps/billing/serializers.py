@@ -87,6 +87,7 @@ class PackageSerializer(serializers.ModelSerializer):
             # pricing display customisation
             "badge_label",
             "cta_label",
+            "cta_url",
             "setup_fee",
             "original_setup_fee",
             "original_price_monthly",
