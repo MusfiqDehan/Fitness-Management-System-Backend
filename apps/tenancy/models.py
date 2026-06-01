@@ -410,6 +410,10 @@ class PlatformPackage(models.Model):
         max_length=100, blank=True, default="",
         help_text="Call-to-action button label shown on the pricing card.",
     )
+    cta_url = models.CharField(
+        max_length=255, blank=True, default="",
+        help_text="CTA link shown on the pricing card (supports internal paths like /login and full URLs).",
+    )
     setup_fee = models.CharField(
         max_length=100, blank=True, default="",
         help_text="Setup fee display text (e.g. 'Tk. 4990' or 'Custom').",
