@@ -258,7 +258,45 @@ def _get_package_trial_days(plan_slug: str) -> int:
 	return 14
 
 
-def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dict:
+def _get_package_limits(plan_slug: str) -> dict:
+	"""Return package capacity limits for a plan, with safe defaults."""
+	resolved_plan_slug = normalize_plan_slug(plan_slug)
+	if not resolved_plan_slug:
+		return {
+			"max_users": 10,
+			"max_branches": 1,
+			"max_members_per_branch": 0,
+			"max_trainers_per_branch": 0,
+		}
+
+	public_schema = get_public_schema_name()
+	with schema_context(public_schema):
+		pkg = PlatformPackage.objects.filter(slug=resolved_plan_slug, is_active=True).first()
+		if pkg:
+			return {
+				"max_users": int(pkg.max_users or 0),
+				"max_branches": int(pkg.max_branches or 0),
+				"max_members_per_branch": int(getattr(pkg, "max_members_per_branch", 0) or 0),
+				"max_trainers_per_branch": int(getattr(pkg, "max_trainers_per_branch", 0) or 0),
+			}
+
+	return {
+		"max_users": 10,
+		"max_branches": 1,
+		"max_members_per_branch": 0,
+		"max_trainers_per_branch": 0,
+	}
+
+
+def _maybe_initiate_subscription_payment(
+	tenant,
+	plan_slug: str,
+	request,
+	*,
+	contact_phone: str = "",
+	contact_email: str = "",
+	contact_name: str = "",
+) -> dict:
 	"""Initiate a SaaS subscription payment for a newly created tenant.
 
 	Returns a dict with `payment_url` (str or None) and `trial_days` (int).
@@ -325,6 +363,12 @@ def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dic
 			is_trial=False,
 		)
 
+		# Pass onboarding contact info to the gateway payload builder.
+		# These are transient attributes used only for this initiate() call.
+		invoice.customer_phone = (contact_phone or "").strip()
+		invoice.customer_email = (contact_email or "").strip()
+		invoice.customer_name = (contact_name or "").strip()
+
 		try:
 			svc = get_gateway(
 				gateway.slug,
@@ -349,8 +393,19 @@ def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dic
 			return {"payment_url": None, "trial_days": 0, "is_trial": False}
 
 
-def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_domain="", primary_domain="", max_users=10,
-								max_branches=1, plan="starter"):
+def _create_tenant_with_domains(
+	*,
+	company_name,
+	subdomain,
+	owner_email,
+	custom_domain="",
+	primary_domain="",
+	max_users=10,
+	max_branches=1,
+	max_members_per_branch=0,
+	max_trainers_per_branch=0,
+	plan="starter",
+):
 	public_schema = get_public_schema_name()
 	with schema_context(public_schema):
 		resolved_plan_slug = normalize_plan_slug(plan)
@@ -388,6 +443,8 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 			trial_ends_at=timezone.now() + timedelta(days=_get_package_trial_days(resolved_plan_slug)),
 			max_users=max_users,
 			max_branches=max_branches,
+			max_members_per_branch=max_members_per_branch,
+			max_trainers_per_branch=max_trainers_per_branch,
 			is_enabled=True,
 		)
 
@@ -511,6 +568,7 @@ class TenantSelfRegistrationAPIView(APIView):
 		serializer.is_valid(raise_exception=True)
 		payload = serializer.validated_data
 		selected_plan = normalize_plan_slug(payload.get("plan"))
+		selected_limits = _get_package_limits(selected_plan)
 
 		domain = full_domain_for_subdomain(payload["subdomain"], request=request)
 		with transaction.atomic():
@@ -524,8 +582,10 @@ class TenantSelfRegistrationAPIView(APIView):
 				metadata={
 					"domain": domain,
 					"plan": selected_plan,
-					"max_users": 10,
-					"max_branches": 1,
+						"max_users": selected_limits["max_users"],
+						"max_branches": selected_limits["max_branches"],
+						"max_members_per_branch": selected_limits["max_members_per_branch"],
+						"max_trainers_per_branch": selected_limits["max_trainers_per_branch"],
 					"contact_phone": payload.get("contact_phone", ""),
 				},
 			)
@@ -657,6 +717,8 @@ class SuperadminInvitationAPIView(APIView):
 				)
 
 			domain = domain_name
+			plan_slug = normalize_plan_slug(payload.get("plan") or "pro")
+			plan_limits = _get_package_limits(plan_slug)
 			raw_token, invitation = Invitation.issue_token(
 				token_type=Invitation.TOKEN_TYPE_INVITATION,
 				email=payload["admin_email"],
@@ -668,9 +730,11 @@ class SuperadminInvitationAPIView(APIView):
 				metadata={
 					"domain": domain,
 					"custom_domain": payload.get("custom_domain", ""),
-					"plan": normalize_plan_slug(payload.get("plan") or "pro"),
-					"max_users": payload.get("max_users", 10),
-					"max_branches": payload.get("max_branches", 1),
+					"plan": plan_slug,
+					"max_users": payload.get("max_users", plan_limits["max_users"]),
+					"max_branches": payload.get("max_branches", plan_limits["max_branches"]),
+					"max_members_per_branch": plan_limits["max_members_per_branch"],
+					"max_trainers_per_branch": plan_limits["max_trainers_per_branch"],
 				},
 			)
 
@@ -826,6 +890,8 @@ class PasswordSetupAPIView(APIView):
 					primary_domain=metadata.get("domain", ""),
 					max_users=int(metadata.get("max_users", 10) or 10),
 					max_branches=int(metadata.get("max_branches", 1) or 1),
+					max_members_per_branch=int(metadata.get("max_members_per_branch", 0) or 0),
+					max_trainers_per_branch=int(metadata.get("max_trainers_per_branch", 0) or 0),
 					plan=plan_slug,
 				)
 				invitation.tenant = tenant
@@ -922,7 +988,15 @@ class PasswordSetupAPIView(APIView):
 		# when the selected package requires immediate charge.
 		payment_info = None
 		if plan_slug and is_owner_setup and not is_member_invite:
-			payment_info = _maybe_initiate_subscription_payment(tenant, plan_slug, request)
+			contact_phone = str((metadata or {}).get("contact_phone", "") or "").strip()
+			payment_info = _maybe_initiate_subscription_payment(
+				tenant,
+				plan_slug,
+				request,
+				contact_phone=contact_phone,
+				contact_email=email,
+				contact_name=(invitation.invitee_full_name or tenant.name or "Customer"),
+			)
 			if payment_info and not payment_info.get('is_trial', True):
 				try:
 					from apps.reminder.utils import create_notification
