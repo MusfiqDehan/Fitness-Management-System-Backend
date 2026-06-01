@@ -1,8 +1,9 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase, override_settings
 
 from apps.tenancy.models import PaymentGateway
+from .services.sslcommerz import SSLCommerzService
 from .views import (
     _build_tenant_frontend_base_url,
     _build_tenant_backend_base_url,
@@ -127,3 +128,77 @@ class BillingGatewayHelperTests(SimpleTestCase):
             _build_tenant_frontend_base_url(request),
             "http://hello9.localhost:5174",
         )
+
+
+class SSLCommerzServiceTests(SimpleTestCase):
+    def _service(self) -> SSLCommerzService:
+        return SSLCommerzService(
+            store_id="demo",
+            store_password="demo",
+            is_sandbox=True,
+            success_url="http://localhost/success",
+            fail_url="http://localhost/fail",
+            cancel_url="http://localhost/cancel",
+            ipn_url="http://localhost/ipn",
+        )
+
+    @patch("apps.billing.services.sslcommerz.requests.post")
+    def test_initiate_uses_transaction_customer_phone_for_subscription_invoice(self, mock_post):
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "status": "SUCCESS",
+            "GatewayPageURL": "https://sandbox.sslcommerz.com/EasyCheckout/test",
+        }
+        mock_post.return_value = response
+
+        transaction = MagicMock()
+        transaction.amount = "3490.00"
+        transaction.currency = "BDT"
+        transaction.tran_id = "SUB-TEST-123"
+        transaction.source_payment = None
+        transaction.customer_phone = "01710000000"
+        transaction.contact_phone = ""
+        transaction.customer_email = "owner@example.com"
+        transaction.customer_name = "Owner"
+        transaction.tenant = MagicMock()
+        transaction.tenant.name = "Growth Gym"
+        transaction.tenant.billing_email = "owner@example.com"
+        transaction.tenant.owner_email = "owner@example.com"
+        transaction.tenant.metadata = {}
+
+        self._service().initiate(transaction)
+
+        payload = mock_post.call_args.kwargs["data"]
+        self.assertEqual(payload["cus_phone"], "01710000000")
+
+    @override_settings(SSLCOMMERZ_FALLBACK_PHONE="01700000000")
+    @patch("apps.billing.services.sslcommerz.requests.post")
+    def test_initiate_uses_fallback_phone_when_all_sources_missing(self, mock_post):
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "status": "SUCCESS",
+            "GatewayPageURL": "https://sandbox.sslcommerz.com/EasyCheckout/test",
+        }
+        mock_post.return_value = response
+
+        transaction = MagicMock()
+        transaction.amount = "3490.00"
+        transaction.currency = "BDT"
+        transaction.tran_id = "SUB-TEST-456"
+        transaction.source_payment = None
+        transaction.customer_phone = ""
+        transaction.contact_phone = ""
+        transaction.customer_email = "owner@example.com"
+        transaction.customer_name = "Owner"
+        transaction.tenant = MagicMock()
+        transaction.tenant.name = "Growth Gym"
+        transaction.tenant.billing_email = "owner@example.com"
+        transaction.tenant.owner_email = "owner@example.com"
+        transaction.tenant.metadata = {}
+
+        self._service().initiate(transaction)
+
+        payload = mock_post.call_args.kwargs["data"]
+        self.assertEqual(payload["cus_phone"], "01700000000")
