@@ -49,7 +49,6 @@ class DashboardAPIViewTests(APITestCase):
 			('dashboard:fithive-support-list', None),
 			('dashboard:fithive-support-mark-as-read', [1]),
 			('dashboard:package-list', None),
-			('dashboard:gym-club-list', None),
 			('dashboard:member-list', None),
 			('dashboard:member-package-list', None),
 			('dashboard:attendance-list', None),
