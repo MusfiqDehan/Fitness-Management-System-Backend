@@ -27,6 +27,7 @@ from .rbac_views import (
 	FeatureDetailView,
 	PublicPlatformPackageListView,
 	PublicPlatformPricingConfigView,
+	TenantCurrentSubscriptionView,
 	PlatformPackageListCreateView,
 	PlatformPackageDetailView,
 	PlatformPackageFeaturesView,
@@ -58,6 +59,9 @@ urlpatterns = [
 
 	# Authenticated tenant feature lookup (used by frontend to know which features to show)
 	path('me/features/', CurrentTenantFeatureListView.as_view(), name='current-tenant-features'),
+
+	# Tenant subscription current plan (any authenticated tenant user)
+	path('subscription/current/', TenantCurrentSubscriptionView.as_view(), name='tenant-subscription-current'),
 
 	# Tenant staff member invitations (from Permissions page)
 	path('members/invite/', TenantMemberInviteAPIView.as_view(), name='tenant-member-invite'),
