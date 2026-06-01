@@ -46,11 +46,6 @@ from .views import (
     DashboardFitHiveSupportDeleteAPIView,
     DashboardFitHiveSupportMarkAsReadAPIView,
     DashboardFitHiveSupportMarkAsRespondedAPIView,
-    GymClubDashboardListAPIView,
-    GymClubDashboardCreateAPIView,
-    GymClubDashboardRetrieveAPIView,
-    GymClubDashboardUpdateAPIView,
-    GymClubDashboardDeleteAPIView,
     AttendanceDashboardListAPIView,
     AttendanceDashboardCreateAPIView,
     AttendanceDashboardRetrieveAPIView,
@@ -112,14 +107,6 @@ urlpatterns = [
     path('gym-schedules/<int:pk>/delete/', GymScheduleDashboardDeleteAPIView.as_view(), name='gym-schedule-delete'),
     path('instructors/', InstructorListAPIView.as_view(), name='instructor-list'),
     #==== End of Gym Class related endpoints ====
-
-    #==== Gym Club related endpoints ====
-    path('gym-club/', GymClubDashboardListAPIView.as_view(), name='gym-club-list'),
-    path('gym-club/create/', GymClubDashboardCreateAPIView.as_view(), name='gym-club-create'),
-    path('gym-club/<int:pk>/', GymClubDashboardRetrieveAPIView.as_view(), name='gym-club-detail'),
-    path('gym-club/<int:pk>/update/', GymClubDashboardUpdateAPIView.as_view(), name='gym-club-update'),
-    path('gym-club/<int:pk>/delete/', GymClubDashboardDeleteAPIView.as_view(), name='gym-club-delete'),
-    # ==== End of Gym Club related endpoints ====
 
     # ==== Attendance related endpoints ====
     path('attendance/', AttendanceDashboardListAPIView.as_view(), name='attendance-list'),
