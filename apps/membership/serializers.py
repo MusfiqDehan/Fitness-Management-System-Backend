@@ -152,6 +152,7 @@ class MemberSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     remaining_days = serializers.IntegerField(read_only=True)
+    branch_name = serializers.CharField(source='branch.name', read_only=True, default=None)
 
     class Meta:
         model = Member
@@ -163,6 +164,7 @@ class MemberSerializer(serializers.ModelSerializer):
             'card_id', 'fingerprint_id',
             'emergency_contact_name', 'emergency_contact_phone', 'notes',
             'payment_method', 'payment_status', 'photo',
+            'branch', 'branch_name',
             'is_active', 'is_published', 'created_at', 'updated_at',
         )
         read_only_fields = ['created_at', 'updated_at', 'remaining_days']
