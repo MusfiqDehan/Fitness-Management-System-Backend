@@ -79,7 +79,6 @@ SHARED_APPS = [
     'corsheaders',
     'drf_spectacular',
     'apps.crm.apps.CrmConfig',
-    'apps.gym_branch.apps.GymBranchConfig',
     'apps.reminder.apps.ReminderConfig',
 ]
 
