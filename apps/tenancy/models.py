@@ -58,6 +58,12 @@ class Tenant(TenantMixin):
     # Limits
     max_users = models.IntegerField(default=10)
     max_branches = models.IntegerField(default=1)
+    max_members_per_branch = models.IntegerField(
+        default=0, help_text="Maximum members per branch. 0 means unlimited."
+    )
+    max_trainers_per_branch = models.IntegerField(
+        default=0, help_text="Maximum trainers per branch. 0 means unlimited."
+    )
     is_enabled = models.BooleanField(default=True)
 
     # Features (feature flags per tenant plan)
@@ -383,6 +389,12 @@ class PlatformPackage(models.Model):
     price_yearly = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     max_users = models.IntegerField(default=10)
     max_branches = models.IntegerField(default=1)
+    max_members_per_branch = models.IntegerField(
+        default=0, help_text="Maximum members per branch. 0 means unlimited."
+    )
+    max_trainers_per_branch = models.IntegerField(
+        default=0, help_text="Maximum trainers per branch. 0 means unlimited."
+    )
     trial_days = models.IntegerField(default=0, help_text="Free trial length in days; 0 = no trial.")
     is_active = models.BooleanField(default=True)
     is_public = models.BooleanField(default=True, help_text="Show on public pricing page.")
@@ -619,6 +631,18 @@ class TenantSubscriptionInvoice(models.Model):
     gateway_response = models.JSONField(default=dict, blank=True)
     val_id = models.CharField(max_length=200, blank=True, default="")
     validated_at = models.DateTimeField(null=True, blank=True)
+    BILLING_CYCLE_MONTHLY = "monthly"
+    BILLING_CYCLE_YEARLY = "yearly"
+    BILLING_CYCLE_CHOICES = [
+        (BILLING_CYCLE_MONTHLY, "Monthly"),
+        (BILLING_CYCLE_YEARLY, "Yearly"),
+    ]
+
+    billing_cycle = models.CharField(
+        max_length=10,
+        choices=BILLING_CYCLE_CHOICES,
+        default=BILLING_CYCLE_MONTHLY,
+    )
     # Billing period this invoice covers
     period_start = models.DateTimeField(null=True, blank=True)
     period_end = models.DateTimeField(null=True, blank=True)
