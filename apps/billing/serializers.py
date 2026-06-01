@@ -77,6 +77,8 @@ class PackageSerializer(serializers.ModelSerializer):
             "price_yearly",
             "max_users",
             "max_branches",
+            "max_members_per_branch",
+            "max_trainers_per_branch",
             "trial_days",
             "is_active",
             "is_public",
@@ -417,6 +419,7 @@ class TenantSubscriptionInvoiceSerializer(serializers.Serializer):
     tran_id = serializers.CharField(read_only=True)
     gateway_slug = serializers.CharField(read_only=True)
     status = serializers.CharField(read_only=True)
+    billing_cycle = serializers.CharField(read_only=True)
     is_trial = serializers.BooleanField(read_only=True)
     period_start = serializers.DateTimeField(read_only=True)
     period_end = serializers.DateTimeField(read_only=True)
