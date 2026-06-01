@@ -39,7 +39,7 @@ CORE_FEATURES = [
     ("crm.inquiries", "Inquiries", None),
     ("cms.banners", "Banners", None),
     ("cms.blogs", "Blog Posts", None),
-    ("clubs", "Gym Clubs / Branches", None),
+    ("branches", "Gym Branches", None),
     ("reports", "Reports & Analytics", None),
     ("reminders", "Reminders & Notifications", None),
     ("settings", "Settings", None),
@@ -55,6 +55,8 @@ PACKAGES = {
         "price_yearly": Decimal("23904.00"),  # 2490 * 12 * 0.80
         "max_users": 175,
         "max_branches": 1,
+        "max_members_per_branch": 175,
+        "max_trainers_per_branch": 10,
         "trial_days": 14,
         "is_public": True,
         "highlight": False,
@@ -96,6 +98,8 @@ PACKAGES = {
         "price_yearly": Decimal("33504.00"),  # 3490 * 12 * 0.80
         "max_users": 300,
         "max_branches": 3,
+        "max_members_per_branch": 100,
+        "max_trainers_per_branch": 10,
         "trial_days": 0,
         "is_public": True,
         "highlight": True,
@@ -127,7 +131,7 @@ PACKAGES = {
             "payments", "payments.invoices", "payments.gateways",
             "crm.contacts", "crm.inquiries",
             "cms.banners", "cms.blogs",
-            "clubs", "reports", "reminders", "settings", "permissions",
+            "branches", "reports", "reminders", "settings", "permissions",
         ],
     },
     "enterprise": {
@@ -137,6 +141,8 @@ PACKAGES = {
         "price_yearly": Decimal("0.00"),
         "max_users": 0,  # unlimited
         "max_branches": 0,  # unlimited
+        "max_members_per_branch": 0,  # unlimited
+        "max_trainers_per_branch": 0,  # unlimited
         "trial_days": 0,
         "is_public": True,
         "highlight": False,
@@ -213,6 +219,8 @@ class Command(BaseCommand):
                     "price_yearly": info["price_yearly"],
                     "max_users": info["max_users"],
                     "max_branches": info["max_branches"],
+                    "max_members_per_branch": info.get("max_members_per_branch", 0),
+                    "max_trainers_per_branch": info.get("max_trainers_per_branch", 0),
                     "trial_days": info["trial_days"],
                     "is_active": True,
                     "is_public": info["is_public"],
