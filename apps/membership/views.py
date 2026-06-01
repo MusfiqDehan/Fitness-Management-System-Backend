@@ -35,6 +35,7 @@ from .serializers import (
     GymScheduleSerializer,
 )
 from utils.base_view import ModelCRUDView
+from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.tenancy.models import PaymentGateway
 from apps.billing.models import TenantPaymentGateway, PaymentTransaction
@@ -212,6 +213,24 @@ class MemberView(MemberActions, ModelCRUDView):
     permission_classes = [HasFeatureMethodPermission]
 
     def _create(self, request):
+        total_limit_error = total_capacity_exceeded(
+            Member.objects,
+            'max_users',
+            limit_type='members',
+        )
+        if total_limit_error is not None:
+            return Response(total_limit_error, status=status.HTTP_403_FORBIDDEN)
+
+        branch_id = request.data.get('branch_id') or request.data.get('branch')
+        branch_limit_error = branch_capacity_exceeded(
+            Member.objects,
+            branch_id,
+            'max_members_per_branch',
+            limit_type='members_per_branch',
+        )
+        if branch_limit_error is not None:
+            return Response(branch_limit_error, status=status.HTTP_403_FORBIDDEN)
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -547,11 +566,28 @@ class InviteMemberAPIView(APIView):
         full_name = request.data.get('full_name', '')
         phone_number = request.data.get('phone_number')
         member_package_id = request.data.get('member_package_id')
+        branch_id = request.data.get('branch_id') or request.data.get('branch')
 
         if not email:
             return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
         if not phone_number:
             return Response({'error': 'Phone number is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        total_limit_error = total_capacity_exceeded(
+            Member.objects,
+            'max_users',
+            limit_type='members',
+        )
+        if total_limit_error is not None:
+            return Response(total_limit_error, status=status.HTTP_403_FORBIDDEN)
+
+        # Enforce per-branch member limit for the tenant's current plan.
+        limit_error = branch_capacity_exceeded(
+            Member.objects, branch_id, 'max_members_per_branch'
+            , limit_type='members_per_branch'
+        )
+        if limit_error is not None:
+            return Response(limit_error, status=status.HTTP_403_FORBIDDEN)
 
         # Check for existing member with same phone or email
         if Member.objects.filter(phone_number=phone_number).exists():
@@ -577,6 +613,7 @@ class InviteMemberAPIView(APIView):
                     phone_number=phone_number,
                     email=email,
                     member_package_id=member_package_id,
+                    branch_id=branch_id,
                     is_active=False,
                 )
                 invite_url = _send_member_invitation_email(
