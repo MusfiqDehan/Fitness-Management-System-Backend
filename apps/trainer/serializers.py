@@ -17,6 +17,7 @@ class TrainerProfileSerializer(serializers.ModelSerializer):
     is_active = serializers.BooleanField(source='user.is_active', read_only=True)
     full_name = serializers.CharField(required=False, allow_blank=True, write_only=True)
     phone = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
+    branch_name = serializers.CharField(source='branch.name', read_only=True, default=None)
 
     def validate_phone(self, value):
         cleaned = (value or '').strip()
@@ -63,6 +64,7 @@ class TrainerProfileSerializer(serializers.ModelSerializer):
             'total_classes', 'total_members', 'average_rating', 'total_ratings',
             'is_highlighted', 'is_published',
             'instagram', 'facebook', 'youtube', 'website',
+            'branch', 'branch_name',
             'created_at', 'updated_at',
         ]
         read_only_fields = [
