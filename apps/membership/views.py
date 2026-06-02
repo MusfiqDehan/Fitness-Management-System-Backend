@@ -37,9 +37,36 @@ from .serializers import (
 from utils.base_view import ModelCRUDView
 from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
 from apps.access.permissions import HasFeatureMethodPermission
+from apps.access.models import UserRole
+from apps.gym_branch.models import Branch
 from apps.tenancy.models import PaymentGateway
 from apps.billing.models import TenantPaymentGateway, PaymentTransaction
 from apps.billing.services import get_gateway
+
+
+def _is_tenant_admin_user(user) -> bool:
+    return bool(
+        user
+        and user.is_authenticated
+        and (user.is_superuser or user.is_staff or getattr(user, 'role', '') == 'admin')
+    )
+
+
+def _branch_manager_scope_ids(user):
+    """Return managed branch IDs for branch managers, otherwise None."""
+    if not (user and user.is_authenticated):
+        return None
+    if _is_tenant_admin_user(user):
+        return None
+
+    has_branch_manager_role = UserRole.objects.filter(
+        user_id=user.id,
+        role__slug='branch_manager',
+    ).exists()
+    if not has_branch_manager_role:
+        return None
+
+    return list(Branch.objects.filter(manager_id=user.id).values_list('id', flat=True))
 
 
 def _build_member_invite_url(request, token: str) -> str:
@@ -186,9 +213,18 @@ class MemberActions:
         'restore':    lambda self, req, pk: self._restore(pk),
     }
 
+    def _scope_members_queryset(self, include_deleted=False):
+        base_qs = Member.all_objects if include_deleted else Member.objects
+        scope_ids = _branch_manager_scope_ids(getattr(self.request, 'user', None))
+        if scope_ids is None:
+            return base_qs
+        if not scope_ids:
+            return base_qs.none()
+        return base_qs.filter(branch_id__in=scope_ids)
+
     def _toggle_flag(self, model, pk, field, value):
         try:
-            obj = model.objects.get(pk=pk)
+            obj = self._scope_members_queryset().get(pk=pk)
         except model.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         setattr(obj, field, value)
@@ -197,7 +233,7 @@ class MemberActions:
 
     def _restore(self, pk):
         try:
-            member = Member.all_objects.get(pk=pk)
+            member = self._scope_members_queryset(include_deleted=True).get(pk=pk)
         except Member.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         if not member.is_deleted:
@@ -209,10 +245,42 @@ class MemberActions:
 class MemberView(MemberActions, ModelCRUDView):
     """Handles all Member operations and actions."""
     feature_key = 'members'
+    queryset = Member.objects.select_related('member_package', 'branch').all()
     serializer_class = MemberSerializer
     permission_classes = [HasFeatureMethodPermission]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        scope_ids = _branch_manager_scope_ids(self.request.user)
+        if scope_ids is None:
+            return queryset
+        if not scope_ids:
+            return queryset.none()
+        return queryset.filter(branch_id__in=scope_ids)
+
     def _create(self, request):
+        payload = request.data.copy()
+        scope_ids = _branch_manager_scope_ids(request.user)
+        if scope_ids is not None:
+            if not scope_ids:
+                return Response(
+                    {'detail': 'No managed branch is configured for this account.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            incoming_branch_id = payload.get('branch_id') or payload.get('branch')
+            if incoming_branch_id is None:
+                payload['branch'] = scope_ids[0]
+            else:
+                try:
+                    incoming_branch_int = int(incoming_branch_id)
+                except (TypeError, ValueError):
+                    return Response({'detail': 'Invalid branch selection.'}, status=status.HTTP_400_BAD_REQUEST)
+                if incoming_branch_int not in scope_ids:
+                    return Response(
+                        {'detail': 'You can only create members in your managed branch.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
         total_limit_error = total_capacity_exceeded(
             Member.objects,
             'max_users',
@@ -221,7 +289,7 @@ class MemberView(MemberActions, ModelCRUDView):
         if total_limit_error is not None:
             return Response(total_limit_error, status=status.HTTP_403_FORBIDDEN)
 
-        branch_id = request.data.get('branch_id') or request.data.get('branch')
+        branch_id = payload.get('branch_id') or payload.get('branch')
         branch_limit_error = branch_capacity_exceeded(
             Member.objects,
             branch_id,
@@ -231,7 +299,7 @@ class MemberView(MemberActions, ModelCRUDView):
         if branch_limit_error is not None:
             return Response(branch_limit_error, status=status.HTTP_403_FORBIDDEN)
 
-        serializer = self.get_serializer(data=request.data)
+        serializer = self.get_serializer(data=payload)
         serializer.is_valid(raise_exception=True)
 
         inviter = request.user if getattr(request, 'user', None) and request.user.is_authenticated else None
@@ -567,6 +635,27 @@ class InviteMemberAPIView(APIView):
         phone_number = request.data.get('phone_number')
         member_package_id = request.data.get('member_package_id')
         branch_id = request.data.get('branch_id') or request.data.get('branch')
+
+        scope_ids = _branch_manager_scope_ids(request.user)
+        if scope_ids is not None:
+            if not scope_ids:
+                return Response(
+                    {'detail': 'No managed branch is configured for this account.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if branch_id is None:
+                branch_id = scope_ids[0]
+            else:
+                try:
+                    branch_id_int = int(branch_id)
+                except (TypeError, ValueError):
+                    return Response({'detail': 'Invalid branch selection.'}, status=status.HTTP_400_BAD_REQUEST)
+                if branch_id_int not in scope_ids:
+                    return Response(
+                        {'detail': 'You can only invite members to your managed branch.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                branch_id = branch_id_int
 
         if not email:
             return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
