@@ -12,6 +12,8 @@ from utils.base_view import ModelCRUDView
 from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.access.utils import user_can
+from apps.access.models import UserRole
+from apps.gym_branch.models import Branch
 from .models import (
     TrainerProfile, TrainerDocument, TrainerClass,
     TrainerSchedule, ScheduleBooking, TrainerRating, TrainerInvitation,
@@ -31,6 +33,31 @@ from .serializers import (
 
 def _is_trainer_user(user) -> bool:
     return bool(getattr(user, 'is_authenticated', False) and getattr(user, 'role', '') == 'trainer')
+
+
+def _is_tenant_admin_user(user) -> bool:
+    return bool(
+        user
+        and user.is_authenticated
+        and (user.is_superuser or user.is_staff or getattr(user, 'role', '') == 'admin')
+    )
+
+
+def _branch_manager_scope_ids(user):
+    """Return managed branch IDs for branch managers, otherwise None."""
+    if not (user and user.is_authenticated):
+        return None
+    if _is_tenant_admin_user(user):
+        return None
+
+    has_branch_manager_role = UserRole.objects.filter(
+        user_id=user.id,
+        role__slug='branch_manager',
+    ).exists()
+    if not has_branch_manager_role:
+        return None
+
+    return list(Branch.objects.filter(manager_id=user.id).values_list('id', flat=True))
 
 
 def _get_trainer_profile_for_user(user):
@@ -109,11 +136,38 @@ class TrainerProfileView(TrainerModelActions, ModelCRUDView):
         queryset = super().get_queryset()
         if _is_trainer_user(self.request.user):
             queryset = queryset.filter(user=self.request.user)
+        scope_ids = _branch_manager_scope_ids(self.request.user)
+        if scope_ids is not None:
+            if not scope_ids:
+                return queryset.none()
+            queryset = queryset.filter(branch_id__in=scope_ids)
         return queryset
 
     def _create(self, request):
         if _is_trainer_user(request.user):
             return Response({'error': 'Trainer profiles are created through invitation flow only.'}, status=status.HTTP_403_FORBIDDEN)
+
+        payload = request.data.copy()
+        scope_ids = _branch_manager_scope_ids(request.user)
+        if scope_ids is not None:
+            if not scope_ids:
+                return Response(
+                    {'detail': 'No managed branch is configured for this account.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            incoming_branch_id = payload.get('branch_id') or payload.get('branch')
+            if incoming_branch_id is None:
+                payload['branch'] = scope_ids[0]
+            else:
+                try:
+                    incoming_branch_int = int(incoming_branch_id)
+                except (TypeError, ValueError):
+                    return Response({'detail': 'Invalid branch selection.'}, status=status.HTTP_400_BAD_REQUEST)
+                if incoming_branch_int not in scope_ids:
+                    return Response(
+                        {'detail': 'You can only create trainers in your managed branch.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
         total_limit_error = total_capacity_exceeded(
             TrainerProfile.objects,
@@ -123,7 +177,11 @@ class TrainerProfileView(TrainerModelActions, ModelCRUDView):
         if total_limit_error is not None:
             return Response(total_limit_error, status=status.HTTP_403_FORBIDDEN)
 
-        return super()._create(request)
+        serializer = self.get_serializer(data=payload)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def _list(self, request):
         queryset = self.filter_queryset(self.get_queryset())
@@ -674,7 +732,38 @@ class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
     serializer_class = TrainerInvitationSerializer
     permission_classes = [HasFeatureMethodPermission]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        scope_ids = _branch_manager_scope_ids(self.request.user)
+        if scope_ids is None:
+            return queryset
+        if not scope_ids:
+            return queryset.none()
+        return queryset.filter(branch_id__in=scope_ids)
+
     def _create(self, request):
+        payload = request.data.copy()
+        scope_ids = _branch_manager_scope_ids(request.user)
+        if scope_ids is not None:
+            if not scope_ids:
+                return Response(
+                    {'detail': 'No managed branch is configured for this account.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            incoming_branch_id = payload.get('branch_id') or payload.get('branch')
+            if incoming_branch_id is None:
+                payload['branch_id'] = scope_ids[0]
+            else:
+                try:
+                    incoming_branch_int = int(incoming_branch_id)
+                except (TypeError, ValueError):
+                    return Response({'detail': 'Invalid branch selection.'}, status=status.HTTP_400_BAD_REQUEST)
+                if incoming_branch_int not in scope_ids:
+                    return Response(
+                        {'detail': 'You can only invite trainers to your managed branch.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
         total_limit_error = total_capacity_exceeded(
             TrainerProfile.objects,
             'max_users',
@@ -683,7 +772,7 @@ class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
         if total_limit_error is not None:
             return Response(total_limit_error, status=status.HTTP_403_FORBIDDEN)
 
-        branch_id = request.data.get('branch_id') or request.data.get('branch')
+        branch_id = payload.get('branch_id') or payload.get('branch')
         limit_error = branch_capacity_exceeded(
             TrainerProfile.objects,
             branch_id,
@@ -693,7 +782,7 @@ class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
         if limit_error is not None:
             return Response(limit_error, status=status.HTTP_403_FORBIDDEN)
 
-        serializer = TrainerInvitationCreateSerializer(data=request.data)
+        serializer = TrainerInvitationCreateSerializer(data=payload)
         serializer.is_valid(raise_exception=True)
         invitation = serializer.save()
 
@@ -757,6 +846,8 @@ class VerifyTrainerInvitationAPIView(APIView):
             'valid': True,
             'invitation_id': invitation.id,
             'email': invitation.invited_email,
+            'branch_id': invitation.branch_id,
+            'branch_name': invitation.branch.name if invitation.branch_id else None,
         })
 
 
