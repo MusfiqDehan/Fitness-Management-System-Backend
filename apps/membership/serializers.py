@@ -184,11 +184,26 @@ class MemberSerializer(serializers.ModelSerializer):
 
 class MemberPublicSerializer(serializers.ModelSerializer):
     """For public registration from landing page."""
+
+    class ActiveBranchPrimaryKeyRelatedField(serializers.PrimaryKeyRelatedField):
+        """Resolve active branches lazily so import-time assertions remain valid."""
+
+        def get_queryset(self):
+            from apps.gym_branch.models import Branch
+
+            return Branch.objects.filter(is_active=True)
+
     member_package_id = serializers.PrimaryKeyRelatedField(
         queryset=MemberPackage.objects.filter(is_active=True, is_published=True),
         source='member_package',
         write_only=True,
         required=True,
+    )
+    branch_id = ActiveBranchPrimaryKeyRelatedField(
+        source='branch',
+        write_only=True,
+        required=False,
+        allow_null=True,
     )
 
     class Meta:
@@ -196,6 +211,7 @@ class MemberPublicSerializer(serializers.ModelSerializer):
         fields = (
             'full_name', 'phone_number', 'email', 'gender',
             'address', 'membership_type', 'member_package_id',
+            'branch_id',
             'emergency_contact_name', 'emergency_contact_phone', 'notes',
         )
 
@@ -203,6 +219,15 @@ class MemberPublicSerializer(serializers.ModelSerializer):
         if value != 'package':
             raise serializers.ValidationError('Only package membership is allowed for self-registration.')
         return value
+
+    def create(self, validated_data):
+        # Default to the first active branch (Main Branch) if none specified.
+        if validated_data.get('branch') is None:
+            from apps.gym_branch.models import Branch
+            main_branch = Branch.objects.filter(is_active=True).order_by('created_at').first()
+            if main_branch is not None:
+                validated_data['branch'] = main_branch
+        return super().create(validated_data)
 
 
 # ----------------------------
