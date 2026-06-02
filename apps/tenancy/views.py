@@ -951,20 +951,33 @@ class PasswordSetupAPIView(APIView):
 				# Assign the tenant RBAC role for member invitations.
 				if is_member_invite:
 					role_slug = metadata.get("role_slug", "")
+					invite_branch_id = metadata.get("branch_id")
 					if role_slug:
 						from apps.access.models import Role, UserRole as TenantUserRole
 						try:
 							role_obj = Role.objects.get(slug=role_slug)
-							TenantUserRole.objects.get_or_create(
+							user_role, _ = TenantUserRole.objects.get_or_create(
 								user_id=user.id,
 								role=role_obj,
 								defaults={
 									"user_email": user.email,
 									"assigned_by_email": invitation.invited_by_email,
+									"branch_id": invite_branch_id,
 								},
 							)
+							if invite_branch_id and user_role.branch_id != invite_branch_id:
+								user_role.branch_id = invite_branch_id
+								user_role.save(update_fields=["branch"])
 						except Role.DoesNotExist:
 							pass  # Role deleted since invite was sent; user can still log in
+
+					# Apply branch assignment to TrainerProfile if present.
+					if invite_branch_id:
+						try:
+							from apps.trainer.models import TrainerProfile
+							TrainerProfile.objects.filter(user=user).update(branch_id=invite_branch_id)
+						except Exception:
+							pass  # Best-effort; TrainerProfile may not exist yet
 
 			invitation.used_at = setup_time
 			invitation.save(update_fields=["used_at"])
@@ -1344,12 +1357,19 @@ class TenantMemberInviteAPIView(APIView):
 				status=status.HTTP_403_FORBIDDEN,
 			)
 
-		if not self._assert_role_admin(request.user):
+		from apps.access.models import UserRole
+		has_branch_manager_role = UserRole.objects.filter(
+			user_id=request.user.id,
+			role__slug="branch_manager",
+		).exists()
+
+		if not self._assert_role_admin(request.user) and not has_branch_manager_role:
 			return Response({"detail": "You do not have permission to invite members."}, status=status.HTTP_403_FORBIDDEN)
 
 		email = (request.data.get("email") or "").strip().lower()
 		full_name = (request.data.get("full_name") or "").strip()
 		role_slug = (request.data.get("role_slug") or "").strip()
+		branch_id = request.data.get("branch_id") or request.data.get("branch") or None
 
 		if not email:
 			return Response({"detail": "email is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1365,6 +1385,41 @@ class TenantMemberInviteAPIView(APIView):
 				{"detail": f"Role '{role_slug}' does not exist in this workspace."},
 				status=status.HTTP_400_BAD_REQUEST,
 			)
+
+		# Branch managers can only invite users to branches they manage.
+		is_tenant_admin = bool(
+			request.user.is_superuser
+			or request.user.is_staff
+			or getattr(request.user, "role", "") == "admin"
+		)
+		if not is_tenant_admin:
+			from apps.gym_branch.models import Branch
+			if has_branch_manager_role:
+				managed_branch_ids = list(
+					Branch.objects.filter(manager_id=request.user.id).values_list("id", flat=True)
+				)
+				if not managed_branch_ids:
+					return Response(
+						{"detail": "No managed branch is configured for this account."},
+						status=status.HTTP_403_FORBIDDEN,
+					)
+
+				if branch_id is None:
+					branch_id = managed_branch_ids[0]
+				else:
+					try:
+						branch_id_int = int(branch_id)
+					except (TypeError, ValueError):
+						return Response(
+							{"detail": "Invalid branch selection."},
+							status=status.HTTP_400_BAD_REQUEST,
+						)
+					if branch_id_int not in managed_branch_ids:
+						return Response(
+							{"detail": "You can only invite users to your managed branch."},
+							status=status.HTTP_403_FORBIDDEN,
+						)
+					branch_id = branch_id_int
 
 		# Get the tenant from the current request.
 		tenant = getattr(request, "tenant", None)
@@ -1404,6 +1459,7 @@ class TenantMemberInviteAPIView(APIView):
 					"role_slug": role_slug,
 					"role_name": role_obj.name,
 					"domain": primary_domain,
+					**({"branch_id": int(branch_id)} if branch_id else {}),
 				},
 			)
 
