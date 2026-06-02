@@ -47,12 +47,14 @@ class RolePermissionsBulkSerializer(serializers.Serializer):
 class UserRoleSerializer(serializers.ModelSerializer):
     role_name = serializers.CharField(source="role.name", read_only=True)
     role_slug = serializers.CharField(source="role.slug", read_only=True)
+    branch_name = serializers.CharField(source="branch.name", read_only=True, default=None)
 
     class Meta:
         model = UserRole
         fields = [
             "id", "user_id", "user_email",
             "role", "role_name", "role_slug",
+            "branch", "branch_name",
             "assigned_at", "assigned_by_email",
         ]
         read_only_fields = ["id", "assigned_at", "assigned_by_email"]
