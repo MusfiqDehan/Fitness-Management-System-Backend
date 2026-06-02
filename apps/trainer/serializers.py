@@ -5,6 +5,7 @@ from .models import (
     TrainerSchedule, ScheduleBooking, TrainerRating, TrainerInvitation,
 )
 from apps.membership.models import Member
+from apps.gym_branch.models import Branch
 
 
 # =============================================================================
@@ -372,12 +373,14 @@ class TrainerRatingCreateSerializer(serializers.Serializer):
 # =============================================================================
 class TrainerInvitationSerializer(serializers.ModelSerializer):
     invited_by_name = serializers.CharField(source='invited_by.full_name', read_only=True)
+    branch_name = serializers.CharField(source='branch.name', read_only=True, default=None)
     is_expired = serializers.BooleanField(read_only=True)
     
     class Meta:
         model = TrainerInvitation
         fields = [
             'id', 'invited_email', 'invited_by', 'invited_by_name',
+            'branch', 'branch_name',
             'token', 'invitation_sent_at', 'invitation_expires_at',
             'accepted_at', 'is_expired', 'is_active', 'created_at', 'updated_at',
         ]
@@ -390,6 +393,12 @@ class TrainerInvitationSerializer(serializers.ModelSerializer):
 class TrainerInvitationCreateSerializer(serializers.Serializer):
     email = serializers.EmailField()
     inviter_id = serializers.IntegerField(required=False, allow_null=True)
+    branch_id = serializers.PrimaryKeyRelatedField(
+        queryset=Branch.objects.filter(is_active=True),
+        source='branch',
+        required=False,
+        allow_null=True,
+    )
 
     def validate_email(self, value):
         if TrainerInvitation.objects.filter(
@@ -415,6 +424,7 @@ class TrainerInvitationCreateSerializer(serializers.Serializer):
         invitation = TrainerInvitation.objects.create(
             invited_email=validated_data['email'],
             invited_by=inviter,
+            branch=validated_data.get('branch'),
             invitation_expires_at=timezone.now() + timezone.timedelta(days=7)
         )
         return invitation
@@ -485,6 +495,7 @@ class CompleteTrainerRegistrationSerializer(serializers.Serializer):
                 user=user,
                 username=validated_data['username'],
                 title=validated_data.get('title', ''),
+                branch=invitation.branch,
             )
             
             # Mark invitation as accepted
