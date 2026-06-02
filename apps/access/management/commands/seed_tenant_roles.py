@@ -93,7 +93,6 @@ PREDEFINED_TENANT_ROLES = {
         "color": "#0891b2",
         "permissions": {
             "dashboard": "view",
-            "branches": "view",
             "members": "edit",
             "members.attendance": "edit",
             "members.packages": "view",
