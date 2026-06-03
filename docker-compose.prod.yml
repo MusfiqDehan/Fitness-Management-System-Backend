@@ -8,6 +8,7 @@ services:
     env_file: .env.prod
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
+      - SKIP_DB_BOOTSTRAP=1
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_HOST=redis
@@ -66,6 +67,7 @@ services:
     env_file: .env.prod
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
+      - SKIP_DB_BOOTSTRAP=1
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_HOST=redis
@@ -76,7 +78,7 @@ services:
       redis:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
     command: ["celery", "-A", "config.celery:app", "worker", "--loglevel=INFO", "--concurrency=4", "--prefetch-multiplier=1", "--max-tasks-per-child=500"]
     volumes:
       - backend_media:/app/media
@@ -104,7 +106,7 @@ services:
       redis:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
     command: ["celery", "-A", "config.celery:app", "beat", "--loglevel=INFO", "--pidfile=/tmp/celerybeat.pid"]
     volumes:
       - backend_media:/app/media

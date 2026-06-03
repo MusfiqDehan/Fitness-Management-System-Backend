@@ -1,5 +1,6 @@
 # Generated migration for membership models with BaseModel fields
 # NOTE: Member.created_at already exists from 0001_initial.py
+from django.conf import settings
 from django.db import migrations, models
 import django.db.models.deletion
 
@@ -8,6 +9,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('membership', '0002_alter_member_start_date'),
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
