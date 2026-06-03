@@ -239,10 +239,12 @@ class PublicPlatformPackageSerializer(serializers.ModelSerializer):
         return self._serialize_amount(obj.price_yearly)
 
     def get_setup_fee(self, obj):
-        return self._serialize_amount(obj.setup_fee)
+        # setup_fee is a CharField storing pre-formatted display text (e.g. "Tk. 9,990"),
+        # not a numeric amount, so pass through directly.
+        return obj.setup_fee or None
 
     def get_original_setup_fee(self, obj):
-        return self._serialize_amount(obj.original_setup_fee)
+        return obj.original_setup_fee or None
 
     def get_original_price_monthly(self, obj):
         return self._serialize_amount(obj.original_price_monthly)
