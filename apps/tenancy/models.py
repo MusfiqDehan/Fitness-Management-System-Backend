@@ -64,7 +64,18 @@ class Tenant(TenantMixin):
     max_trainers_per_branch = models.IntegerField(
         default=0, help_text="Maximum trainers per branch. 0 means unlimited."
     )
+    max_employees_per_branch = models.IntegerField(
+        default=0, help_text="Maximum employees (staff) per branch. 0 means unlimited."
+    )
     is_enabled = models.BooleanField(default=True)
+
+    # Custom domain self-service toggle (per-tenant). Effective availability also
+    # requires the global PlatformSettings.enable_custom_domains master switch and
+    # the tenant's 'custom_domain' feature flag.
+    custom_domain_enabled = models.BooleanField(
+        default=False,
+        help_text="When True, this tenant may connect its own custom domain from Settings.",
+    )
 
     # Features (feature flags per tenant plan)
     features = models.JSONField(default=dict, blank=True)
@@ -109,6 +120,68 @@ class Domain(DomainMixin):
         if self.domain:
             self.domain = self.domain.strip().lower()
         super().save(*args, **kwargs)
+
+
+# ---------------------------------------------------------------
+# CustomDomainRequest (public/shared schema)
+#
+# Tracks a tenant's self-service request to connect a custom domain
+# (or their own subdomain, e.g. gym.theircompany.com). The actual
+# routable Domain row is only created once the DNS TXT challenge is
+# verified, so unverified domains never resolve to a tenant schema.
+# ---------------------------------------------------------------
+class CustomDomainRequest(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_VERIFIED = "verified"
+    STATUS_FAILED = "failed"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending Verification"),
+        (STATUS_VERIFIED, "Verified"),
+        (STATUS_FAILED, "Verification Failed"),
+    ]
+
+    # Hostname (without scheme) tenants must point at the platform, e.g.
+    # "gym.theircompany.com". The TXT challenge record name is derived from this.
+    VERIFICATION_RECORD_PREFIX = "_fitssort-verify"
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="custom_domain_requests",
+    )
+    domain = models.CharField(max_length=253, unique=True)
+    verification_token = models.CharField(max_length=64)
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING
+    )
+    last_error = models.CharField(max_length=255, blank=True, default="")
+    verified_at = models.DateTimeField(null=True, blank=True)
+    created_by_email = models.EmailField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["tenant", "status"], name="idx_cdr_tenant_status"),
+        ]
+
+    def __str__(self):
+        return f"{self.domain} -> {self.tenant.slug} [{self.status}]"
+
+    def save(self, *args, **kwargs):
+        if self.domain:
+            self.domain = self.domain.strip().lower().rstrip(".")
+        super().save(*args, **kwargs)
+
+    @property
+    def verification_record_name(self):
+        return f"{self.VERIFICATION_RECORD_PREFIX}.{self.domain}"
+
+    @property
+    def is_verified(self):
+        return self.status == self.STATUS_VERIFIED
 
 
 class Invitation(models.Model):
@@ -394,6 +467,9 @@ class PlatformPackage(models.Model):
     )
     max_trainers_per_branch = models.IntegerField(
         default=0, help_text="Maximum trainers per branch. 0 means unlimited."
+    )
+    max_employees_per_branch = models.IntegerField(
+        default=0, help_text="Maximum employees (staff) per branch. 0 means unlimited."
     )
     trial_days = models.IntegerField(default=0, help_text="Free trial length in days; 0 = no trial.")
     is_active = models.BooleanField(default=True)
@@ -703,6 +779,10 @@ class PlatformSettings(models.Model):
         default=dict,
         blank=True,
         help_text="Dynamic exchange rate matrix with USD as the base currency. E.g. {'EUR': 0.92, 'INR': 83.50, 'BDT': 120.0}",
+    )
+    enable_custom_domains = models.BooleanField(
+        default=False,
+        help_text="Global master switch. When True, tenants that are individually enabled may connect their own custom domains.",
     )
     updated_at = models.DateTimeField(auto_now=True)
 
