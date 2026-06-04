@@ -12,6 +12,10 @@ from .settings_views import (
     ReminderSendAPIView,
     ReminderStatsAPIView,
 )
+from .custom_domain_views import (
+    CustomDomainAPIView,
+    CustomDomainVerifyAPIView,
+)
 from .views import (
     GymClassDashboardListAPIView,
     GymClassDashboardCreateAPIView,
@@ -124,6 +128,8 @@ urlpatterns = [
     path('settings/preferences/', GymPreferencesAPIView.as_view(), name='settings-preferences'),
     path('settings/my-account/', MyAccountAPIView.as_view(), name='settings-my-account'),
     path('settings/change-password/', ChangePasswordAPIView.as_view(), name='settings-change-password'),
+    path('settings/custom-domain/', CustomDomainAPIView.as_view(), name='settings-custom-domain'),
+    path('settings/custom-domain/verify/', CustomDomainVerifyAPIView.as_view(), name='settings-custom-domain-verify'),
     # ==== End of Settings endpoints ====
 
     # ==== Reminder Template endpoints ====
