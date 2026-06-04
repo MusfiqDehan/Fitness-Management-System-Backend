@@ -122,6 +122,34 @@ class Domain(DomainMixin):
         super().save(*args, **kwargs)
 
 
+class AccessDeviceRoute(models.Model):
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="access_device_routes",
+    )
+    access_device_id = models.PositiveBigIntegerField()
+    device_sn = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["device_sn"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "access_device_id"],
+                name="uniq_access_device_route_per_device",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["tenant", "is_active"], name="idx_adr_tenant_active"),
+        ]
+
+    def __str__(self):
+        return f"{self.device_sn} -> {self.tenant.schema_name}"
+
+
 # ---------------------------------------------------------------
 # CustomDomainRequest (public/shared schema)
 #

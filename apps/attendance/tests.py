@@ -9,11 +9,12 @@ from rest_framework.test import APIRequestFactory
 from unittest.mock import MagicMock, patch
 
 from apps.attendance.models import AccessDevice, AttendanceIngestEvent, DeviceUser
+from apps.attendance.serializers import AccessDeviceSerializer
 from apps.attendance.services import realtime as realtime_service
 from apps.attendance.services.ingestion import ADMSIngestionService
-from apps.attendance.views import AccessCheckAPIView, IclockCdataAPIView, _build_attlog_sync_command
+from apps.attendance.views import AccessCheckAPIView, IclockCdataAPIView, IclockGetRequestAPIView, _build_attlog_sync_command
 from apps.membership.models import Attendance, Member
-from apps.tenancy.models import Domain, Tenant
+from apps.tenancy.models import AccessDeviceRoute, Domain, Tenant
 
 
 class ADMSIngestionServiceTests(TestCase):
@@ -159,6 +160,23 @@ class AttendanceApiFlowTests(TestCase):
 				tenant=cls.tenant,
 				defaults={"is_primary": True},
 			)
+			cls.other_tenant, _ = Tenant.objects.get_or_create(
+				schema_name="attendance_api_other",
+				defaults={
+					"name": "Attendance API Other Tenant",
+					"slug": "attendance-api-other-tenant",
+					"code": "ATTTEN03",
+					"owner_email": "other-api@attendance.test",
+					"billing_email": "other-api@attendance.test",
+					"status": "active",
+					"is_trial": False,
+				},
+			)
+			Domain.objects.get_or_create(
+				domain="attendance-api-other.testserver",
+				tenant=cls.other_tenant,
+				defaults={"is_primary": True},
+			)
 
 	def setUp(self):
 		self.factory = APIRequestFactory()
@@ -238,6 +256,79 @@ class AttendanceApiFlowTests(TestCase):
 			self.assertEqual(response_second.status_code, status.HTTP_200_OK)
 			self.assertIn("handled=0", second_text)
 			self.assertIn("skipped=1", second_text)
+
+	def test_public_iclock_heartbeat_routes_into_matching_tenant_schema(self):
+		with schema_context(self.tenant.schema_name):
+			device = AccessDevice.objects.create(
+				name="Front Gate",
+				device_sn="ZKT-F18-PUBLIC",
+				is_active=True,
+			)
+
+		with schema_context("public"):
+			route = AccessDeviceRoute.objects.get(device_sn="ZKT-F18-PUBLIC")
+			self.assertEqual(route.tenant_id, self.tenant.id)
+
+			view = IclockCdataAPIView.as_view()
+			request = self.factory.get("/iclock/cdata/?SN=ZKT-F18-PUBLIC")
+			response = view(request)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertIn("OK", response.content.decode("utf-8"))
+
+		with schema_context(self.tenant.schema_name):
+			device.refresh_from_db()
+			self.assertEqual(device.status, AccessDevice.STATUS_ONLINE)
+			self.assertIsNotNone(device.last_seen_at)
+
+	def test_public_iclock_getrequest_dispatches_pending_command(self):
+		with schema_context(self.tenant.schema_name):
+			device = AccessDevice.objects.create(
+				name="Front Gate",
+				device_sn="ZKT-F18-CMD",
+				is_active=True,
+				meta_json={
+					"pending_commands": [
+						{"id": "sync-1", "cmd": "DATA QUERY USERINFO"},
+					],
+				},
+			)
+
+		with schema_context("public"):
+			view = IclockGetRequestAPIView.as_view()
+			request = self.factory.get("/iclock/getrequest/?SN=ZKT-F18-CMD")
+			response = view(request)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.content.decode("utf-8"), "C:sync-1:DATA QUERY USERINFO\n")
+
+		with schema_context(self.tenant.schema_name):
+			device.refresh_from_db()
+			self.assertEqual(device.meta_json["pending_commands"], [])
+			self.assertEqual(device.meta_json["last_command_sent"], "DATA QUERY USERINFO")
+			self.assertEqual(device.status, AccessDevice.STATUS_ONLINE)
+
+	def test_device_serial_number_must_be_globally_unique_across_tenants(self):
+		with schema_context(self.tenant.schema_name):
+			AccessDevice.objects.create(
+				name="Front Gate",
+				device_sn="ZKT-F18-GLOBAL",
+				is_active=True,
+			)
+
+		with schema_context(self.other_tenant.schema_name):
+			serializer = AccessDeviceSerializer(
+				data={
+					"name": "Side Gate",
+					"device_sn": "ZKT-F18-GLOBAL",
+					"is_active": True,
+				}
+			)
+			self.assertFalse(serializer.is_valid())
+			self.assertEqual(
+				serializer.errors["device_sn"][0],
+				"Device serial number is already assigned to another tenant.",
+			)
 
 
 class AttendanceRealtimePublishTests(TestCase):

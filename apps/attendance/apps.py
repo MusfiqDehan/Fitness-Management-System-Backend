@@ -6,3 +6,6 @@ class AttendanceConfig(AppConfig):
     name = 'apps.attendance'
     label = 'attendance'
     verbose_name = 'Attendance'
+
+    def ready(self):
+        from . import signals  # noqa: F401

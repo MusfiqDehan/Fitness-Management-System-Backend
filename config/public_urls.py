@@ -19,6 +19,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
+from apps.attendance.views import IclockCdataAPIView, IclockDeviceCmdAPIView, IclockGetRequestAPIView
 from apps.trainer.views import TrainerPublicProfileView, VerifyTrainerInvitationAPIView, CompleteTrainerRegistrationAPIView
 from apps.tenancy.platform_settings_views import (
     PlatformGymProfileView,
@@ -62,6 +63,15 @@ urlpatterns = [
     path('api/v1/dashboard/settings/preferences/', PlatformGymPreferencesView.as_view(), name='platform-settings-preferences'),
     path('api/v1/dashboard/settings/notifications/', PlatformNotificationPreferencesView.as_view(), name='platform-settings-notifications'),
     path('api/v1/dashboard/upload/', PlatformFileUploadView.as_view(), name='platform-file-upload'),
+
+    # Public-host ADMS device ingress. These views resolve SN -> tenant schema
+    # before touching tenant-only attendance tables.
+    re_path(r'^iclock/cdata/?$', IclockCdataAPIView.as_view(), name='public-iclock-cdata-short'),
+    re_path(r'^iclock/getrequest/?$', IclockGetRequestAPIView.as_view(), name='public-iclock-getrequest-short'),
+    re_path(r'^iclock/devicecmd/?$', IclockDeviceCmdAPIView.as_view(), name='public-iclock-devicecmd-short'),
+    re_path(r'^cdata/?$', IclockCdataAPIView.as_view(), name='public-iclock-cdata-root'),
+    re_path(r'^getrequest/?$', IclockGetRequestAPIView.as_view(), name='public-iclock-getrequest-root'),
+    re_path(r'^devicecmd/?$', IclockDeviceCmdAPIView.as_view(), name='public-iclock-devicecmd-root'),
 
     # API Schema & Docs (shared)
     path('api/v1/schema/', SpectacularAPIView.as_view(), name='schema'),
