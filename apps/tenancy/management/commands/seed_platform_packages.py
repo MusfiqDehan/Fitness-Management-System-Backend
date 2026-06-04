@@ -44,6 +44,8 @@ CORE_FEATURES = [
     ("reminders", "Reminders & Notifications", None),
     ("settings", "Settings", None),
     ("permissions", "Roles & Permissions", None),
+    # Gated capability without a sidebar entry (controls custom-domain self-service).
+    ("custom_domain", "Custom Domain", None),
 ]
 
 
@@ -57,6 +59,7 @@ PACKAGES = {
         "max_branches": 1,
         "max_members_per_branch": 175,
         "max_trainers_per_branch": 10,
+        "max_employees_per_branch": 10,
         "trial_days": 14,
         "is_public": True,
         "highlight": False,
@@ -101,6 +104,7 @@ PACKAGES = {
         "max_branches": 3,
         "max_members_per_branch": 100,
         "max_trainers_per_branch": 10,
+        "max_employees_per_branch": 15,
         "trial_days": 0,
         "is_public": True,
         "highlight": True,
@@ -134,6 +138,7 @@ PACKAGES = {
             "crm.contacts", "crm.inquiries",
             "cms.banners", "cms.blogs",
             "branches", "reports", "reminders", "settings", "permissions",
+            "custom_domain",
         ],
     },
     "enterprise": {
@@ -145,6 +150,7 @@ PACKAGES = {
         "max_branches": 0,  # unlimited
         "max_members_per_branch": 0,  # unlimited
         "max_trainers_per_branch": 0,  # unlimited
+        "max_employees_per_branch": 0,  # unlimited
         "trial_days": 0,
         "is_public": True,
         "highlight": False,
@@ -224,6 +230,7 @@ class Command(BaseCommand):
                     "max_branches": info["max_branches"],
                     "max_members_per_branch": info.get("max_members_per_branch", 0),
                     "max_trainers_per_branch": info.get("max_trainers_per_branch", 0),
+                    "max_employees_per_branch": info.get("max_employees_per_branch", 0),
                     "trial_days": info["trial_days"],
                     "is_active": True,
                     "is_public": info["is_public"],
