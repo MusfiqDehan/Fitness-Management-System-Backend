@@ -55,6 +55,17 @@ services:
 
       - "traefik.http.routers.backend.service=backend"
       - "traefik.http.services.backend.loadbalancer.server.port=8021"
+
+      # ── Backend router for tenant-owned CUSTOM domains (any host that is not
+      #    fitssort.com / *.fitssort.com), API / admin / media / static paths.
+      #    On-demand Let's Encrypt cert per SNI via the customdomains resolver.
+      - "traefik.http.routers.backend-custom.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`))"
+      - "traefik.http.routers.backend-custom.entrypoints=websecure"
+      - "traefik.http.routers.backend-custom.tls=true"
+      - "traefik.http.routers.backend-custom.tls.certresolver=customdomains"
+      - "traefik.http.routers.backend-custom.priority=100"
+      - "traefik.http.routers.backend-custom.middlewares=security-headers@file,compress@file"
+      - "traefik.http.routers.backend-custom.service=backend"
     command: ["daphne", "-b", "0.0.0.0", "-p", "8021", "config.asgi:application"]
     restart: unless-stopped
 
