@@ -11,10 +11,11 @@ from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.tenancy.models import Feature, TenantFeatureFlag
 from apps.gym_branch.models import Branch
+from utils.limits import branch_capacity_exceeded
 
 from .models import Role, RolePermission, UserRole
 from .permissions import IsRoleAdmin
@@ -140,6 +141,17 @@ class UserRoleListCreateView(generics.ListCreateAPIView):
             if branch is None:
                 save_kwargs["branch_id"] = scope_ids[0]
 
+        target_branch_id = save_kwargs.get("branch_id") or (branch.id if branch is not None else None)
+        if target_branch_id is not None:
+            breach = branch_capacity_exceeded(
+                UserRole.objects.all(),
+                target_branch_id,
+                "max_employees_per_branch",
+                limit_type="employees",
+            )
+            if breach is not None:
+                raise PermissionDenied(breach)
+
         serializer.save(**save_kwargs)
 
 
@@ -183,6 +195,15 @@ class MyPermissionsView(APIView):
         if tenant is not None and connection.schema_name != get_public_schema_name():
             flags = TenantFeatureFlag.objects.filter(tenant=tenant).select_related("feature")
             feature_keys = [f.feature.key for f in flags if f.is_effectively_enabled]
+            # 'custom_domain' is only exposed when the global master switch, the
+            # per-tenant switch, and (when present) the feature flag all agree.
+            from apps.tenancy.services import (
+                CUSTOM_DOMAIN_FEATURE_KEY,
+                custom_domain_effectively_enabled,
+            )
+            feature_keys = [k for k in feature_keys if k != CUSTOM_DOMAIN_FEATURE_KEY]
+            if custom_domain_effectively_enabled(tenant):
+                feature_keys.append(CUSTOM_DOMAIN_FEATURE_KEY)
         return Response({
             "user_id": user.id,
             "email": user.email,
