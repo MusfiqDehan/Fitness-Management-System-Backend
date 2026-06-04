@@ -1192,6 +1192,12 @@ def _sync_tenant_limits_from_package(tenant, package_slug: str) -> None:
         tenant.max_trainers_per_branch = package_max_trainers
         updated.append("max_trainers_per_branch")
 
+    tenant_max_employees = getattr(tenant, "max_employees_per_branch", None)
+    package_max_employees = getattr(pkg, "max_employees_per_branch", None)
+    if tenant_max_employees != package_max_employees:
+        tenant.max_employees_per_branch = package_max_employees
+        updated.append("max_employees_per_branch")
+
     if updated:
         tenant.save(update_fields=[*updated, "updated_at"])
 
