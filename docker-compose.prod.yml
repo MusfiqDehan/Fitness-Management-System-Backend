@@ -41,9 +41,9 @@ services:
       - "traefik.docker.network=traefik_proxy"
 
       # ── Backend router: fitssort.com + all *.fitssort.com subdomains,
-      #    only for API / admin / media / static paths.
+      #    only for API / admin / media / static / ADMS device paths.
       #    HostRegexp uses a plain Go regex (Traefik v3 syntax).
-      - "traefik.http.routers.backend.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`))"
+      - "traefik.http.routers.backend.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`) || PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
       - "traefik.http.routers.backend.entrypoints=websecure"
       - "traefik.http.routers.backend.tls=true"
       - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
@@ -57,9 +57,9 @@ services:
       - "traefik.http.services.backend.loadbalancer.server.port=8021"
 
       # ── Backend router for tenant-owned CUSTOM domains (any host that is not
-      #    fitssort.com / *.fitssort.com), API / admin / media / static paths.
+      #    fitssort.com / *.fitssort.com), API / admin / media / static / ADMS paths.
       #    On-demand Let's Encrypt cert per SNI via the customdomains resolver.
-      - "traefik.http.routers.backend-custom.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`))"
+      - "traefik.http.routers.backend-custom.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`) || PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
       - "traefik.http.routers.backend-custom.entrypoints=websecure"
       - "traefik.http.routers.backend-custom.tls=true"
       - "traefik.http.routers.backend-custom.tls.certresolver=customdomains"
