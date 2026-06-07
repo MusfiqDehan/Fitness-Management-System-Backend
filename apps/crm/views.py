@@ -1,17 +1,19 @@
 import logging
 
 from django.conf import settings
-from django.core.mail import get_connection, send_mail
+from django.core.mail import send_mail
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.access.permissions import HasFeaturePermission
 from apps.tenancy.permissions import IsPlatformFeaturePermission
 from utils.base_view import ModelCRUDView
+from .email_delivery import resolve_platform_mail_route
 
-from .models import ContactQuery, EmailConfig
-from .serializers import ContactQuerySerializer, EmailConfigSerializer
+from .models import ContactQuery, EmailConfig, TenantEmailConfig
+from .serializers import ContactQuerySerializer, EmailConfigSerializer, TenantEmailConfigSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -49,54 +51,84 @@ class ContactQueryAPIView(APIView):
             f"\nMessage:\n{query.message or 'No message provided'}"
         )
 
-        # Try active DB email config first
-        try:
-            config = EmailConfig.objects.filter(is_active=True, is_deleted=False).first()
-        except Exception:
-            config = None
-
-        if config:
-            from_email = config.default_from_email or config.host_user
-            to_email = config.contact_email or config.host_user
-            try:
-                connection = get_connection(
-                    backend=config.email_backend,
-                    host=config.host,
-                    port=config.port,
-                    username=config.host_user,
-                    password=config.host_password,
-                    use_tls=config.use_tls,
-                    use_ssl=config.use_ssl,
-                    timeout=15,
-                    fail_silently=False,
-                )
-                send_mail(
-                    subject=subject,
-                    message=body,
-                    from_email=from_email,
-                    recipient_list=[to_email],
-                    connection=connection,
-                )
-                return
-            except Exception as exc:
-                logger.error(
-                    "Failed to send email via active EmailConfig (pk=%s): %s",
-                    config.pk,
-                    exc,
-                )
-
-        # Fall back to Django settings
-        contact_email = getattr(settings, "CONTACT_EMAIL", settings.DEFAULT_FROM_EMAIL)
+        from_email, connection, to_email = resolve_platform_mail_route()
         try:
             send_mail(
                 subject=subject,
                 message=body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[contact_email],
+                from_email=from_email,
+                recipient_list=[to_email],
+                connection=connection,
                 fail_silently=False,
             )
-        except Exception as exc:
-            logger.error("Failed to send contact-query notification email: %s", exc)
+        except Exception as first_exc:
+            fallback_to = getattr(settings, "CONTACT_EMAIL", settings.DEFAULT_FROM_EMAIL)
+            try:
+                send_mail(
+                    subject=subject,
+                    message=body,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[fallback_to],
+                    fail_silently=False,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to send contact-query notification email: primary=%s fallback=%s",
+                    first_exc,
+                    exc,
+                )
+
+
+class TenantEmailConfigView(ModelCRUDView):
+    """Tenant-scoped SMTP/email configuration management."""
+
+    queryset = TenantEmailConfig.objects.all()
+    serializer_class = TenantEmailConfigSerializer
+    permission_classes = [HasFeaturePermission.require("email_config", "view")]
+
+    actions = {
+        "activate": lambda self, req, pk: self._action_activate(req, pk),
+        "deactivate": lambda self, req, pk: self._action_deactivate(req, pk),
+        "restore": lambda self, req, pk: self._action_restore(req, pk),
+    }
+
+    def get_permissions(self):
+        if self.request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            return [HasFeaturePermission.require("email_config", "edit")()]
+        return super().get_permissions()
+
+    def _create(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save(created_by=request.user, updated_by=request.user)
+        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+
+    def _update(self, pk, request, partial=True):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save(updated_by=request.user)
+        return Response(self.get_serializer(instance).data)
+
+    def _action_activate(self, request, pk):
+        instance = self.get_object()
+        TenantEmailConfig.objects.exclude(pk=instance.pk).update(is_active=False)
+        instance.is_active = True
+        instance.updated_by = request.user
+        instance.save(update_fields=["is_active", "updated_by_id", "updated_at"])
+        return Response(self.get_serializer(instance).data)
+
+    def _action_deactivate(self, request, pk):
+        instance = self.get_object()
+        instance.is_active = False
+        instance.updated_by = request.user
+        instance.save(update_fields=["is_active", "updated_by_id", "updated_at"])
+        return Response(self.get_serializer(instance).data)
+
+    def _action_restore(self, request, pk):
+        instance = TenantEmailConfig.all_objects.get(pk=pk)
+        instance.restore()
+        return Response(self.get_serializer(instance).data)
 
 
 class EmailConfigView(ModelCRUDView):
