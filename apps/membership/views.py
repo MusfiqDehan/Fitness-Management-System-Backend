@@ -9,18 +9,26 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Q
 from django.db import transaction
 from django.utils import timezone
-from django_tenants.utils import schema_context
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.conf import settings
+from django_filters.rest_framework import DjangoFilterBackend
+from django_tenants.utils import schema_context
 from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import urlparse
+import logging
 import uuid
 import secrets
+import csv
+import io
+import os
 
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
 from .serializers import (
@@ -38,10 +46,137 @@ from utils.base_view import ModelCRUDView
 from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.access.models import UserRole
+from apps.crm.email_delivery import resolve_tenant_mail_route
 from apps.gym_branch.models import Branch
 from apps.tenancy.models import PaymentGateway
 from apps.billing.models import TenantPaymentGateway, PaymentTransaction
 from apps.billing.services import get_gateway
+
+logger = logging.getLogger(__name__)
+
+
+_MEMBER_IMPORT_ALLOWED_EXTENSIONS = {'.csv', '.xls', '.xlsx', '.xlx'}
+
+
+class MemberPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+def _normalize_import_header(value):
+    return str(value or '').strip().lower().replace(' ', '_').replace('-', '_')
+
+
+def _coerce_str(value):
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    normalized = _coerce_str(value).lower()
+    if normalized in {'1', 'true', 'yes', 'y', 'active'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'n', 'inactive'}:
+        return False
+    return None
+
+
+def _as_row_dict(headers, values):
+    payload = {}
+    for index, header in enumerate(headers):
+        if not header:
+            continue
+        payload[header] = values[index] if index < len(values) else None
+    return payload
+
+
+def _read_member_import_rows(uploaded):
+    filename = uploaded.name or ''
+    ext = os.path.splitext(filename.lower())[1]
+    if ext not in _MEMBER_IMPORT_ALLOWED_EXTENSIONS:
+        raise ValueError('Only CSV, XLS, XLX, and XLSX files are supported.')
+
+    raw = uploaded.read()
+    rows = []
+
+    if ext == '.csv':
+        text = raw.decode('utf-8-sig')
+        reader = csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames:
+            raise ValueError('CSV header row is missing.')
+        for index, row in enumerate(reader, start=2):
+            normalized = {_normalize_import_header(k): v for k, v in (row or {}).items()}
+            rows.append((index, normalized))
+        return rows
+
+    if ext in {'.xlsx', '.xlx'}:
+        try:
+            import openpyxl
+        except ImportError as exc:
+            raise ValueError('XLSX import dependency is missing (openpyxl).') from exc
+
+        workbook = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        sheet = workbook.active
+        iterator = sheet.iter_rows(values_only=True)
+        raw_headers = next(iterator, None)
+        if not raw_headers:
+            raise ValueError('Spreadsheet header row is missing.')
+        headers = [_normalize_import_header(v) for v in raw_headers]
+        for index, values in enumerate(iterator, start=2):
+            rows.append((index, _as_row_dict(headers, list(values or []))))
+        return rows
+
+    try:
+        import xlrd
+    except ImportError as exc:
+        raise ValueError('XLS import dependency is missing (xlrd).') from exc
+
+    workbook = xlrd.open_workbook(file_contents=raw)
+    sheet = workbook.sheet_by_index(0)
+    if sheet.nrows < 1:
+        raise ValueError('Spreadsheet header row is missing.')
+    headers = [_normalize_import_header(v) for v in sheet.row_values(0)]
+    for row_idx in range(1, sheet.nrows):
+        values = sheet.row_values(row_idx)
+        rows.append((row_idx + 1, _as_row_dict(headers, values)))
+    return rows
+
+
+def _row_pick(row, keys):
+    for key in keys:
+        value = row.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
+def _resolve_package_id(raw_value, package_name_map):
+    if raw_value is None:
+        return None
+    as_text = _coerce_str(raw_value)
+    if not as_text:
+        return None
+    if as_text.isdigit():
+        return int(as_text)
+    return package_name_map.get(as_text.lower())
+
+
+def _resolve_branch_id(raw_value, branch_name_map):
+    if raw_value is None:
+        return None
+    as_text = _coerce_str(raw_value)
+    if not as_text:
+        return None
+    if as_text.isdigit():
+        return int(as_text)
+    return branch_name_map.get(as_text.lower())
 
 
 def _is_tenant_admin_user(user) -> bool:
@@ -121,14 +256,38 @@ def _send_member_invitation_email(member: Member, request, invited_by=None, forc
         f"{invite_url}\n\n"
         f"This link expires on {member.invitation_expires_at}."
     )
+    tenant = getattr(request, 'tenant', None) or getattr(invited_by, 'tenant', None)
+    from_email, connection = resolve_tenant_mail_route(tenant)
     email = EmailMultiAlternatives(
         subject=f"Complete your member registration at {company_name}",
         body=fallback_text,
-        from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
+        from_email=from_email,
         to=[member.email],
+        connection=connection,
     )
     email.attach_alternative(html_body, 'text/html')
-    email.send(fail_silently=False)
+
+    try:
+        email.send(fail_silently=False)
+    except Exception as first_exc:
+        fallback_email = EmailMultiAlternatives(
+            subject=f"Complete your member registration at {company_name}",
+            body=fallback_text,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
+            to=[member.email],
+        )
+        fallback_email.attach_alternative(html_body, 'text/html')
+        try:
+            fallback_email.send(fail_silently=False)
+        except Exception as fallback_exc:
+            logger.error(
+                "Member invitation email send failed: primary=%s fallback=%s member_id=%s",
+                first_exc,
+                fallback_exc,
+                member.id,
+            )
+            raise
+
     return invite_url
 
 
@@ -248,6 +407,20 @@ class MemberView(MemberActions, ModelCRUDView):
     queryset = Member.objects.select_related('member_package', 'branch').all()
     serializer_class = MemberSerializer
     permission_classes = [HasFeatureMethodPermission]
+    pagination_class = MemberPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['is_active', 'membership_type', 'payment_status', 'branch', 'member_package']
+    search_fields = [
+        'full_name',
+        'phone_number',
+        'email',
+        'branch__name',
+        'member_package__name',
+        'card_id',
+        'fingerprint_id',
+    ]
+    ordering_fields = ['id', 'created_at', 'start_date', 'end_date', 'full_name']
+    ordering = ['id']
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -326,15 +499,193 @@ class MemberView(MemberActions, ModelCRUDView):
 
         return Response(payload, status=status.HTTP_201_CREATED)
 
-    def get_queryset(self):
-        queryset = Member.objects.all().order_by('-created_at')
-        is_active = self.request.query_params.get('is_active')
-        if is_active is not None:
-            queryset = queryset.filter(is_active=is_active.lower() == 'true')
-        search = self.request.query_params.get('search')
-        if search:
-            queryset = queryset.filter(Q(full_name__icontains=search) | Q(phone_number__icontains=search))
-        return queryset
+
+class MemberImportAPIView(APIView):
+    """POST /api/v1/membership/members/import/ — import members from CSV/XLS/XLSX."""
+    feature_key = 'members'
+    permission_classes = [HasFeatureMethodPermission]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            return Response(
+                {'detail': "No file provided. Send multipart form data with field name 'file'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            parsed_rows = _read_member_import_rows(uploaded)
+        except UnicodeDecodeError:
+            return Response({'detail': 'Could not decode the uploaded CSV file.'}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not parsed_rows:
+            return Response({'detail': 'No data rows found in uploaded file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        scope_ids = _branch_manager_scope_ids(request.user)
+        if scope_ids is not None and not scope_ids:
+            return Response(
+                {'detail': 'No managed branch is configured for this account.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        package_name_map = {
+            p['name'].strip().lower(): p['id']
+            for p in MemberPackage.objects.values('id', 'name')
+            if p['name']
+        }
+        branch_name_map = {
+            b['name'].strip().lower(): b['id']
+            for b in Branch.objects.values('id', 'name')
+            if b['name']
+        }
+
+        created_count = 0
+        updated_count = 0
+        skipped_count = 0
+        errors = []
+
+        for row_number, row in parsed_rows:
+            if not any(_coerce_str(value) for value in row.values()):
+                skipped_count += 1
+                continue
+
+            phone_number = _coerce_str(_row_pick(row, ['phone_number', 'phone', 'mobile', 'contact_number']))
+            if not phone_number:
+                errors.append({'row': row_number, 'error': 'phone_number is required.'})
+                skipped_count += 1
+                continue
+
+            existing = Member.all_objects.filter(phone_number=phone_number).first()
+
+            payload = {
+                'phone_number': phone_number,
+                'full_name': _coerce_str(_row_pick(row, ['full_name', 'name', 'member_name']))
+                or (existing.full_name if existing else phone_number),
+            }
+
+            optional_text_fields = {
+                'email': ['email', 'mail'],
+                'gender': ['gender', 'sex'],
+                'date_of_birth': ['date_of_birth', 'dob', 'birth_date'],
+                'address': ['address'],
+                'membership_type': ['membership_type', 'member_type', 'type'],
+                'start_date': ['start_date', 'join_date', 'joining_date'],
+                'emergency_contact_name': ['emergency_contact_name', 'emergency_name'],
+                'emergency_contact_phone': ['emergency_contact_phone', 'emergency_phone'],
+                'notes': ['notes', 'note'],
+                'payment_method': ['payment_method'],
+                'payment_status': ['payment_status'],
+                'card_id': ['card_id'],
+                'fingerprint_id': ['fingerprint_id'],
+            }
+
+            for field, aliases in optional_text_fields.items():
+                value = _row_pick(row, aliases)
+                if value is None:
+                    continue
+                payload[field] = _coerce_str(value)
+
+            membership_type = payload.get('membership_type') or (existing.membership_type if existing else 'monthly')
+            membership_type = _coerce_str(membership_type).lower()
+            if membership_type not in {'package', 'monthly'}:
+                errors.append({'row': row_number, 'error': "membership_type must be 'package' or 'monthly'."})
+                skipped_count += 1
+                continue
+            payload['membership_type'] = membership_type
+
+            package_raw = _row_pick(row, ['member_package_id', 'package_id', 'package', 'member_package'])
+            package_id = _resolve_package_id(package_raw, package_name_map)
+            if membership_type == 'package':
+                if package_id is None and existing and existing.member_package_id:
+                    package_id = existing.member_package_id
+                if package_id is None:
+                    errors.append({'row': row_number, 'error': 'Package membership requires member_package_id or package name.'})
+                    skipped_count += 1
+                    continue
+                payload['member_package_id'] = package_id
+            else:
+                payload['member_package_id'] = None
+
+            branch_raw = _row_pick(row, ['branch', 'branch_id', 'branch_name'])
+            branch_id = _resolve_branch_id(branch_raw, branch_name_map)
+            if branch_id is None and scope_ids is not None:
+                branch_id = scope_ids[0]
+            if branch_id is None and existing and existing.branch_id:
+                branch_id = existing.branch_id
+
+            if scope_ids is not None:
+                if branch_id is None:
+                    branch_id = scope_ids[0]
+                if branch_id not in scope_ids:
+                    errors.append({'row': row_number, 'error': 'Row branch is outside your managed branch scope.'})
+                    skipped_count += 1
+                    continue
+
+            if branch_id is not None:
+                payload['branch'] = branch_id
+
+            is_active_raw = _row_pick(row, ['is_active', 'active', 'status'])
+            is_active = _coerce_bool(is_active_raw) if is_active_raw is not None else None
+            if is_active is not None:
+                payload['is_active'] = is_active
+
+            if existing is None:
+                total_limit_error = total_capacity_exceeded(
+                    Member.objects,
+                    'max_users',
+                    limit_type='members',
+                )
+                if total_limit_error is not None:
+                    errors.append({'row': row_number, 'error': total_limit_error.get('detail', 'Member plan limit exceeded.')})
+                    skipped_count += 1
+                    continue
+
+                branch_limit_error = branch_capacity_exceeded(
+                    Member.objects,
+                    branch_id,
+                    'max_members_per_branch',
+                    limit_type='members_per_branch',
+                )
+                if branch_limit_error is not None:
+                    errors.append({'row': row_number, 'error': branch_limit_error.get('detail', 'Branch member limit exceeded.')})
+                    skipped_count += 1
+                    continue
+
+            try:
+                with transaction.atomic():
+                    if existing is None:
+                        serializer = MemberSerializer(data=payload)
+                    else:
+                        if existing.is_deleted:
+                            existing.restore()
+                        serializer = MemberSerializer(existing, data=payload, partial=True)
+                    serializer.is_valid(raise_exception=True)
+                    serializer.save()
+            except Exception as exc:
+                errors.append({'row': row_number, 'error': str(exc)})
+                skipped_count += 1
+                continue
+
+            if existing is None:
+                created_count += 1
+            else:
+                updated_count += 1
+
+        total_rows = len(parsed_rows)
+        result = {
+            'total_rows': total_rows,
+            'created_count': created_count,
+            'updated_count': updated_count,
+            'skipped_count': skipped_count,
+            'errors': errors[:100],
+        }
+
+        if created_count == 0 and updated_count == 0:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result, status=status.HTTP_200_OK)
 
 
 # =============================================================================
