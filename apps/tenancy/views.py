@@ -25,6 +25,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.crm.email_delivery import resolve_tenant_mail_route
 from apps.identity.models import User
 from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage, PlatformSettings
 from .permissions import IsPlatformFeaturePermission
@@ -111,26 +112,41 @@ def _issue_email(*, tenant, to_email, purpose, subject, template_name, context, 
 		context=safe_context,
 	)
 
-	from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
+	from_email, connection = resolve_tenant_mail_route(tenant)
 	email = EmailMultiAlternatives(
 		subject=subject,
 		body=fallback_text,
 		from_email=from_email,
 		to=[to_email],
+		connection=connection,
 	)
 	email.attach_alternative(html_body, "text/html")
 
 	try:
 		email.send(fail_silently=False)
+	except Exception as first_exc:
+		# Fall back to global settings connection if tenant route fails at send time.
+		fallback_from = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
+		fallback_email = EmailMultiAlternatives(
+			subject=subject,
+			body=fallback_text,
+			from_email=fallback_from,
+			to=[to_email],
+		)
+		fallback_email.attach_alternative(html_body, "text/html")
+		try:
+			fallback_email.send(fail_silently=False)
+		except Exception as exc:
+			mail_log.status = EmailQueue.STATUS_FAILED
+			mail_log.attempts += 1
+			mail_log.last_error = f"primary={first_exc}; fallback={exc}"
+			mail_log.save(update_fields=["status", "attempts", "last_error"])
+			return
+
 		mail_log.status = EmailQueue.STATUS_SENT
 		mail_log.sent_at = timezone.now()
 		mail_log.attempts += 1
 		mail_log.save(update_fields=["status", "sent_at", "attempts"])
-	except Exception as exc:
-		mail_log.status = EmailQueue.STATUS_FAILED
-		mail_log.attempts += 1
-		mail_log.last_error = str(exc)
-		mail_log.save(update_fields=["status", "attempts", "last_error"])
 
 
 def _derive_schema_name(subdomain):
