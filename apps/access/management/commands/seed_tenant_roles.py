@@ -123,7 +123,7 @@ FULL_ACCESS_FEATURE_KEYS = [
     "cms.banners", "cms.blogs",
     "branches",
     "reports", "reminders",
-    "settings", "permissions",
+    "settings", "permissions", "email_config",
 ]
 
 
