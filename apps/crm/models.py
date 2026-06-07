@@ -63,3 +63,41 @@ class EmailConfig(BaseModel):
     def __str__(self):
         status = "active" if self.is_active else "inactive"
         return f"{self.name} ({status})"
+
+
+class TenantEmailConfig(BaseModel):
+    """
+    Tenant-managed SMTP / email backend configuration.
+
+    Only one tenant config may be active at a time in the current schema.
+    """
+
+    BACKEND_CHOICES = [
+        ("django.core.mail.backends.smtp.EmailBackend", "SMTP"),
+        ("django.core.mail.backends.console.EmailBackend", "Console (dev)"),
+        ("django.core.mail.backends.dummy.EmailBackend", "Dummy (disabled)"),
+    ]
+
+    name = models.CharField(max_length=100, help_text="Friendly label, e.g. 'Gmail SMTP'")
+    email_backend = models.CharField(
+        max_length=100,
+        choices=BACKEND_CHOICES,
+        default="django.core.mail.backends.smtp.EmailBackend",
+    )
+    host = models.CharField(max_length=255, default="smtp.gmail.com")
+    port = models.PositiveIntegerField(default=465)
+    use_tls = models.BooleanField(default=False)
+    use_ssl = models.BooleanField(default=True)
+    host_user = models.CharField(max_length=255, blank=True, default="")
+    host_password = models.CharField(max_length=255, blank=True, default="")
+    default_from_email = models.EmailField(blank=True, default="")
+    contact_email = models.EmailField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-is_active", "-created_at"]
+        verbose_name = "Tenant Email Config"
+        verbose_name_plural = "Tenant Email Configs"
+
+    def __str__(self):
+        status = "active" if self.is_active else "inactive"
+        return f"{self.name} ({status})"
