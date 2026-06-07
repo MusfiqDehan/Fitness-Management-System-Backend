@@ -7,12 +7,14 @@ from rest_framework.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Avg, Sum
 from django.utils import timezone
+from django.conf import settings
 
 from utils.base_view import ModelCRUDView
 from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.access.utils import user_can
 from apps.access.models import UserRole
+from apps.crm.email_delivery import resolve_tenant_mail_route
 from apps.gym_branch.models import Branch
 from .models import (
     TrainerProfile, TrainerDocument, TrainerClass,
@@ -795,7 +797,6 @@ class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
 
         # Send HTML email using the trainer invitation template
         try:
-            from django.conf import settings
             from django.core.mail import EmailMultiAlternatives
             from django.template.loader import render_to_string
 
@@ -812,14 +813,27 @@ class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
                 f"Complete your registration here:\n{invite_url}\n\n"
                 f"This link expires on {invitation.invitation_expires_at}."
             )
+            tenant = getattr(request, 'tenant', None)
+            from_email, connection = resolve_tenant_mail_route(tenant)
             email = EmailMultiAlternatives(
                 subject=f"You're invited to join {company_name} as a Trainer",
                 body=fallback_text,
-                from_email=settings.DEFAULT_FROM_EMAIL,
+                from_email=from_email,
                 to=[invitation.invited_email],
+                connection=connection,
             )
             email.attach_alternative(html_body, 'text/html')
-            email.send(fail_silently=False)
+            try:
+                email.send(fail_silently=False)
+            except Exception:
+                fallback_email = EmailMultiAlternatives(
+                    subject=f"You're invited to join {company_name} as a Trainer",
+                    body=fallback_text,
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
+                    to=[invitation.invited_email],
+                )
+                fallback_email.attach_alternative(html_body, 'text/html')
+                fallback_email.send(fail_silently=False)
         except Exception as e:
             return Response({
                 'error': f'Invitation created but email failed: {str(e)}',
