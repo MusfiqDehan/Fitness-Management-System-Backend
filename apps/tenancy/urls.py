@@ -34,6 +34,7 @@ from .rbac_views import (
 	TenantFeatureFlagListView,
 	TenantFeatureFlagResyncView,
 	CurrentTenantFeatureListView,
+	PublicTenantLandingStatusView,
 	PlatformInvitationListCreateView,
 	PlatformInvitationRevokeView,
 	PlatformInviteValidateView,
@@ -56,6 +57,9 @@ urlpatterns = [
 	# Public packages (landing page pricing)
 	path('packages/', PublicPlatformPackageListView.as_view(), name='public-packages'),
 	path('packages/pricing-config/', PublicPlatformPricingConfigView.as_view(), name='public-pricing-config'),
+
+	# Public tenant landing-page status (used by the tenant homepage on subdomains)
+	path('public/landing-status/', PublicTenantLandingStatusView.as_view(), name='public-landing-status'),
 
 	# Authenticated tenant feature lookup (used by frontend to know which features to show)
 	path('me/features/', CurrentTenantFeatureListView.as_view(), name='current-tenant-features'),
