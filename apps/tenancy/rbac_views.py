@@ -451,6 +451,25 @@ class CurrentTenantFeatureListView(APIView):
         return Response({"tenant_id": tenant.id, "feature_keys": keys})
 
 
+class PublicTenantLandingStatusView(APIView):
+    """Public view: reports whether the current tenant landing page is enabled."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            return Response({"enabled": False, "feature_key": "public_website"})
+
+        from apps.tenancy.services import tenant_has_feature
+
+        return Response({
+            "tenant_id": tenant.id,
+            "enabled": tenant_has_feature(tenant, "public_website"),
+            "feature_key": "public_website",
+        })
+
+
 # ===============================================================
 # Platform Team Invitations (email-based)
 # ===============================================================
