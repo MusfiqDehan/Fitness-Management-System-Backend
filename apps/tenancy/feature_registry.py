@@ -174,6 +174,8 @@ TENANT_REGISTRY: list[RegistryItem] = [
             {"key": "attendance.fingerprints", "name": "Fingerprints",       "route": "/fingerprints", "icon": "UserCheck"},
             {"key": "attendance.access_gate",  "name": "Access Gate",        "route": None,           "icon": "DoorOpen"},
             {"key": "attendance.iclock",       "name": "iClock Ingestion",   "route": None,           "icon": "Cpu"},
+            {"key": "email_config", "name": "Email Config", "route": None, "icon": "Mail"},
+            {"key": "public_website", "name": "Landing Page Setup", "route": None, "icon": "Monitor"},
             {"key": "permissions",   "name": "Rules & Permission", "route": "/permissions", "icon": "ShieldCheck"},
             {"key": "settings",      "name": "Settings",           "route": "/settings",    "icon": "Settings"},
         ],
