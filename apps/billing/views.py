@@ -45,6 +45,8 @@ from apps.tenancy.models import (
 )
 from apps.tenancy.permissions import IsPlatformFeaturePermission
 from utils.base_view import ModelCRUDView
+from utils.list_mixins import BranchScopedListMixin
+from utils.tenancy_helpers import scope_queryset_by_branch_access
 
 from .models import TenantPaymentGateway, PaymentTransaction
 from .serializers import (
@@ -561,19 +563,41 @@ class PackageFeaturesAPIView(APIView):
         return Response({"status": "ok", "feature_count": len(wanted)})
 
 
-class PaymentAPIView(ModelCRUDView):
+class PaymentAPIView(BranchScopedListMixin, ModelCRUDView):
     """Tenant payment CRUD under /api/v1/billing/payments/."""
 
     feature_key = 'payments'
-    queryset = Payment.objects.select_related('member', 'member__member_package').all().order_by('-payment_date')
+    queryset = Payment.objects.select_related('member', 'member__member_package', 'member__branch').all().order_by('id')
     serializer_class = PaymentSerializer
     permission_classes = [HasFeatureMethodPermission]
-
-    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    branch_scope_field = 'member__branch_id'
     filterset_fields = ['payment_type', 'payment_method', 'payment_status', 'member']
     search_fields = ['member__full_name', 'member__phone_number', 'member__email', 'invoice_no', 'note']
-    ordering_fields = ['payment_date', 'amount', 'member__full_name', 'created_at']
-    ordering = ['-payment_date']
+    ordering_fields = [
+        'id',
+        'payment_date',
+        'amount',
+        'member__full_name',
+        'member__phone_number',
+        'member__email',
+        'member__member_package__name',
+        'payment_method',
+        'payment_status',
+        'created_at',
+    ]
+    ordering = ['id']
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        from_date = self.request.query_params.get('from_date')
+        to_date = self.request.query_params.get('to_date')
+
+        if from_date:
+            queryset = queryset.filter(payment_date__date__gte=from_date)
+        if to_date:
+            queryset = queryset.filter(payment_date__date__lte=to_date)
+
+        return queryset
 
 
 class PaymentMemberListAPIView(APIView):
@@ -583,7 +607,12 @@ class PaymentMemberListAPIView(APIView):
     permission_classes = [HasFeatureMethodPermission]
 
     def get(self, request):
-        members = Member.objects.select_related('member_package').all().order_by('full_name')
+        members = scope_queryset_by_branch_access(
+            Member.objects.select_related('member_package').all().order_by('id'),
+            request.user,
+            branch_field='branch_id',
+            branch_filter_id=request.query_params.get('branch'),
+        )
         return Response(PaymentMemberOptionSerializer(members, many=True).data)
 
 
@@ -594,7 +623,12 @@ class PaymentStatsAPIView(APIView):
     permission_classes = [HasFeatureMethodPermission]
 
     def get(self, request):
-        payments = Payment.objects.all()
+        payments = scope_queryset_by_branch_access(
+            Payment.objects.all(),
+            request.user,
+            branch_field='member__branch_id',
+            branch_filter_id=request.query_params.get('branch'),
+        )
 
         totals = payments.aggregate(
             total_collected=Sum('amount', filter=Q(payment_status=Payment.STATUS_PAID)),
