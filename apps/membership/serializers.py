@@ -5,11 +5,55 @@ from django_tenants.utils import get_public_schema_name, schema_context
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 from rest_framework import serializers
+import calendar
 
 from apps.dashboard.models import GymPreferences
 from utils.currency import convert_currency
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
 from datetime import date
+
+
+def _format_elapsed_ymd(start: date | None, end: date | None = None) -> str:
+    """Format elapsed time between two dates as 'x years y months z days'."""
+    if start is None:
+        return "0 years 0 months 0 days"
+
+    effective_end = end or date.today()
+    if start > effective_end:
+        return "0 years 0 months 0 days"
+
+    years = effective_end.year - start.year
+    months = effective_end.month - start.month
+    days = effective_end.day - start.day
+
+    if days < 0:
+        prev_month = effective_end.month - 1 or 12
+        prev_year = effective_end.year if effective_end.month > 1 else effective_end.year - 1
+        days += calendar.monthrange(prev_year, prev_month)[1]
+        months -= 1
+
+    if months < 0:
+        months += 12
+        years -= 1
+
+    if years < 0:
+        return "0 years 0 months 0 days"
+
+    return f"{years} years {months} months {days} days"
+
+
+def _format_elapsed_years(start: date | None, end: date | None = None) -> str:
+    """Format elapsed time between two dates as 'x.y years'."""
+    if start is None:
+        return "0.0 years"
+
+    effective_end = end or date.today()
+    if start > effective_end:
+        return "0.0 years"
+
+    days = (effective_end - start).days
+    years = days / 365.2425
+    return f"{years:.1f} years"
 
 
 class PackageCurrencyDisplayMixin:
@@ -153,6 +197,10 @@ class MemberSerializer(serializers.ModelSerializer):
     )
     remaining_days = serializers.IntegerField(read_only=True)
     branch_name = serializers.CharField(source='branch.name', read_only=True, default=None)
+    duration = serializers.SerializerMethodField()
+    duration_years = serializers.SerializerMethodField()
+    age = serializers.SerializerMethodField()
+    age_years = serializers.SerializerMethodField()
 
     class Meta:
         model = Member
@@ -160,7 +208,7 @@ class MemberSerializer(serializers.ModelSerializer):
             'id', 'full_name', 'phone_number', 'email', 'gender',
             'date_of_birth', 'address', 'membership_type',
             'member_package', 'member_package_id',
-            'start_date', 'end_date', 'remaining_days',
+            'start_date', 'end_date', 'remaining_days', 'duration', 'duration_years', 'age', 'age_years',
             'card_id', 'fingerprint_id',
             'emergency_contact_name', 'emergency_contact_phone', 'notes',
             'payment_method', 'payment_status', 'photo',
@@ -169,12 +217,24 @@ class MemberSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ['created_at', 'updated_at', 'remaining_days']
 
+    def get_duration(self, obj):
+        return _format_elapsed_ymd(obj.start_date)
+
+    def get_duration_years(self, obj):
+        return _format_elapsed_years(obj.start_date)
+
+    def get_age(self, obj):
+        return _format_elapsed_ymd(obj.date_of_birth)
+
+    def get_age_years(self, obj):
+        return _format_elapsed_years(obj.date_of_birth)
+
     def validate(self, attrs):
         membership_type = attrs.get('membership_type', getattr(self.instance, 'membership_type', None))
-        member_package = attrs.get('member_package', getattr(self.instance, 'member_package', None))
+        email = attrs.get('email', getattr(self.instance, 'email', None))
 
-        if membership_type == 'package' and member_package is None:
-            raise serializers.ValidationError({'member_package_id': 'This field is required for package memberships.'})
+        if not email:
+            raise serializers.ValidationError({'email': 'This field is required.'})
 
         if membership_type == 'monthly':
             attrs['member_package'] = None
