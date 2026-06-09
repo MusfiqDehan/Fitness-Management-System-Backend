@@ -399,6 +399,7 @@ class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
         'full_name',
         'phone_number',
         'email',
+        'date_of_birth',
         'branch__name',
         'member_package__name',
         'is_active',
