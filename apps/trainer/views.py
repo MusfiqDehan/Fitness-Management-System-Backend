@@ -10,12 +10,12 @@ from django.utils import timezone
 from django.conf import settings
 
 from utils.base_view import ModelCRUDView
+from utils.list_mixins import BranchScopedListMixin, SearchFilterSortPaginationMixin
 from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
+from utils.tenancy_helpers import get_branch_manager_scope_ids as _branch_manager_scope_ids
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.access.utils import user_can
-from apps.access.models import UserRole
 from apps.crm.email_delivery import resolve_tenant_mail_route
-from apps.gym_branch.models import Branch
 from .models import (
     TrainerProfile, TrainerDocument, TrainerClass,
     TrainerSchedule, ScheduleBooking, TrainerRating, TrainerInvitation,
@@ -35,31 +35,6 @@ from .serializers import (
 
 def _is_trainer_user(user) -> bool:
     return bool(getattr(user, 'is_authenticated', False) and getattr(user, 'role', '') == 'trainer')
-
-
-def _is_tenant_admin_user(user) -> bool:
-    return bool(
-        user
-        and user.is_authenticated
-        and (user.is_superuser or user.is_staff or getattr(user, 'role', '') == 'admin')
-    )
-
-
-def _branch_manager_scope_ids(user):
-    """Return managed branch IDs for branch managers, otherwise None."""
-    if not (user and user.is_authenticated):
-        return None
-    if _is_tenant_admin_user(user):
-        return None
-
-    has_branch_manager_role = UserRole.objects.filter(
-        user_id=user.id,
-        role__slug='branch_manager',
-    ).exists()
-    if not has_branch_manager_role:
-        return None
-
-    return list(Branch.objects.filter(manager_id=user.id).values_list('id', flat=True))
 
 
 def _get_trainer_profile_for_user(user):
@@ -122,13 +97,18 @@ class TrainerModelActions:
 # =============================================================================
 # TRAINER PROFILE
 # =============================================================================
-class TrainerProfileView(TrainerModelActions, ModelCRUDView):
+class TrainerProfileView(BranchScopedListMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerProfile + actions."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
     queryset = TrainerProfile.objects.select_related('user').all()
     serializer_class = TrainerProfileSerializer
     permission_classes = [IsTrainerOrFeaturePermission]
+    branch_scope_field = 'branch_id'
+    filterset_fields = ['branch', 'is_active', 'is_highlighted', 'is_published']
+    search_fields = ['user__full_name', 'user__email', 'username', 'title']
+    ordering_fields = ['id', 'user__full_name', 'average_rating', 'experience_years', 'created_at']
+    ordering = ['id']
 
     actions = {
         'recalc': lambda self, req, pk: self._recalc(req, pk),
@@ -138,12 +118,7 @@ class TrainerProfileView(TrainerModelActions, ModelCRUDView):
         queryset = super().get_queryset()
         if _is_trainer_user(self.request.user):
             queryset = queryset.filter(user=self.request.user)
-        scope_ids = _branch_manager_scope_ids(self.request.user)
-        if scope_ids is not None:
-            if not scope_ids:
-                return queryset.none()
-            queryset = queryset.filter(branch_id__in=scope_ids)
-        return queryset
+        return self.scope_branch_queryset(queryset)
 
     def _create(self, request):
         if _is_trainer_user(request.user):
@@ -184,18 +159,6 @@ class TrainerProfileView(TrainerModelActions, ModelCRUDView):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-
-    def _list(self, request):
-        queryset = self.filter_queryset(self.get_queryset())
-        # Highlighted trainers first
-        queryset = queryset.order_by('-is_highlighted', '-average_rating', 'user__full_name')
-        page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
-
 
 class TrainerProfileMeView(APIView):
     """GET /api/v1/trainer/me/ — current trainer's profile."""
@@ -298,7 +261,7 @@ class TrainerPublicProfileView(APIView):
 # =============================================================================
 # TRAINER DOCUMENT
 # =============================================================================
-class TrainerDocumentView(TrainerModelActions, ModelCRUDView):
+class TrainerDocumentView(SearchFilterSortPaginationMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerDocument."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
@@ -346,7 +309,7 @@ class TrainerDocumentView(TrainerModelActions, ModelCRUDView):
 # =============================================================================
 # TRAINER CLASS
 # =============================================================================
-class TrainerClassView(TrainerModelActions, ModelCRUDView):
+class TrainerClassView(SearchFilterSortPaginationMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerClass."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
@@ -445,7 +408,7 @@ class TrainerClassListPublicView(APIView):
 # =============================================================================
 # TRAINER SCHEDULE
 # =============================================================================
-class TrainerScheduleView(TrainerModelActions, ModelCRUDView):
+class TrainerScheduleView(SearchFilterSortPaginationMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerSchedule."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
@@ -628,7 +591,7 @@ class BookingCancelView(APIView):
 # =============================================================================
 # TRAINER RATING
 # =============================================================================
-class TrainerRatingView(TrainerModelActions, ModelCRUDView):
+class TrainerRatingView(SearchFilterSortPaginationMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerRating."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
@@ -726,22 +689,22 @@ class MyTrainerRatingsView(APIView):
 # =============================================================================
 # TRAINER INVITATION
 # =============================================================================
-class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
+class TrainerInvitationView(BranchScopedListMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerInvitation."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
     queryset = TrainerInvitation.objects.select_related('invited_by').all()
     serializer_class = TrainerInvitationSerializer
     permission_classes = [HasFeatureMethodPermission]
+    branch_scope_field = 'branch_id'
+    filterset_fields = ['branch', 'is_active', 'is_published']
+    search_fields = ['invited_email', 'full_name', 'phone_number']
+    ordering_fields = ['id', 'created_at', 'invited_email', 'full_name']
+    ordering = ['id']
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        scope_ids = _branch_manager_scope_ids(self.request.user)
-        if scope_ids is None:
-            return queryset
-        if not scope_ids:
-            return queryset.none()
-        return queryset.filter(branch_id__in=scope_ids)
+        return self.scope_branch_queryset(queryset)
 
     def _create(self, request):
         payload = request.data.copy()
