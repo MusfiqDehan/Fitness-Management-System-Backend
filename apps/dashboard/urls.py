@@ -12,6 +12,10 @@ from .settings_views import (
     ReminderSendAPIView,
     ReminderStatsAPIView,
 )
+from .custom_domain_views import (
+    CustomDomainAPIView,
+    CustomDomainVerifyAPIView,
+)
 from .views import (
     GymClassDashboardListAPIView,
     GymClassDashboardCreateAPIView,
@@ -46,11 +50,6 @@ from .views import (
     DashboardFitHiveSupportDeleteAPIView,
     DashboardFitHiveSupportMarkAsReadAPIView,
     DashboardFitHiveSupportMarkAsRespondedAPIView,
-    GymClubDashboardListAPIView,
-    GymClubDashboardCreateAPIView,
-    GymClubDashboardRetrieveAPIView,
-    GymClubDashboardUpdateAPIView,
-    GymClubDashboardDeleteAPIView,
     AttendanceDashboardListAPIView,
     AttendanceDashboardCreateAPIView,
     AttendanceDashboardRetrieveAPIView,
@@ -113,14 +112,6 @@ urlpatterns = [
     path('instructors/', InstructorListAPIView.as_view(), name='instructor-list'),
     #==== End of Gym Class related endpoints ====
 
-    #==== Gym Club related endpoints ====
-    path('gym-club/', GymClubDashboardListAPIView.as_view(), name='gym-club-list'),
-    path('gym-club/create/', GymClubDashboardCreateAPIView.as_view(), name='gym-club-create'),
-    path('gym-club/<int:pk>/', GymClubDashboardRetrieveAPIView.as_view(), name='gym-club-detail'),
-    path('gym-club/<int:pk>/update/', GymClubDashboardUpdateAPIView.as_view(), name='gym-club-update'),
-    path('gym-club/<int:pk>/delete/', GymClubDashboardDeleteAPIView.as_view(), name='gym-club-delete'),
-    # ==== End of Gym Club related endpoints ====
-
     # ==== Attendance related endpoints ====
     path('attendance/', AttendanceDashboardListAPIView.as_view(), name='attendance-list'),
     path('attendance/create/', AttendanceDashboardCreateAPIView.as_view(), name='attendance-create'),
@@ -137,6 +128,8 @@ urlpatterns = [
     path('settings/preferences/', GymPreferencesAPIView.as_view(), name='settings-preferences'),
     path('settings/my-account/', MyAccountAPIView.as_view(), name='settings-my-account'),
     path('settings/change-password/', ChangePasswordAPIView.as_view(), name='settings-change-password'),
+    path('settings/custom-domain/', CustomDomainAPIView.as_view(), name='settings-custom-domain'),
+    path('settings/custom-domain/verify/', CustomDomainVerifyAPIView.as_view(), name='settings-custom-domain-verify'),
     # ==== End of Settings endpoints ====
 
     # ==== Reminder Template endpoints ====

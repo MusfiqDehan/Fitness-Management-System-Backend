@@ -8,7 +8,6 @@ from apps.quick_action.models import (
     Contact,
     FitHiveSupport,
     Package,
-    GymClub,
     GymSchedule,
 )
 from apps.quick_action.serializers import (
@@ -18,7 +17,6 @@ from apps.quick_action.serializers import (
     ContactDashboardSerializer,
     FitHiveSupportDashboardSerializer,
     PackageSerializer,
-    GymClubSerializer,
     GymScheduleSerializer,
 )
 from apps.membership.serializers import (
@@ -246,7 +244,7 @@ class DashboardContactBaseAPIView(GenericAPIView):
         filters.OrderingFilter,
     ]
 
-    filterset_fields = ["status", "preferred_club"]
+    filterset_fields = ["status", "preferred_branch"]
 
     search_fields = [
         "name",
@@ -396,34 +394,6 @@ class PackageDeleteAPIView(DestroyModelAPIView, PackageDashboardBaseAPIView):
     pass
 
 
-# Gym Club
-class GymClubDashboardBaseAPIView(GenericAPIView):
-    feature_key = 'clubs'
-    queryset = GymClub.objects.prefetch_related('facilities').all()
-    serializer_class = GymClubSerializer
-    permission_classes = [HasFeatureMethodPermission]
-
-
-class GymClubDashboardListAPIView(ListModelAPIView, GymClubDashboardBaseAPIView):
-    pass
-
-
-class GymClubDashboardCreateAPIView(CreateModelAPIView, GymClubDashboardBaseAPIView):
-    pass
-
-
-class GymClubDashboardRetrieveAPIView(RetrieveModelAPIView, GymClubDashboardBaseAPIView):
-    pass
-
-
-class GymClubDashboardUpdateAPIView(UpdateModelAPIView, GymClubDashboardBaseAPIView):
-    pass
-
-
-class GymClubDashboardDeleteAPIView(DestroyModelAPIView, GymClubDashboardBaseAPIView):
-    pass
-
-
 # MemberPackage
 class MemberPackageDashboardBaseAPIView(GenericAPIView):
     feature_key = 'members.packages'
@@ -536,7 +506,7 @@ MAX_UPLOAD_SIZE_MB = 100
 
 
 class FileUploadView(APIView):
-    feature_keys = ['cms.banners', 'cms.blogs', 'clubs', 'classes']
+    feature_keys = ['cms.banners', 'cms.blogs', 'branches', 'classes']
     permission_classes = [HasFeatureMethodPermission]
     parser_classes = [MultiPartParser, FormParser]
 

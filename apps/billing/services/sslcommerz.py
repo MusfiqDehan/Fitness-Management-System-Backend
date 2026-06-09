@@ -7,6 +7,7 @@ import logging
 from typing import Any, Dict
 
 import requests
+from django.conf import settings
 
 from .base import AbstractPaymentGateway
 
@@ -36,6 +37,17 @@ class SSLCommerzService(AbstractPaymentGateway):
     def initiate(self, transaction) -> Dict[str, Any]:
         """POST to SSLCommerz session-init API and return the gateway_url."""
         source_payment = getattr(transaction, "source_payment", None)
+        tenant = getattr(transaction, "tenant", None)
+
+        def _first_non_empty(*values: Any) -> str:
+            for value in values:
+                text = str(value or "").strip()
+                if text:
+                    return text
+            return ""
+
+        tenant_metadata = getattr(tenant, "metadata", {}) or {}
+        default_cus_phone = (getattr(settings, "SSLCOMMERZ_FALLBACK_PHONE", "01700000000") or "01700000000").strip()
 
         payload = {
             "store_id": self.store_id,
@@ -49,20 +61,25 @@ class SSLCommerzService(AbstractPaymentGateway):
             "ipn_url": self.ipn_url,
             # Customer info (pulled from the linked payment's member when available,
             # or from a tenant object for subscription invoices)
-            "cus_name": (
-                source_payment.member.full_name
-                if source_payment and getattr(source_payment, "member", None)
-                else getattr(getattr(transaction, "tenant", None), "name", "Customer") or "Customer"
+            "cus_name": _first_non_empty(
+                source_payment.member.full_name if source_payment and getattr(source_payment, "member", None) else "",
+                getattr(transaction, "customer_name", ""),
+                getattr(tenant, "name", ""),
+                "Customer",
             ),
-            "cus_email": (
-                source_payment.member.email
-                if source_payment and getattr(source_payment, "member", None)
-                else getattr(getattr(transaction, "tenant", None), "billing_email", "") or ""
+            "cus_email": _first_non_empty(
+                source_payment.member.email if source_payment and getattr(source_payment, "member", None) else "",
+                getattr(transaction, "customer_email", ""),
+                getattr(tenant, "billing_email", ""),
+                getattr(tenant, "owner_email", ""),
+                "support@example.com",
             ),
-            "cus_phone": (
-                source_payment.member.phone_number
-                if source_payment and getattr(source_payment, "member", None)
-                else ""
+            "cus_phone": _first_non_empty(
+                source_payment.member.phone_number if source_payment and getattr(source_payment, "member", None) else "",
+                getattr(transaction, "customer_phone", ""),
+                getattr(transaction, "contact_phone", ""),
+                tenant_metadata.get("contact_phone", ""),
+                default_cus_phone,
             ),
             "cus_add1": "N/A",
             "cus_city": "Dhaka",

@@ -69,6 +69,13 @@ class UserRole(models.Model):
 
     user_id = models.BigIntegerField(db_index=True)
     user_email = models.EmailField(blank=True, default="")
+    branch = models.ForeignKey(
+        "gym_branch.Branch",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="user_roles",
+    )
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="user_assignments")
     assigned_at = models.DateTimeField(auto_now_add=True)
     assigned_by_email = models.EmailField(blank=True, default="")

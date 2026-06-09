@@ -1163,6 +1163,44 @@ class PlatformSubscriptionPaymentsView(APIView):
 # These are called by SSLCommerz after a tenant subscription payment.
 # ===============================================================
 
+def _sync_tenant_limits_from_package(tenant, package_slug: str) -> None:
+    """Mirror package limits onto tenant caps for the active subscription plan."""
+    if tenant is None or not package_slug:
+        return
+
+    pkg = PlatformPackage.objects.filter(slug=package_slug).first()
+    if pkg is None:
+        return
+
+    updated = []
+    if tenant.max_users != pkg.max_users:
+        tenant.max_users = pkg.max_users
+        updated.append("max_users")
+    if tenant.max_branches != pkg.max_branches:
+        tenant.max_branches = pkg.max_branches
+        updated.append("max_branches")
+
+    tenant_max_members = getattr(tenant, "max_members_per_branch", None)
+    package_max_members = getattr(pkg, "max_members_per_branch", None)
+    if tenant_max_members != package_max_members:
+        tenant.max_members_per_branch = package_max_members
+        updated.append("max_members_per_branch")
+
+    tenant_max_trainers = getattr(tenant, "max_trainers_per_branch", None)
+    package_max_trainers = getattr(pkg, "max_trainers_per_branch", None)
+    if tenant_max_trainers != package_max_trainers:
+        tenant.max_trainers_per_branch = package_max_trainers
+        updated.append("max_trainers_per_branch")
+
+    tenant_max_employees = getattr(tenant, "max_employees_per_branch", None)
+    package_max_employees = getattr(pkg, "max_employees_per_branch", None)
+    if tenant_max_employees != package_max_employees:
+        tenant.max_employees_per_branch = package_max_employees
+        updated.append("max_employees_per_branch")
+
+    if updated:
+        tenant.save(update_fields=[*updated, "updated_at"])
+
 def _process_subscription_callback(request, *, tran_id=None):
     """Shared handler for subscription success/fail/cancel POST callbacks.
 
@@ -1185,6 +1223,7 @@ def _process_subscription_callback(request, *, tran_id=None):
                 return None, f"{public_frontend}/subscription/fail?reason=not_found"
 
             if invoice.status == TenantSubscriptionInvoice.STATUS_SUCCESS:
+                _sync_tenant_limits_from_package(invoice.tenant, invoice.package_slug)
                 # Already processed — idempotent; rebuild success params
                 from urllib.parse import urlencode as _ue
                 _tenant = invoice.tenant
@@ -1237,9 +1276,11 @@ def _process_subscription_callback(request, *, tran_id=None):
                 tenant = invoice.tenant
                 tenant.is_trial = False
                 tenant.status = "active"
+                tenant.plan = invoice.package_slug
                 tenant.subscription_start = timezone.now()
                 tenant.subscription_end = invoice.period_end
-                tenant.save(update_fields=["is_trial", "status", "subscription_start", "subscription_end", "updated_at"])
+                tenant.save(update_fields=["is_trial", "status", "plan", "subscription_start", "subscription_end", "updated_at"])
+                _sync_tenant_limits_from_package(tenant, invoice.package_slug)
 
     except Exception:
         return None, f"{public_frontend}/subscription/fail?reason=error"
@@ -1554,12 +1595,17 @@ class PaymentInitiateView(APIView):
         cancel_url = f"{prefix}/cancel/"
         ipn_url = f"{prefix}/ipn/"
 
+        # Determine the dynamic tenant/platform currency configuration
+        from apps.dashboard.models import GymPreferences
+        pref = GymPreferences.objects.filter(pk=1).first()
+        active_currency = pref.currency if pref else "USD"
+
         with transaction.atomic():
             tx = PaymentTransaction.objects.create(
                 tran_id=tran_id,
                 gateway_slug=gateway_slug,
                 amount=payment.amount,
-                currency="BDT",
+                currency=active_currency,
                 status=PaymentTransaction.STATUS_INIT,
                 source_payment=payment,
             )
@@ -1818,4 +1864,203 @@ class PaymentCancelView(APIView):
             pass
 
         return redirect(_payment_result_redirect_url(request, tx, "cancel", tran_id))
+
+
+# ===============================================================
+# Tenant: subscription plan change (upgrade / downgrade)
+# ===============================================================
+
+def _is_tenant_admin_user(user) -> bool:
+    """Return True if the user is a tenant admin or superuser."""
+    return (
+        getattr(user, "is_superuser", False)
+        or getattr(user, "is_staff", False)
+        or getattr(user, "role", "") == "admin"
+    )
+
+
+class TenantInitiateSubscriptionChangeView(APIView):
+    """POST /api/v1/billing/subscription/initiate-change/
+
+    Allows a tenant admin to upgrade or downgrade their SaaS plan.
+    Creates a TenantSubscriptionInvoice and returns the payment gateway
+    redirect URL (same SSLCommerz flow as initial signup).
+
+    Request body: { package_slug: str, billing_cycle: "monthly" | "yearly" }
+    Response:     { gateway_url: str, tran_id: str }
+
+    Business rules:
+    - Only tenant admins may initiate a plan change.
+    - The target package must be active and public.
+    - Cannot switch to the same plan/cycle already active.
+    - Cannot switch to a plan with trial_days > 0 when the tenant
+      is already on an active (non-trial) paid subscription.
+    - Free (price == 0) plans are not supported via this flow.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        if not _is_tenant_admin_user(user):
+            return Response(
+                {"detail": "Only tenant administrators can change the subscription plan."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            return Response({"detail": "Tenant context not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        package_slug = (request.data.get("package_slug") or "").strip()
+        billing_cycle = (request.data.get("billing_cycle") or "monthly").strip()
+
+        if not package_slug:
+            return Response({"detail": "package_slug is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if billing_cycle not in ("monthly", "yearly"):
+            return Response({"detail": "billing_cycle must be 'monthly' or 'yearly'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        public_schema = get_public_schema_name()
+        with schema_context(public_schema):
+            from apps.tenancy.models import (
+                Tenant as PublicTenant,
+                PlatformSettings,
+                TenantSubscriptionInvoice,
+            )
+            from utils.currency import convert_currency
+
+            # Re-fetch tenant to get live subscription state.
+            try:
+                live_tenant = PublicTenant.objects.get(pk=tenant.pk)
+            except PublicTenant.DoesNotExist:
+                return Response({"detail": "Tenant not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            # Validate target package.
+            pkg = PlatformPackage.objects.filter(slug=package_slug, is_active=True, is_public=True).first()
+            if pkg is None:
+                return Response(
+                    {"detail": f"Package '{package_slug}' is not available."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Block switching to the same plan+cycle.
+            if live_tenant.plan == package_slug and not live_tenant.is_trial:
+                return Response(
+                    {"detail": "You are already on this plan."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Block switching to a trial-gated plan for active paid tenants.
+            if pkg.trial_days > 0 and not live_tenant.is_trial and live_tenant.status == "active":
+                return Response(
+                    {"detail": "Cannot switch to a trial plan from an active paid subscription."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Determine price based on billing cycle.
+            if billing_cycle == "yearly":
+                amount_usd = pkg.price_yearly
+                period_days = 365
+            else:
+                amount_usd = pkg.price_monthly
+                period_days = 30
+
+            if amount_usd <= Decimal("0"):
+                return Response(
+                    {"detail": "Free plan changes cannot be processed as a payment."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Get platform payment gateway for subscription billing.
+            gateway = PaymentGateway.objects.filter(is_default_for_subscriptions=True).first()
+            if gateway is None or not (gateway.platform_credentials or {}):
+                return Response(
+                    {"detail": "No subscription payment gateway is configured. Please contact the platform administrator."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+
+            # Convert price to platform display currency.
+            ps = PlatformSettings.objects.filter(pk=1).first()
+            target_currency = ps.default_currency if ps else "USD"
+            amount = convert_currency(amount_usd, "USD", target_currency)
+
+            tran_id = f"SUB-{live_tenant.schema_name.upper()}-{uuid.uuid4().hex[:12].upper()}"
+            now = timezone.now()
+            invoice = TenantSubscriptionInvoice.objects.create(
+                tenant=live_tenant,
+                package_slug=pkg.slug,
+                package_name=pkg.name,
+                amount=amount,
+                currency=target_currency,
+                tran_id=tran_id,
+                gateway_slug=gateway.slug,
+                status=TenantSubscriptionInvoice.STATUS_PENDING,
+                billing_cycle=billing_cycle,
+                period_start=now,
+                period_end=now + timedelta(days=period_days),
+                is_trial=False,
+            )
+
+            backend_base = (getattr(settings, "BACKEND_BASE_URL", "") or "").rstrip("/") or request.build_absolute_uri("/").rstrip("/")
+            try:
+                svc = get_gateway(
+                    gateway.slug,
+                    credentials=gateway.platform_credentials,
+                    is_sandbox=gateway.is_sandbox,
+                    success_url=f"{backend_base}/api/v1/billing/subscription/success/",
+                    fail_url=f"{backend_base}/api/v1/billing/subscription/fail/",
+                    cancel_url=f"{backend_base}/api/v1/billing/subscription/cancel/",
+                    ipn_url=f"{backend_base}/api/v1/billing/subscription/ipn/",
+                )
+                result = svc.initiate(invoice)
+                gateway_url = result.get("gateway_url", "")
+            except Exception:
+                invoice.status = TenantSubscriptionInvoice.STATUS_CANCELLED
+                invoice.save(update_fields=["status", "updated_at"])
+                return Response(
+                    {"detail": "Failed to initiate payment with the gateway. Please try again."},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+        return Response({"gateway_url": gateway_url, "tran_id": tran_id}, status=status.HTTP_200_OK)
+
+
+# ===============================================================
+# Tenant: subscription invoice history (admin, no feature gate)
+# ===============================================================
+
+class TenantSubscriptionInvoiceAdminView(APIView):
+    """GET /api/v1/billing/subscription/admin-invoices/
+
+    Returns the authenticated tenant's SaaS subscription invoice history.
+    Accessible to tenant admins regardless of whether the `payments`
+    feature is enabled (needed for the Settings > Billing panel).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not _is_tenant_admin_user(user):
+            return Response(
+                {"detail": "Only tenant administrators can view subscription invoices."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            return Response([], status=status.HTTP_200_OK)
+
+        public_schema = get_public_schema_name()
+        with schema_context(public_schema):
+            from apps.tenancy.models import TenantSubscriptionInvoice
+            from .serializers import TenantSubscriptionInvoiceSerializer
+
+            invoices = (
+                TenantSubscriptionInvoice.objects
+                .filter(tenant=tenant)
+                .order_by("-created_at")
+            )
+            return Response(TenantSubscriptionInvoiceSerializer(invoices, many=True).data)
+
 

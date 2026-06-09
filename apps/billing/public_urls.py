@@ -9,6 +9,7 @@ from .views import (
     PaymentGatewayListAPIView,
     PaymentGatewaySetDefaultView,
     PaymentGatewayToggleAPIView,
+    PlatformPricingConfigAPIView,
     PlatformSubscriptionInvoicePdfView,
     PlatformSubscriptionPaymentsView,
     SubscriptionPaymentCancelView,
@@ -21,6 +22,7 @@ app_name = 'billing'
 
 urlpatterns = [
     path('features/', FeatureListAPIView.as_view(), name='feature-list'),
+    path('pricing-config/', PlatformPricingConfigAPIView.as_view(), name='pricing-config'),
     path('packages/', PackageListCreateAPIView.as_view(), name='package-list-create'),
     path('packages/<int:pk>/', PackageDetailAPIView.as_view(), name='package-detail'),
     path('packages/<int:pk>/features/', PackageFeaturesAPIView.as_view(), name='package-features'),

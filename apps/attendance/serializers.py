@@ -1,6 +1,10 @@
 from rest_framework import serializers
+from django.utils import timezone
+from django.db import connection
+from django_tenants.utils import get_public_schema_name, schema_context
 
 from apps.membership.models import Attendance, Member
+from apps.tenancy.models import AccessDeviceRoute
 
 from .models import AccessDevice, AccessDeviceEndpoint, DeviceCredential, DeviceUser
 
@@ -32,7 +36,28 @@ class AccessDeviceSerializer(serializers.ModelSerializer):
         normalized = (value or "").strip()
         if not normalized:
             raise serializers.ValidationError("Device serial number is required.")
-        return normalized
+
+        current_schema = connection.schema_name
+        if current_schema == get_public_schema_name():
+            return normalized
+
+        with schema_context(get_public_schema_name()):
+            route = (
+                AccessDeviceRoute.objects.select_related("tenant")
+                .filter(device_sn=normalized)
+                .first()
+            )
+
+        if route is None:
+            return normalized
+
+        if (
+            route.tenant.schema_name == current_schema
+            and route.access_device_id == getattr(self.instance, "pk", None)
+        ):
+            return normalized
+
+        raise serializers.ValidationError("Device serial number is already assigned to another tenant.")
 
 
 class AccessDeviceEndpointSerializer(serializers.ModelSerializer):
@@ -104,6 +129,22 @@ class FingerprintUnlinkSerializer(serializers.Serializer):
 
 class AttendanceLogSerializer(serializers.ModelSerializer):
     member_name = serializers.CharField(source="member.full_name", read_only=True)
+    total_staying_time = serializers.SerializerMethodField()
+
+    def get_total_staying_time(self, obj):
+        end_time = obj.check_out_time or timezone.now()
+        delta = end_time - obj.check_in_time
+        total_seconds = max(int(delta.total_seconds()), 0)
+
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+
+        if hours > 0:
+            return f"{hours}h {minutes:02d}m"
+        if minutes > 0:
+            return f"{minutes}m {seconds:02d}s"
+        return f"{seconds}s"
 
     class Meta:
         model = Attendance
@@ -113,6 +154,7 @@ class AttendanceLogSerializer(serializers.ModelSerializer):
             "member_name",
             "check_in_time",
             "check_out_time",
+            "total_staying_time",
             "entry_method",
             "device_id",
         )

@@ -29,6 +29,14 @@ class TrainerProfile(BaseModel):
     bio = models.TextField(blank=True, default='')
     specializations = models.JSONField(default=list, blank=True)
     experience_years = models.PositiveIntegerField(default=0)
+
+    branch = models.ForeignKey(
+        'gym_branch.Branch',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='trainers',
+    )
     
     # Media
     avatar = models.ImageField(upload_to='trainers/avatars/', blank=True, null=True)
@@ -293,6 +301,13 @@ class TrainerInvitation(BaseModel):
         null=True,
         blank=True,
         related_name='invited_trainers'
+    )
+    branch = models.ForeignKey(
+        'gym_branch.Branch',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='trainer_invitations',
     )
     token = models.CharField(max_length=64, unique=True)
     invitation_sent_at = models.DateTimeField(auto_now_add=True)

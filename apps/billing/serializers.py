@@ -8,10 +8,13 @@ These wrap the canonical models that live in `apps.tenancy` (public schema):
 Kept inside the billing app so the platform admin's "Packages" section has
 its own clean, focused API surface (separate from the broader RBAC views).
 """
+from decimal import Decimal, InvalidOperation
+
 from rest_framework import serializers
 
 from apps.tenancy.models import (
     Feature,
+    PlatformSettings,
     PlatformPackage,
     PlatformPackageFeature,
     PlatformPricingConfig,
@@ -19,6 +22,7 @@ from apps.tenancy.models import (
 )
 from apps.membership.models import Member, Payment
 from apps.billing.models import TenantPaymentGateway, PaymentTransaction
+from utils.currency import convert_currency
 
 
 class FeatureSerializer(serializers.ModelSerializer):
@@ -50,6 +54,11 @@ class PackageFeatureSerializer(serializers.ModelSerializer):
 class PackageSerializer(serializers.ModelSerializer):
     """Read/write serializer for a `PlatformPackage` plus enabled feature ids."""
 
+    display_currency = serializers.SerializerMethodField()
+    display_price_monthly = serializers.SerializerMethodField()
+    display_price_yearly = serializers.SerializerMethodField()
+    display_original_price_monthly = serializers.SerializerMethodField()
+    display_original_price_yearly = serializers.SerializerMethodField()
     features = PackageFeatureSerializer(
         source="package_features", many=True, read_only=True
     )
@@ -68,6 +77,8 @@ class PackageSerializer(serializers.ModelSerializer):
             "price_yearly",
             "max_users",
             "max_branches",
+            "max_members_per_branch",
+            "max_trainers_per_branch",
             "trial_days",
             "is_active",
             "is_public",
@@ -76,6 +87,7 @@ class PackageSerializer(serializers.ModelSerializer):
             # pricing display customisation
             "badge_label",
             "cta_label",
+            "cta_url",
             "setup_fee",
             "original_setup_fee",
             "original_price_monthly",
@@ -84,12 +96,88 @@ class PackageSerializer(serializers.ModelSerializer):
             "yearly_discount_percent",
             "price_custom_label",
             "price_period_label",
+            "display_currency",
+            "display_price_monthly",
+            "display_price_yearly",
+            "display_original_price_monthly",
+            "display_original_price_yearly",
             "features",
             "feature_ids",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def _get_platform_settings(self):
+        if not hasattr(self, "_platform_settings_cache"):
+            self._platform_settings_cache = PlatformSettings.objects.filter(pk=1).first()
+        return self._platform_settings_cache
+
+    def _get_rate_matrix(self):
+        if hasattr(self, "_rate_matrix_cache"):
+            return self._rate_matrix_cache
+
+        matrix = {"USD": Decimal("1.0000")}
+        settings = self._get_platform_settings()
+        if settings and settings.enable_currency_conversion:
+            try:
+                matrix["BDT"] = Decimal(str(settings.usd_to_bdt_rate))
+            except (TypeError, ValueError, InvalidOperation):
+                matrix["BDT"] = Decimal("120.0000")
+
+            for code, rate in (settings.exchange_rates or {}).items():
+                try:
+                    matrix[str(code).upper()] = Decimal(str(rate))
+                except (TypeError, ValueError, InvalidOperation):
+                    continue
+
+        self._rate_matrix_cache = matrix
+        return matrix
+
+    def _get_display_currency(self) -> str:
+        if hasattr(self, "_display_currency_cache"):
+            return self._display_currency_cache
+
+        settings = self._get_platform_settings()
+        matrix = self._get_rate_matrix()
+        candidate = str(getattr(settings, "default_currency", "") or "").upper()
+
+        if settings and candidate:
+            if settings.enable_currency_conversion:
+                self._display_currency_cache = candidate if candidate in matrix else "USD"
+            else:
+                # Conversion disabled: keep amount as-is, only switch currency label.
+                self._display_currency_cache = candidate
+        else:
+            self._display_currency_cache = "USD"
+        return self._display_currency_cache
+
+    def _serialize_converted_amount(self, value):
+        if value in (None, ""):
+            return None
+
+        try:
+            amount = Decimal(str(value))
+        except (TypeError, ValueError, InvalidOperation):
+            return None
+
+        converted = convert_currency(amount, "USD", self._get_display_currency())
+        return f"{converted:.2f}"
+
+    def get_display_currency(self, obj):
+        return self._get_display_currency()
+
+    def get_display_price_monthly(self, obj):
+        return self._serialize_converted_amount(obj.price_monthly)
+
+    def get_display_price_yearly(self, obj):
+        return self._serialize_converted_amount(obj.price_yearly)
+
+    def get_display_original_price_monthly(self, obj):
+        return self._serialize_converted_amount(obj.original_price_monthly)
+
+    def get_display_original_price_yearly(self, obj):
+        return self._serialize_converted_amount(obj.original_price_yearly)
 
     def _sync_features(self, package: PlatformPackage, feature_ids):
         wanted = set(feature_ids or [])
@@ -332,6 +420,7 @@ class TenantSubscriptionInvoiceSerializer(serializers.Serializer):
     tran_id = serializers.CharField(read_only=True)
     gateway_slug = serializers.CharField(read_only=True)
     status = serializers.CharField(read_only=True)
+    billing_cycle = serializers.CharField(read_only=True)
     is_trial = serializers.BooleanField(read_only=True)
     period_start = serializers.DateTimeField(read_only=True)
     period_end = serializers.DateTimeField(read_only=True)

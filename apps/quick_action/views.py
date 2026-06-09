@@ -4,7 +4,6 @@ from rest_framework.response import Response
 from rest_framework.filters import SearchFilter
 from apps.access.permissions import HasFeatureMethodPermission
 from .models import (
-    GymClub,
     GymClass,
     Category,
     ClassSchedule,
@@ -14,7 +13,6 @@ from .models import (
     Package,
 )
 from .serializers import (
-    GymClubSerializer,
     GymClassSerializer,
     ClassBookingSerializer,
     CategorySerializer,
@@ -72,41 +70,6 @@ class DestroyModelAPIView(GenericAPIView):
         instance = self.get_object()
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-class GymClubListAPIView(ListModelAPIView):
-    feature_key = 'clubs'
-    queryset = GymClub.objects.prefetch_related('facilities').all()
-    serializer_class = GymClubSerializer
-    permission_classes = [HasFeatureMethodPermission]
-
-
-class GymClubCreateAPIView(CreateModelAPIView):
-    feature_key = 'clubs'
-    queryset = GymClub.objects.prefetch_related('facilities').all()
-    serializer_class = GymClubSerializer
-    permission_classes = [HasFeatureMethodPermission]
-
-
-class GymClubRetrieveAPIView(RetrieveModelAPIView):
-    feature_key = 'clubs'
-    queryset = GymClub.objects.prefetch_related('facilities').all()
-    serializer_class = GymClubSerializer
-    permission_classes = [HasFeatureMethodPermission]
-
-
-class GymClubUpdateAPIView(UpdateModelAPIView):
-    feature_key = 'clubs'
-    queryset = GymClub.objects.prefetch_related('facilities').all()
-    serializer_class = GymClubSerializer
-    permission_classes = [HasFeatureMethodPermission]
-
-
-class GymClubDeleteAPIView(DestroyModelAPIView):
-    feature_key = 'clubs'
-    queryset = GymClub.objects.prefetch_related('facilities').all()
-    serializer_class = GymClubSerializer
-    permission_classes = [HasFeatureMethodPermission]
 
 
 class CategoryListCreateView(generics.ListCreateAPIView):

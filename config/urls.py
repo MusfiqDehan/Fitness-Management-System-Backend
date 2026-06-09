@@ -16,6 +16,7 @@ from django.conf.urls.static import static
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 from config.health import tenant_health
 from apps.attendance.views import IclockCdataAPIView, IclockGetRequestAPIView, IclockDeviceCmdAPIView
+from apps.dashboard.settings_views import PublicGymBrandingView
 
 
 
@@ -25,6 +26,10 @@ urlpatterns = [
 
     # Health Check
     path('api/v1/health/tenant/', tenant_health, name='tenant-health'),
+
+    # Public gym branding (read-only) — backwards-compatible URL for the frontend.
+    # On a tenant schema this is backed by GymProfile.
+    path('api/v1/cms/public/site-settings/', PublicGymBrandingView.as_view(), name='public-gym-branding'),
 
     # App-specific API routes
     path('api/v1/', include(('apps.quick_action.urls', 'quick_action'), namespace='quick_action')),
@@ -40,6 +45,7 @@ urlpatterns = [
     path('api/v1/reminder/', include(('apps.reminder.urls', 'reminder'), namespace='reminder')),
     path('api/v1/attendance/', include(('apps.attendance.urls', 'attendance'), namespace='attendance')),
     path('api/v1/trainer/', include(('apps.trainer.urls', 'trainer'), namespace='trainer')),
+    path('api/v1/branch/', include(('apps.gym_branch.urls', 'gym_branch'), namespace='gym_branch')),
 
     # ZKTeco ADMS device paths.
     # Accept both with and without a trailing slash because F18 firmware often

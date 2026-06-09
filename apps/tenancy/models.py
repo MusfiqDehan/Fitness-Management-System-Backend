@@ -30,7 +30,7 @@ class Tenant(TenantMixin):
     code = models.CharField(max_length=50, unique=True)
 
     # Config
-    timezone = models.CharField(max_length=50, default="UTC")
+    timezone = models.CharField(max_length=50, default="Asia/Dhaka")
     currency = models.CharField(max_length=10, default="USD")
     locale = models.CharField(max_length=10, default="en")
 
@@ -58,7 +58,24 @@ class Tenant(TenantMixin):
     # Limits
     max_users = models.IntegerField(default=10)
     max_branches = models.IntegerField(default=1)
+    max_members_per_branch = models.IntegerField(
+        default=0, help_text="Maximum members per branch. 0 means unlimited."
+    )
+    max_trainers_per_branch = models.IntegerField(
+        default=0, help_text="Maximum trainers per branch. 0 means unlimited."
+    )
+    max_employees_per_branch = models.IntegerField(
+        default=0, help_text="Maximum employees (staff) per branch. 0 means unlimited."
+    )
     is_enabled = models.BooleanField(default=True)
+
+    # Custom domain self-service toggle (per-tenant). Effective availability also
+    # requires the global PlatformSettings.enable_custom_domains master switch and
+    # the tenant's 'custom_domain' feature flag.
+    custom_domain_enabled = models.BooleanField(
+        default=False,
+        help_text="When True, this tenant may connect its own custom domain from Settings.",
+    )
 
     # Features (feature flags per tenant plan)
     features = models.JSONField(default=dict, blank=True)
@@ -103,6 +120,96 @@ class Domain(DomainMixin):
         if self.domain:
             self.domain = self.domain.strip().lower()
         super().save(*args, **kwargs)
+
+
+class AccessDeviceRoute(models.Model):
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="access_device_routes",
+    )
+    access_device_id = models.PositiveBigIntegerField()
+    device_sn = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["device_sn"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "access_device_id"],
+                name="uniq_access_device_route_per_device",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["tenant", "is_active"], name="idx_adr_tenant_active"),
+        ]
+
+    def __str__(self):
+        return f"{self.device_sn} -> {self.tenant.schema_name}"
+
+
+# ---------------------------------------------------------------
+# CustomDomainRequest (public/shared schema)
+#
+# Tracks a tenant's self-service request to connect a custom domain
+# (or their own subdomain, e.g. gym.theircompany.com). The actual
+# routable Domain row is only created once the DNS TXT challenge is
+# verified, so unverified domains never resolve to a tenant schema.
+# ---------------------------------------------------------------
+class CustomDomainRequest(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_VERIFIED = "verified"
+    STATUS_FAILED = "failed"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending Verification"),
+        (STATUS_VERIFIED, "Verified"),
+        (STATUS_FAILED, "Verification Failed"),
+    ]
+
+    # Hostname (without scheme) tenants must point at the platform, e.g.
+    # "gym.theircompany.com". The TXT challenge record name is derived from this.
+    VERIFICATION_RECORD_PREFIX = "_fitssort-verify"
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="custom_domain_requests",
+    )
+    domain = models.CharField(max_length=253, unique=True)
+    verification_token = models.CharField(max_length=64)
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING
+    )
+    last_error = models.CharField(max_length=255, blank=True, default="")
+    verified_at = models.DateTimeField(null=True, blank=True)
+    created_by_email = models.EmailField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["tenant", "status"], name="idx_cdr_tenant_status"),
+        ]
+
+    def __str__(self):
+        return f"{self.domain} -> {self.tenant.slug} [{self.status}]"
+
+    def save(self, *args, **kwargs):
+        if self.domain:
+            self.domain = self.domain.strip().lower().rstrip(".")
+        super().save(*args, **kwargs)
+
+    @property
+    def verification_record_name(self):
+        return f"{self.VERIFICATION_RECORD_PREFIX}.{self.domain}"
+
+    @property
+    def is_verified(self):
+        return self.status == self.STATUS_VERIFIED
 
 
 class Invitation(models.Model):
@@ -383,6 +490,15 @@ class PlatformPackage(models.Model):
     price_yearly = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     max_users = models.IntegerField(default=10)
     max_branches = models.IntegerField(default=1)
+    max_members_per_branch = models.IntegerField(
+        default=0, help_text="Maximum members per branch. 0 means unlimited."
+    )
+    max_trainers_per_branch = models.IntegerField(
+        default=0, help_text="Maximum trainers per branch. 0 means unlimited."
+    )
+    max_employees_per_branch = models.IntegerField(
+        default=0, help_text="Maximum employees (staff) per branch. 0 means unlimited."
+    )
     trial_days = models.IntegerField(default=0, help_text="Free trial length in days; 0 = no trial.")
     is_active = models.BooleanField(default=True)
     is_public = models.BooleanField(default=True, help_text="Show on public pricing page.")
@@ -397,6 +513,10 @@ class PlatformPackage(models.Model):
     cta_label = models.CharField(
         max_length=100, blank=True, default="",
         help_text="Call-to-action button label shown on the pricing card.",
+    )
+    cta_url = models.CharField(
+        max_length=255, blank=True, default="",
+        help_text="CTA link shown on the pricing card (supports internal paths like /login and full URLs).",
     )
     setup_fee = models.CharField(
         max_length=100, blank=True, default="",
@@ -619,6 +739,18 @@ class TenantSubscriptionInvoice(models.Model):
     gateway_response = models.JSONField(default=dict, blank=True)
     val_id = models.CharField(max_length=200, blank=True, default="")
     validated_at = models.DateTimeField(null=True, blank=True)
+    BILLING_CYCLE_MONTHLY = "monthly"
+    BILLING_CYCLE_YEARLY = "yearly"
+    BILLING_CYCLE_CHOICES = [
+        (BILLING_CYCLE_MONTHLY, "Monthly"),
+        (BILLING_CYCLE_YEARLY, "Yearly"),
+    ]
+
+    billing_cycle = models.CharField(
+        max_length=10,
+        choices=BILLING_CYCLE_CHOICES,
+        default=BILLING_CYCLE_MONTHLY,
+    )
     # Billing period this invoice covers
     period_start = models.DateTimeField(null=True, blank=True)
     period_end = models.DateTimeField(null=True, blank=True)
@@ -631,3 +763,167 @@ class TenantSubscriptionInvoice(models.Model):
 
     def __str__(self):
         return f"Invoice {self.tran_id} — {self.tenant.schema_name} [{self.status}]"
+
+
+# ===============================================================
+# PlatformSettings (public schema — singleton)
+#
+# Stores platform-wide defaults configurable by platform admins.
+# Only one row should ever exist (pk=1).  Views enforce this via
+# get_or_create(pk=1).
+# ===============================================================
+class PlatformSettings(models.Model):
+    """Platform-wide configuration managed by platform admins.
+
+    Acts as a singleton: only one row with pk=1 is expected.
+    """
+
+    default_timezone = models.CharField(
+        max_length=50,
+        default="Asia/Dhaka",
+        help_text="IANA timezone used as the default for all tenants that have not set their own.",
+    )
+    default_language = models.CharField(
+        max_length=10,
+        default="en",
+        help_text="ISO 639-1 language code used as the default for all tenants that have not set their own.",
+    )
+    default_currency = models.CharField(
+        max_length=10,
+        default="USD",
+        help_text="Currency code used as the default for all tenants that have not set their own.",
+    )
+    enable_currency_conversion = models.BooleanField(
+        default=True,
+        help_text="Enable or disable dynamic currency conversion based on the dollar rate or custom rates.",
+    )
+    usd_to_bdt_rate = models.DecimalField(
+        max_digits=10,
+        decimal_places=4,
+        default=120.0000,
+        help_text="Default USD to BDT exchange rate.",
+    )
+    exchange_rates = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Dynamic exchange rate matrix with USD as the base currency. E.g. {'EUR': 0.92, 'INR': 83.50, 'BDT': 120.0}",
+    )
+    enable_custom_domains = models.BooleanField(
+        default=False,
+        help_text="Global master switch. When True, tenants that are individually enabled may connect their own custom domains.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Settings"
+        verbose_name_plural = "Platform Settings"
+
+    def __str__(self):
+        return f"Platform Settings (tz={self.default_timezone}, lang={self.default_language})"
+
+
+# ===============================================================
+# Platform-schema counterparts for the tenant-only dashboard
+# settings models.  These three singletons (pk=1 pattern) store
+# the Platform Admin's own gym profile, preferences, and
+# notification preferences in the public schema so the shared
+# Settings page works for platform admin users too.
+# ===============================================================
+
+class PlatformGymProfile(models.Model):
+    """Platform Admin's gym / organisation profile (public schema singleton)."""
+
+    gym_name = models.CharField(max_length=150, default="")
+    email = models.EmailField(blank=True, default="")
+    phone = models.CharField(max_length=20, blank=True, default="")
+    website = models.URLField(blank=True, default="")
+    address = models.TextField(blank=True, default="")
+    timezone = models.CharField(max_length=50, default="Asia/Dhaka")
+    logo_url = models.URLField(max_length=1000, blank=True, default="")
+    logo_width = models.PositiveIntegerField(default=120)
+    logo_height = models.PositiveIntegerField(default=40)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Gym Profile"
+
+    def __str__(self):
+        return self.gym_name or "Platform Gym Profile"
+
+
+class PlatformGymPreferences(models.Model):
+    """Platform Admin's display preferences (public schema singleton)."""
+
+    LANGUAGE_CHOICES = [
+        ("en", "English"),
+        ("bn", "বাংলা (Bengali)"),
+        ("hi", "हिंदी (Hindi)"),
+        ("ar", "العربية (Arabic)"),
+        ("ur", "اردو (Urdu)"),
+        ("zh", "中文 (Chinese)"),
+        ("ja", "日本語 (Japanese)"),
+        ("ko", "한국어 (Korean)"),
+        ("fr", "Français (French)"),
+        ("es", "Español (Spanish)"),
+        ("de", "Deutsch (German)"),
+        ("pt", "Português (Portuguese)"),
+        ("ru", "Русский (Russian)"),
+        ("tr", "Türkçe (Turkish)"),
+    ]
+    CURRENCY_CHOICES = [
+        ("USD", "USD — $"),
+        ("EUR", "EUR — €"),
+        ("GBP", "GBP — £"),
+        ("BDT", "BDT — Tk."),
+        ("INR", "INR — ₹"),
+        ("AUD", "AUD — A$"),
+        ("CAD", "CAD — C$"),
+        ("SGD", "SGD — S$"),
+        ("AED", "AED — AED"),
+        ("SAR", "SAR — SR"),
+        ("OMR", "OMR — OMR"),
+        ("QAR", "QAR — QR"),
+        ("KWD", "KWD — KD"),
+        ("BHD", "BHD — BD"),
+        ("MYR", "MYR — RM"),
+        ("IDR", "IDR — Rp"),
+        ("CNY", "CNY — ¥"),
+        ("JPY", "JPY — ¥"),
+        ("TRY", "TRY — ₺"),
+        ("RUB", "RUB — ₽"),
+        ("ZAR", "ZAR — R"),
+        ("BRL", "BRL — R$"),
+    ]
+    DATE_FORMAT_CHOICES = [("dmy", "DD/MM/YYYY"), ("mdy", "MM/DD/YYYY")]
+    WEEK_START_CHOICES = [("sun", "Sunday"), ("mon", "Monday"), ("sat", "Saturday")]
+    THEME_CHOICES = [("light", "Light"), ("dark", "Dark"), ("system", "System")]
+
+    language = models.CharField(max_length=10, choices=LANGUAGE_CHOICES, default="en")
+    currency = models.CharField(max_length=10, choices=CURRENCY_CHOICES, default="USD")
+    date_format = models.CharField(max_length=20, choices=DATE_FORMAT_CHOICES, default="dmy")
+    week_start = models.CharField(max_length=10, choices=WEEK_START_CHOICES, default="sat")
+    theme = models.CharField(max_length=20, choices=THEME_CHOICES, default="light")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Gym Preferences"
+
+    def __str__(self):
+        return "Platform Gym Preferences"
+
+
+class PlatformNotificationPreferences(models.Model):
+    """Platform Admin's notification preferences (public schema singleton)."""
+
+    payment_received = models.BooleanField(default=True)
+    new_member_signup = models.BooleanField(default=True)
+    reminder_due = models.BooleanField(default=True)
+    weekly_report = models.BooleanField(default=False)
+    push_notifications = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Notification Preferences"
+
+    def __str__(self):
+        return "Platform Notification Preferences"

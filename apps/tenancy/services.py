@@ -127,3 +127,39 @@ def tenant_has_feature(tenant, feature_key: str) -> bool:
     if flag is None:
         return False
     return flag.is_effectively_enabled
+
+
+CUSTOM_DOMAIN_FEATURE_KEY = "custom_domain"
+
+
+def custom_domain_effectively_enabled(tenant) -> bool:
+    """Whether a tenant may use custom-domain self-service.
+
+    Requires ALL of:
+      1. The global PlatformSettings.enable_custom_domains master switch.
+      2. The per-tenant Tenant.custom_domain_enabled switch.
+      3. The tenant's 'custom_domain' feature flag being effectively enabled
+         (package- or superadmin-sourced). If no such Feature/flag exists yet,
+         this gate is skipped so the two boolean switches remain sufficient.
+
+    Safe to call from either a public or tenant schema connection — the shared
+    PlatformSettings/Tenant tables are reachable via the search path.
+    """
+    from .models import Feature, PlatformSettings
+
+    if tenant is None:
+        return False
+    if not getattr(tenant, "custom_domain_enabled", False):
+        return False
+
+    settings_row = PlatformSettings.objects.filter(pk=1).first()
+    if settings_row is not None and not settings_row.enable_custom_domains:
+        return False
+    if settings_row is None:
+        # No platform settings configured yet → treat global switch as OFF.
+        return False
+
+    # Optional feature-flag gate. Only enforced when the Feature actually exists.
+    if Feature.objects.filter(key=CUSTOM_DOMAIN_FEATURE_KEY).exists():
+        return tenant_has_feature(tenant, CUSTOM_DOMAIN_FEATURE_KEY)
+    return True

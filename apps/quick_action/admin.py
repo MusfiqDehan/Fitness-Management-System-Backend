@@ -2,8 +2,6 @@ from django.contrib import admin
 from django.utils.html import format_html
 from .models import (
     Banner,
-    GymClub,
-    Facility,
     GymClass, 
     Category, 
     ClassSchedule,
@@ -57,37 +55,6 @@ class BannerAdmin(admin.ModelAdmin):
 
     preview.short_description = "Preview"
 
-
-@admin.register(Facility)
-class FacilityAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name')
-    search_fields = ('name',)
-
-
-@admin.register(GymClub)
-class GymClubAdmin(admin.ModelAdmin):
-    list_display = (
-        'id',
-        'name',
-        'image_preview',
-        'phone_number',
-        'email',
-        'opening_time',
-        'closing_time',
-    )
-    list_filter = ('opening_time', 'closing_time', 'facilities')
-    search_fields = ('name', 'address', 'phone_number', 'email')
-    filter_horizontal = ('facilities',)
-
-    def image_preview(self, obj):
-        if obj.image:
-            return format_html(
-                '<img src="{}" width="60" height="60" style="object-fit:cover;" />',
-                obj.image.url
-            )
-        return "No Image"
-
-    image_preview.short_description = "Image"
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -157,12 +124,12 @@ class ContactAdmin(admin.ModelAdmin):
         "name",
         "email",
         "phone",
-        "preferred_club",
+        "preferred_branch",
         "subject",
         "status",
         "created_at",
     )
-    list_filter = ("status", "preferred_club", "created_at")
+    list_filter = ("status", "preferred_branch", "created_at")
     search_fields = (
         "name",
         "email",
@@ -176,7 +143,7 @@ class ContactAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Contact Information", {
-            "fields": ("name", "email", "phone", "preferred_club")
+            "fields": ("name", "email", "phone", "preferred_branch")
         }),
         ("Message Details", {
             "fields": ("subject", "message")

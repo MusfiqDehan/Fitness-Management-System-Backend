@@ -14,6 +14,7 @@ from .views import (
 	TenantAuditLogListAPIView,
 	TenantMemberInviteAPIView,
 	ChangePasswordView,
+	PlatformSettingsAPIView,
 )
 from .rbac_views import (
 	PlatformModuleListView,
@@ -26,6 +27,7 @@ from .rbac_views import (
 	FeatureDetailView,
 	PublicPlatformPackageListView,
 	PublicPlatformPricingConfigView,
+	TenantCurrentSubscriptionView,
 	PlatformPackageListCreateView,
 	PlatformPackageDetailView,
 	PlatformPackageFeaturesView,
@@ -57,6 +59,9 @@ urlpatterns = [
 
 	# Authenticated tenant feature lookup (used by frontend to know which features to show)
 	path('me/features/', CurrentTenantFeatureListView.as_view(), name='current-tenant-features'),
+
+	# Tenant subscription current plan (any authenticated tenant user)
+	path('subscription/current/', TenantCurrentSubscriptionView.as_view(), name='tenant-subscription-current'),
 
 	# Tenant staff member invitations (from Permissions page)
 	path('members/invite/', TenantMemberInviteAPIView.as_view(), name='tenant-member-invite'),
@@ -104,5 +109,8 @@ urlpatterns = [
 	# Per-tenant feature overrides (Phase 1)
 	path('admin/tenants/<int:tenant_id>/features/', TenantFeatureFlagListView.as_view(), name='tenant-features'),
 	path('admin/tenants/<int:tenant_id>/features/resync/', TenantFeatureFlagResyncView.as_view(), name='tenant-features-resync'),
+
+	# Platform-wide settings (singleton, platform.settings feature-gated)
+	path('admin/platform-settings/', PlatformSettingsAPIView.as_view(), name='platform-settings'),
 ]
 

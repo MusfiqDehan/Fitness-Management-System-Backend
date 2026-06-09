@@ -1,8 +1,6 @@
 from rest_framework import serializers
 import json
 from .models import (
-    GymClub,
-    Facility,
     GymClass,
     Category,
     ClassSchedule,
@@ -18,99 +16,6 @@ from .models import (
 )
 from django.utils import timezone
 from apps.identity.models import InstructorProfile
-
-
-# --- Gym Club Serializer ---
-
-class FacilitySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Facility
-        fields = ['id', 'name']
-
-
-class GymClubSerializer(serializers.ModelSerializer):
-    facilities = FacilitySerializer(many=True, required=False)
-
-    class Meta:
-        model = GymClub
-        fields = '__all__'
-
-    def _normalize_facilities(self, facilities):
-        if facilities is None:
-            return None
-
-        if isinstance(facilities, str):
-            try:
-                facilities = json.loads(facilities)
-            except json.JSONDecodeError as exc:
-                raise serializers.ValidationError(
-                    {'facilities': 'Provide a valid JSON array of facility objects.'}
-                ) from exc
-
-        if not isinstance(facilities, list):
-            raise serializers.ValidationError(
-                {'facilities': 'Expected a list of facility objects.'}
-            )
-
-        normalized_facilities = []
-        for index, facility in enumerate(facilities):
-            if not isinstance(facility, dict):
-                raise serializers.ValidationError(
-                    {'facilities': f'Facility at index {index} must be an object.'}
-                )
-
-            name = facility.get('name')
-            if not isinstance(name, str) or not name.strip():
-                raise serializers.ValidationError(
-                    {'facilities': f'Facility at index {index} must include a non-empty name.'}
-                )
-
-            normalized_facilities.append({'name': name.strip()})
-
-        return normalized_facilities
-
-    def _set_facilities(self, gym, facilities_data):
-        for facility in facilities_data:
-            obj, _ = Facility.objects.get_or_create(name=facility['name'])
-            gym.facilities.add(obj)
-
-    def to_internal_value(self, data):
-        normalized_data = {}
-        if hasattr(data, 'lists'):
-            for key, values in data.lists():
-                normalized_data[key] = values if len(values) > 1 else values[0]
-        elif hasattr(data, 'copy'):
-            normalized_data = data.copy()
-        else:
-            normalized_data = dict(data)
-
-        facilities = self._normalize_facilities(normalized_data.get('facilities'))
-        if facilities is not None:
-            normalized_data['facilities'] = facilities
-
-        return super().to_internal_value(normalized_data)
-
-    def create(self, validated_data):
-        facilities_data = validated_data.pop('facilities', [])
-        gym = GymClub.objects.create(**validated_data)
-
-        self._set_facilities(gym, facilities_data)
-        return gym
-
-    def update(self, instance, validated_data):
-        facilities_data = validated_data.pop('facilities', None)
-
-        # Update normal fields first
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-
-        instance.save()
-
-        if facilities_data is not None:
-            instance.facilities.clear()
-            self._set_facilities(instance, facilities_data)
-
-        return instance
 
 
 # class
@@ -341,15 +246,15 @@ class ContactCreateSerializer(serializers.ModelSerializer):
             "name",
             "email",
             "phone",
-            "preferred_club",
+            "preferred_branch",
             "subject",
             "message",
         ]
 
 
 class ContactDashboardSerializer(serializers.ModelSerializer):
-    preferred_club_name = serializers.CharField(
-        source="preferred_club.name",
+    preferred_branch_name = serializers.CharField(
+        source="preferred_branch.name",
         read_only=True
     )
 

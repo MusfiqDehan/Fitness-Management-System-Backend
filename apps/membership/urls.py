@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     MemberPackageView,
     MemberView,
+    MemberImportAPIView,
     MemberLookupAPIView,
     MemberAnalyticsAPIView,
     InviteMemberAPIView,
@@ -35,6 +36,7 @@ urlpatterns = [
     # GET/PUT/PATCH/DELETE /members/{pk}/                   → retrieve / update / soft delete
     # PATCH            /members/{pk}/?action=activate|deactivate|restore
     path('members/', MemberView.as_view(), name='member-list'),
+    path('members/import/', MemberImportAPIView.as_view(), name='member-import'),
     path('members/<int:pk>/', MemberView.as_view(), name='member-detail'),
     path('members/lookup/', MemberLookupAPIView.as_view(), name='member-lookup'),
     path('members/analytics/', MemberAnalyticsAPIView.as_view(), name='member-analytics'),

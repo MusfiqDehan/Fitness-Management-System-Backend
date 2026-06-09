@@ -6,10 +6,12 @@ import secrets
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.conf import settings
+from django.db import connection
 from django.db import transaction
 from django.http import HttpResponse as PlainTextResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework import status
 from rest_framework.generics import ListAPIView, ListCreateAPIView, RetrieveUpdateDestroyAPIView
 from rest_framework.permissions import AllowAny
@@ -19,6 +21,7 @@ from rest_framework.views import APIView
 
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.membership.models import Attendance, Member
+from apps.tenancy.models import AccessDeviceRoute, Tenant
 from .models import AccessDevice, AttendanceIngestEvent, DeviceCredential, DeviceUser
 
 logger = logging.getLogger(__name__)
@@ -431,10 +434,97 @@ class FingerprintUnlinkAPIView(APIView):
 		return Response({"detail": "Fingerprint unlinked.", "device_user_id": device_user.id})
 
 
-class IclockCdataAPIView(APIView):
+class PublicSchemaADMSDispatchMixin:
+	def _device_sn_from_request(self, request) -> str:
+		params = getattr(request, "query_params", request.GET)
+		return (params.get("SN") or "").strip()
+
+	def _resolve_public_route(self, device_sn: str):
+		if not device_sn:
+			return None
+		route = (
+			AccessDeviceRoute.objects.select_related("tenant")
+			.filter(
+				device_sn=device_sn,
+			)
+			.first()
+		)
+		if route and route.is_active and route.tenant.is_enabled and route.tenant.status in Tenant.ENTRY_ALLOWED_STATUSES:
+			return route
+		return self._backfill_public_route(device_sn)
+
+	def _backfill_public_route(self, device_sn: str):
+		matches = []
+		for tenant in (
+			Tenant.objects.filter(
+				is_enabled=True,
+				status__in=Tenant.ENTRY_ALLOWED_STATUSES,
+			)
+			.exclude(schema_name=get_public_schema_name())
+			.only("id", "schema_name")
+		):
+			with schema_context(tenant.schema_name):
+				device_id = (
+					AccessDevice.objects.filter(device_sn=device_sn, is_active=True)
+					.values_list("id", flat=True)
+					.first()
+				)
+			if device_id:
+				matches.append((tenant, device_id))
+
+		if not matches:
+			return None
+
+		if len(matches) > 1:
+			logger.error(
+				"[ADMS] PUBLIC_ROUTE ambiguous SN=%s across tenants=%s",
+				device_sn,
+				[t.schema_name for t, _ in matches],
+			)
+			return None
+
+		tenant, device_id = matches[0]
+		route, _ = AccessDeviceRoute.objects.update_or_create(
+			tenant=tenant,
+			access_device_id=device_id,
+			defaults={
+				"device_sn": device_sn,
+				"is_active": True,
+			},
+		)
+		return route
+
+	def handle_public_schema_unknown_device(self, request, device_sn: str):
+		raise NotImplementedError
+
+	def dispatch(self, request, *args, **kwargs):
+		if connection.schema_name != get_public_schema_name():
+			return super().dispatch(request, *args, **kwargs)
+
+		device_sn = self._device_sn_from_request(request)
+		route = self._resolve_public_route(device_sn)
+		if route is None:
+			return self.handle_public_schema_unknown_device(request, device_sn)
+
+		logger.info(
+			"[ADMS] PUBLIC_ROUTE SN=%s -> tenant=%s",
+			device_sn,
+			route.tenant.schema_name,
+		)
+		with schema_context(route.tenant.schema_name):
+			request.tenant = route.tenant
+			return super().dispatch(request, *args, **kwargs)
+
+
+class IclockCdataAPIView(PublicSchemaADMSDispatchMixin, APIView):
 	"""ADMS iClock ingress endpoint scoped by known active device serial."""
 
 	permission_classes = [AllowAny]
+
+	def handle_public_schema_unknown_device(self, request, device_sn: str):
+		client_ip = request.META.get("HTTP_X_FORWARDED_FOR", request.META.get("REMOTE_ADDR", "?"))
+		logger.warning("[ADMS] PUBLIC_ROUTE rejected: unknown or inactive SN=%s from %s", device_sn, client_ip)
+		return PlainTextResponse("ERR\n", status=404, content_type="text/plain; charset=UTF-8")
 
 	def get(self, request):
 		device_sn = (request.query_params.get("SN") or "").strip()
@@ -496,8 +586,13 @@ class IclockCdataAPIView(APIView):
 		)
 
 
-class IclockGetRequestAPIView(APIView):
+class IclockGetRequestAPIView(PublicSchemaADMSDispatchMixin, APIView):
 	permission_classes = [AllowAny]
+
+	def handle_public_schema_unknown_device(self, request, device_sn: str):
+		client_ip = request.META.get("HTTP_X_FORWARDED_FOR", request.META.get("REMOTE_ADDR", "?"))
+		logger.warning("[ADMS] PUBLIC_ROUTE GETREQUEST unknown SN=%s from %s", device_sn, client_ip)
+		return PlainTextResponse("OK\n", content_type="text/plain; charset=UTF-8")
 
 	def get(self, request):
 		device_sn = (request.query_params.get("SN") or "").strip()
@@ -535,10 +630,15 @@ class IclockGetRequestAPIView(APIView):
 		return PlainTextResponse("OK\n", content_type="text/plain; charset=UTF-8")
 
 
-class IclockDeviceCmdAPIView(APIView):
+class IclockDeviceCmdAPIView(PublicSchemaADMSDispatchMixin, APIView):
 	"""Device acknowledges a completed server command via POST to this endpoint."""
 
 	permission_classes = [AllowAny]
+
+	def handle_public_schema_unknown_device(self, request, device_sn: str):
+		client_ip = request.META.get("HTTP_X_FORWARDED_FOR", request.META.get("REMOTE_ADDR", "?"))
+		logger.warning("[ADMS] PUBLIC_ROUTE CMD_ACK unknown SN=%s from %s", device_sn, client_ip)
+		return PlainTextResponse("OK\n", content_type="text/plain; charset=UTF-8")
 
 	def post(self, request):
 		device_sn = (request.query_params.get("SN") or "").strip()

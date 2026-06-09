@@ -39,11 +39,14 @@ CORE_FEATURES = [
     ("crm.inquiries", "Inquiries", None),
     ("cms.banners", "Banners", None),
     ("cms.blogs", "Blog Posts", None),
-    ("clubs", "Gym Clubs / Branches", None),
+    ("branches", "Gym Branches", None),
     ("reports", "Reports & Analytics", None),
     ("reminders", "Reminders & Notifications", None),
     ("settings", "Settings", None),
     ("permissions", "Roles & Permissions", None),
+    ("email_config", "Email Config", None),
+    # Gated capability without a sidebar entry (controls custom-domain self-service).
+    ("custom_domain", "Custom Domain", None),
 ]
 
 
@@ -55,12 +58,16 @@ PACKAGES = {
         "price_yearly": Decimal("23904.00"),  # 2490 * 12 * 0.80
         "max_users": 175,
         "max_branches": 1,
+        "max_members_per_branch": 175,
+        "max_trainers_per_branch": 10,
+        "max_employees_per_branch": 10,
         "trial_days": 14,
         "is_public": True,
         "highlight": False,
         "sort_order": 1,
         "badge_label": "14 Days Free Trial",
-        "cta_label": "Book a Free Demo",
+        "cta_label": "Try for Free",
+        "cta_url": "/register",
         "setup_fee": "Tk. 9,990",
         "original_setup_fee": "",
         "original_price_monthly": Decimal("3490.00"),
@@ -86,7 +93,7 @@ PACKAGES = {
             "instructors", "classes", "classes.bookings",
             "payments", "payments.invoices",
             "crm.contacts", "crm.inquiries",
-            "reminders", "settings",
+            "reminders", "settings", "email_config",
         ],
     },
     "growth": {
@@ -96,12 +103,16 @@ PACKAGES = {
         "price_yearly": Decimal("33504.00"),  # 3490 * 12 * 0.80
         "max_users": 300,
         "max_branches": 3,
+        "max_members_per_branch": 100,
+        "max_trainers_per_branch": 10,
+        "max_employees_per_branch": 15,
         "trial_days": 0,
         "is_public": True,
         "highlight": True,
         "sort_order": 2,
         "badge_label": "Most Popular",
-        "cta_label": "Book Demo",
+        "cta_label": "Buy Now",
+        "cta_url": "/register",
         "setup_fee": "Tk. 9,990",
         "original_setup_fee": "",
         "original_price_monthly": Decimal("5490.00"),
@@ -127,7 +138,8 @@ PACKAGES = {
             "payments", "payments.invoices", "payments.gateways",
             "crm.contacts", "crm.inquiries",
             "cms.banners", "cms.blogs",
-            "clubs", "reports", "reminders", "settings", "permissions",
+            "branches", "reports", "reminders", "settings", "permissions", "email_config",
+            "custom_domain",
         ],
     },
     "enterprise": {
@@ -137,12 +149,16 @@ PACKAGES = {
         "price_yearly": Decimal("0.00"),
         "max_users": 0,  # unlimited
         "max_branches": 0,  # unlimited
+        "max_members_per_branch": 0,  # unlimited
+        "max_trainers_per_branch": 0,  # unlimited
+        "max_employees_per_branch": 0,  # unlimited
         "trial_days": 0,
         "is_public": True,
         "highlight": False,
         "sort_order": 3,
         "badge_label": "",
-        "cta_label": "Book Demo",
+        "cta_label": "Chat with Us",
+        "cta_url": "http://wa.me/+8801341869125",
         "setup_fee": "Tk. 9,990",
         "original_setup_fee": "",
         "original_price_monthly": None,
@@ -213,6 +229,9 @@ class Command(BaseCommand):
                     "price_yearly": info["price_yearly"],
                     "max_users": info["max_users"],
                     "max_branches": info["max_branches"],
+                    "max_members_per_branch": info.get("max_members_per_branch", 0),
+                    "max_trainers_per_branch": info.get("max_trainers_per_branch", 0),
+                    "max_employees_per_branch": info.get("max_employees_per_branch", 0),
                     "trial_days": info["trial_days"],
                     "is_active": True,
                     "is_public": info["is_public"],
@@ -220,6 +239,7 @@ class Command(BaseCommand):
                     "sort_order": info["sort_order"],
                     "badge_label": info.get("badge_label", ""),
                     "cta_label": info.get("cta_label", ""),
+                    "cta_url": info.get("cta_url", ""),
                     "setup_fee": info.get("setup_fee", ""),
                     "original_setup_fee": info.get("original_setup_fee", ""),
                     "original_price_monthly": info.get("original_price_monthly"),

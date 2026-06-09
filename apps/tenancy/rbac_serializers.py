@@ -2,6 +2,8 @@
 
 Kept separate from the existing `serializers.py` to avoid bloat.
 """
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
 from rest_framework import serializers
 
 from .constants import PLATFORM_MODULES
@@ -9,6 +11,7 @@ from .models import (
     Feature,
     PlatformPackage,
     PlatformPackageFeature,
+    PlatformSettings,
     PlatformPricingConfig,
     PlatformRole,
     PlatformRolePermission,
@@ -117,9 +120,11 @@ class PlatformPackageSerializer(serializers.ModelSerializer):
         fields = [
             "id", "slug", "name", "description",
             "price_monthly", "price_yearly",
-            "max_users", "max_branches", "trial_days",
+            "max_users", "max_branches",
+            "max_members_per_branch", "max_trainers_per_branch",
+            "trial_days",
             "is_active", "is_public", "sort_order", "highlight",
-            "badge_label", "cta_label",
+            "badge_label", "cta_label", "cta_url",
             "setup_fee", "original_setup_fee",
             "original_price_monthly", "original_price_yearly",
             "included_items", "yearly_discount_percent",
@@ -132,16 +137,27 @@ class PlatformPackageSerializer(serializers.ModelSerializer):
 
 class PublicPlatformPackageSerializer(serializers.ModelSerializer):
     """Public-facing package serializer used on the landing page."""
+
+    currency = serializers.SerializerMethodField()
+    price_monthly = serializers.SerializerMethodField()
+    price_yearly = serializers.SerializerMethodField()
+    setup_fee = serializers.SerializerMethodField()
+    original_setup_fee = serializers.SerializerMethodField()
+    original_price_monthly = serializers.SerializerMethodField()
+    original_price_yearly = serializers.SerializerMethodField()
     feature_names = serializers.SerializerMethodField()
 
     class Meta:
         model = PlatformPackage
         fields = [
             "id", "slug", "name", "description",
+            "currency",
             "price_monthly", "price_yearly",
-            "max_users", "max_branches", "trial_days",
+            "max_users", "max_branches",
+            "max_members_per_branch", "max_trainers_per_branch",
+            "trial_days",
             "highlight", "sort_order",
-            "badge_label", "cta_label",
+            "badge_label", "cta_label", "cta_url",
             "setup_fee", "original_setup_fee",
             "original_price_monthly", "original_price_yearly",
             "included_items", "yearly_discount_percent",
@@ -149,7 +165,109 @@ class PublicPlatformPackageSerializer(serializers.ModelSerializer):
             "feature_names",
         ]
 
+    def _get_platform_settings(self):
+        if not hasattr(self, "_platform_settings_cache"):
+            self._platform_settings_cache = PlatformSettings.objects.filter(pk=1).first()
+        return self._platform_settings_cache
+
+    def _get_display_currency(self) -> str:
+        if hasattr(self, "_display_currency_cache"):
+            return self._display_currency_cache
+
+        settings = self._get_platform_settings()
+        if settings and settings.default_currency:
+            self._display_currency_cache = str(settings.default_currency).upper()
+        else:
+            # Fallback to base currency when no default currency is configured.
+            self._display_currency_cache = "USD"
+
+        return self._display_currency_cache
+
+    def _get_rate_matrix(self):
+        if hasattr(self, "_rate_matrix_cache"):
+            return self._rate_matrix_cache
+
+        matrix = {"USD": Decimal("1.0000")}
+        settings = self._get_platform_settings()
+        if settings and settings.enable_currency_conversion:
+            try:
+                matrix["BDT"] = Decimal(str(settings.usd_to_bdt_rate))
+            except (TypeError, ValueError, InvalidOperation):
+                matrix["BDT"] = Decimal("120.0000")
+
+            for code, rate in (settings.exchange_rates or {}).items():
+                try:
+                    matrix[str(code).upper()] = Decimal(str(rate))
+                except (TypeError, ValueError, InvalidOperation):
+                    continue
+
+        self._rate_matrix_cache = matrix
+        return matrix
+
+    def _convert_from_usd(self, value):
+        if value in (None, ""):
+            return None
+
+        try:
+            amount = Decimal(str(value))
+        except (TypeError, ValueError, InvalidOperation):
+            return None
+
+        display_currency = self._get_display_currency()
+        if display_currency == "USD":
+            return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        rate = self._get_rate_matrix().get(display_currency)
+        if rate is None:
+            return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        return (amount * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def _serialize_amount(self, value):
+        converted = self._convert_from_usd(value)
+        if converted is None:
+            return None
+        return f"{converted:.2f}"
+
+    def get_currency(self, obj):
+        return self._get_display_currency()
+
+    def get_price_monthly(self, obj):
+        return self._serialize_amount(obj.price_monthly)
+
+    def get_price_yearly(self, obj):
+        return self._serialize_amount(obj.price_yearly)
+
+    def get_setup_fee(self, obj):
+        # setup_fee is a CharField storing pre-formatted display text (e.g. "Tk. 9,990"),
+        # not a numeric amount, so pass through directly.
+        return obj.setup_fee or None
+
+    def get_original_setup_fee(self, obj):
+        return obj.original_setup_fee or None
+
+    def get_original_price_monthly(self, obj):
+        return self._serialize_amount(obj.original_price_monthly)
+
+    def get_original_price_yearly(self, obj):
+        return self._serialize_amount(obj.original_price_yearly)
+
     def get_feature_names(self, obj):
+        prefetched = getattr(obj, "_prefetched_objects_cache", {}).get("package_features")
+        if prefetched is not None:
+            enabled = [
+                pf.feature.name
+                for pf in sorted(
+                    prefetched,
+                    key=lambda pf: (
+                        0 if not pf.feature else (pf.feature.sort_order or 0),
+                        "" if not pf.feature else (pf.feature.name or ""),
+                    ),
+                )
+                if pf.is_enabled and pf.feature and pf.feature.name
+            ]
+            return enabled
+
         return list(
             obj.package_features.filter(is_enabled=True)
             .order_by("feature__sort_order")

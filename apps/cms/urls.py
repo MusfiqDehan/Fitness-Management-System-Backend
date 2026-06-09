@@ -12,8 +12,6 @@ from .views import (
     PromoBannerUpdateAPIView,
     PromoBannerDeleteAPIView,
     PublicPromoBannerListView,
-    SiteSettingsAPIView,
-    PublicSiteSettingsView,
     PageContentListAPIView,
     PageContentCreateAPIView,
     PageContentRetrieveAPIView,
@@ -40,7 +38,6 @@ urlpatterns = [
     # ================ CMS Public Read Endpoints ===============
     path('site-banners/', PublicSiteBannerListView.as_view(), name='public-site-banners'),
     path('promo-banners/', PublicPromoBannerListView.as_view(), name='public-promo-banners'),
-    path('public/site-settings/', PublicSiteSettingsView.as_view(), name='public-site-settings'),
     path('public/page-contents/', PublicPageContentListView.as_view(), name='public-page-contents'),
     path('blogs/', PublicBlogListView.as_view(), name='public-blog-list'),
     path('blogs/<slug:slug>/', PublicBlogDetailView.as_view(), name='public-blog-detail'),
@@ -58,8 +55,6 @@ urlpatterns = [
     path('admin/promo-banners/<int:pk>/', PromoBannerRetrieveAPIView.as_view(), name='promo-banner-detail'),
     path('admin/promo-banners/<int:pk>/update/', PromoBannerUpdateAPIView.as_view(), name='promo-banner-update'),
     path('admin/promo-banners/<int:pk>/delete/', PromoBannerDeleteAPIView.as_view(), name='promo-banner-delete'),
-
-    path('admin/site-settings/', SiteSettingsAPIView.as_view(), name='site-settings'),
 
     path('admin/page-content/', PageContentListAPIView.as_view(), name='page-content-list'),
     path('admin/page-content/create/', PageContentCreateAPIView.as_view(), name='page-content-create'),

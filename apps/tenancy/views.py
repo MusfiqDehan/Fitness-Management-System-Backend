@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+import logging
 from urllib.parse import quote
 
 from django.conf import settings
@@ -24,8 +25,9 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.crm.email_delivery import resolve_tenant_mail_route
 from apps.identity.models import User
-from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage
+from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage, PlatformSettings
 from .permissions import IsPlatformFeaturePermission
 from .serializers import (
 	TenantSelfRegistrationSerializer,
@@ -37,9 +39,13 @@ from .serializers import (
 	TenantListSerializer,
 	TenantUpdateSerializer,
 	SuperadminInvitationSerializer,
+	PlatformSettingsSerializer,
 	full_domain_for_subdomain,
 )
 from .services import normalize_plan_slug
+
+
+logger = logging.getLogger(__name__)
 
 
 def _is_superadmin(user):
@@ -106,26 +112,41 @@ def _issue_email(*, tenant, to_email, purpose, subject, template_name, context, 
 		context=safe_context,
 	)
 
-	from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
+	from_email, connection = resolve_tenant_mail_route(tenant)
 	email = EmailMultiAlternatives(
 		subject=subject,
 		body=fallback_text,
 		from_email=from_email,
 		to=[to_email],
+		connection=connection,
 	)
 	email.attach_alternative(html_body, "text/html")
 
 	try:
 		email.send(fail_silently=False)
+	except Exception as first_exc:
+		# Fall back to global settings connection if tenant route fails at send time.
+		fallback_from = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
+		fallback_email = EmailMultiAlternatives(
+			subject=subject,
+			body=fallback_text,
+			from_email=fallback_from,
+			to=[to_email],
+		)
+		fallback_email.attach_alternative(html_body, "text/html")
+		try:
+			fallback_email.send(fail_silently=False)
+		except Exception as exc:
+			mail_log.status = EmailQueue.STATUS_FAILED
+			mail_log.attempts += 1
+			mail_log.last_error = f"primary={first_exc}; fallback={exc}"
+			mail_log.save(update_fields=["status", "attempts", "last_error"])
+			return
+
 		mail_log.status = EmailQueue.STATUS_SENT
 		mail_log.sent_at = timezone.now()
 		mail_log.attempts += 1
 		mail_log.save(update_fields=["status", "sent_at", "attempts"])
-	except Exception as exc:
-		mail_log.status = EmailQueue.STATUS_FAILED
-		mail_log.attempts += 1
-		mail_log.last_error = str(exc)
-		mail_log.save(update_fields=["status", "attempts", "last_error"])
 
 
 def _derive_schema_name(subdomain):
@@ -182,6 +203,64 @@ def _assert_token_request_scope(request, invitation):
 	return expected_domain
 
 
+def _sync_tenant_dashboard_settings(*, tenant_id, schema_name, timezone_value=None, locale_value=None):
+	"""Sync platform-side tenant edits into tenant-schema dashboard settings.
+
+	This keeps public-schema Tenant.timezone/locale aligned with tenant-local
+	GymProfile.timezone and GymPreferences.language, which are read by existing
+	tenant APIs and frontend hooks.
+	"""
+	public_schema = get_public_schema_name()
+	if not schema_name or schema_name == public_schema:
+		return
+
+	try:
+		with schema_context(schema_name):
+			from apps.dashboard.models import GymProfile, GymPreferences
+
+			if timezone_value:
+				profile, _ = GymProfile.objects.get_or_create(pk=1)
+				if profile.timezone != timezone_value:
+					profile.timezone = timezone_value
+					profile.save(update_fields=["timezone", "updated_at"])
+
+			if locale_value:
+				prefs, _ = GymPreferences.objects.get_or_create(pk=1)
+				if prefs.language != locale_value:
+					prefs.language = locale_value
+					prefs.save(update_fields=["language", "updated_at"])
+	except Exception:
+		logger.exception(
+			"Failed to sync tenant dashboard settings",
+			extra={"tenant_id": tenant_id, "schema_name": schema_name},
+		)
+
+
+def _propagate_platform_default_language(*, old_language, new_language):
+	"""Apply a new platform default language to tenants still on the old default."""
+	if not old_language or not new_language or old_language == new_language:
+		return
+
+	public_schema = get_public_schema_name()
+	with schema_context(public_schema):
+		tenant_rows = list(
+			Tenant.objects
+			.exclude(schema_name=public_schema)
+			.filter(locale=old_language)
+			.values_list("id", "schema_name")
+		)
+		tenant_ids = [tenant_id for tenant_id, _ in tenant_rows]
+		if tenant_ids:
+			Tenant.objects.filter(id__in=tenant_ids).update(locale=new_language)
+
+	for tenant_id, schema_name in tenant_rows:
+		_sync_tenant_dashboard_settings(
+			tenant_id=tenant_id,
+			schema_name=schema_name,
+			locale_value=new_language,
+		)
+
+
 def _get_package_trial_days(plan_slug: str) -> int:
 	"""Return trial_days from PlatformPackage, defaulting to 14 if not found."""
 	resolved_plan_slug = normalize_plan_slug(plan_slug)
@@ -195,7 +274,45 @@ def _get_package_trial_days(plan_slug: str) -> int:
 	return 14
 
 
-def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dict:
+def _get_package_limits(plan_slug: str) -> dict:
+	"""Return package capacity limits for a plan, with safe defaults."""
+	resolved_plan_slug = normalize_plan_slug(plan_slug)
+	if not resolved_plan_slug:
+		return {
+			"max_users": 10,
+			"max_branches": 1,
+			"max_members_per_branch": 0,
+			"max_trainers_per_branch": 0,
+		}
+
+	public_schema = get_public_schema_name()
+	with schema_context(public_schema):
+		pkg = PlatformPackage.objects.filter(slug=resolved_plan_slug, is_active=True).first()
+		if pkg:
+			return {
+				"max_users": int(pkg.max_users or 0),
+				"max_branches": int(pkg.max_branches or 0),
+				"max_members_per_branch": int(getattr(pkg, "max_members_per_branch", 0) or 0),
+				"max_trainers_per_branch": int(getattr(pkg, "max_trainers_per_branch", 0) or 0),
+			}
+
+	return {
+		"max_users": 10,
+		"max_branches": 1,
+		"max_members_per_branch": 0,
+		"max_trainers_per_branch": 0,
+	}
+
+
+def _maybe_initiate_subscription_payment(
+	tenant,
+	plan_slug: str,
+	request,
+	*,
+	contact_phone: str = "",
+	contact_email: str = "",
+	contact_name: str = "",
+) -> dict:
 	"""Initiate a SaaS subscription payment for a newly created tenant.
 
 	Returns a dict with `payment_url` (str or None) and `trial_days` (int).
@@ -233,8 +350,18 @@ def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dic
 			return {"payment_url": None, "trial_days": 0, "is_trial": False}
 
 		from apps.billing.services import get_gateway
-		from apps.tenancy.models import TenantSubscriptionInvoice
+		from apps.tenancy.models import TenantSubscriptionInvoice, PlatformSettings
+		from utils.currency import convert_currency
 		import uuid as _uuid
+
+		# Determine the currency dynamically
+		# System currency -> PlatformSettings.default_currency, otherwise fallback to "BDT" or "USD"
+		ps = PlatformSettings.objects.filter(pk=1).first()
+		target_currency = ps.default_currency if ps else "USD"
+
+		# Package price is defined in USD. Let's convert to target currency
+		original_amount = pkg.price_monthly
+		converted_amount = convert_currency(original_amount, "USD", target_currency)
 
 		tran_id = f"SUB-{tenant.schema_name.upper()}-{_uuid.uuid4().hex[:12].upper()}"
 		backend_base = getattr(settings, "BACKEND_BASE_URL", request.build_absolute_uri("/").rstrip("/"))
@@ -242,8 +369,8 @@ def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dic
 			tenant=tenant,
 			package_slug=pkg.slug,
 			package_name=pkg.name,
-			amount=pkg.price_monthly,
-			currency="BDT",
+			amount=converted_amount,
+			currency=target_currency,
 			tran_id=tran_id,
 			gateway_slug=gateway.slug,
 			status=TenantSubscriptionInvoice.STATUS_PENDING,
@@ -251,6 +378,12 @@ def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dic
 			period_end=timezone.now() + timedelta(days=30),
 			is_trial=False,
 		)
+
+		# Pass onboarding contact info to the gateway payload builder.
+		# These are transient attributes used only for this initiate() call.
+		invoice.customer_phone = (contact_phone or "").strip()
+		invoice.customer_email = (contact_email or "").strip()
+		invoice.customer_name = (contact_name or "").strip()
 
 		try:
 			svc = get_gateway(
@@ -276,11 +409,23 @@ def _maybe_initiate_subscription_payment(tenant, plan_slug: str, request) -> dic
 			return {"payment_url": None, "trial_days": 0, "is_trial": False}
 
 
-def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_domain="", primary_domain="", max_users=10,
-								max_branches=1, plan="starter"):
+def _create_tenant_with_domains(
+	*,
+	company_name,
+	subdomain,
+	owner_email,
+	custom_domain="",
+	primary_domain="",
+	max_users=10,
+	max_branches=1,
+	max_members_per_branch=0,
+	max_trainers_per_branch=0,
+	plan="starter",
+):
 	public_schema = get_public_schema_name()
 	with schema_context(public_schema):
 		resolved_plan_slug = normalize_plan_slug(plan)
+		platform_settings = PlatformSettings.objects.filter(pk=1).first()
 		schema_name = _derive_schema_name(subdomain)
 		if Tenant.objects.filter(schema_name=schema_name).exists():
 			raise ValidationError({"subdomain": "This subdomain conflicts with an existing tenant schema."})
@@ -306,12 +451,16 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 			code=final_code,
 			owner_email=owner_email,
 			billing_email=owner_email,
+			timezone=(platform_settings.default_timezone if platform_settings else "Asia/Dhaka"),
+			locale=(platform_settings.default_language if platform_settings else "en"),
 			plan=resolved_plan_slug,
 			status="trial",
 			is_trial=True,
 			trial_ends_at=timezone.now() + timedelta(days=_get_package_trial_days(resolved_plan_slug)),
 			max_users=max_users,
 			max_branches=max_branches,
+			max_members_per_branch=max_members_per_branch,
+			max_trainers_per_branch=max_trainers_per_branch,
 			is_enabled=True,
 		)
 
@@ -332,7 +481,6 @@ def _create_tenant_with_domains(*, company_name, subdomain, owner_email, custom_
 def _bootstrap_tenant_branding_defaults(tenant):
 	"""Initialize tenant-local branding records from the tenant company name."""
 	with schema_context(tenant.schema_name):
-		from apps.cms.models import SiteSettings
 		from apps.dashboard.models import GymProfile
 
 		gym_profile, _ = GymProfile.objects.get_or_create(
@@ -342,14 +490,6 @@ def _bootstrap_tenant_branding_defaults(tenant):
 		if not (gym_profile.gym_name or "").strip():
 			gym_profile.gym_name = tenant.name
 			gym_profile.save(update_fields=["gym_name"])
-
-		site_settings, _ = SiteSettings.objects.get_or_create(
-			pk=1,
-			defaults={"company_name": tenant.name},
-		)
-		if not (site_settings.company_name or "").strip():
-			site_settings.company_name = tenant.name
-			site_settings.save(update_fields=["company_name"])
 
 
 def _build_frontend_url(path_suffix, *, subdomain="", domain="", prefer_public=False):
@@ -444,6 +584,7 @@ class TenantSelfRegistrationAPIView(APIView):
 		serializer.is_valid(raise_exception=True)
 		payload = serializer.validated_data
 		selected_plan = normalize_plan_slug(payload.get("plan"))
+		selected_limits = _get_package_limits(selected_plan)
 
 		domain = full_domain_for_subdomain(payload["subdomain"], request=request)
 		with transaction.atomic():
@@ -457,8 +598,10 @@ class TenantSelfRegistrationAPIView(APIView):
 				metadata={
 					"domain": domain,
 					"plan": selected_plan,
-					"max_users": 10,
-					"max_branches": 1,
+						"max_users": selected_limits["max_users"],
+						"max_branches": selected_limits["max_branches"],
+						"max_members_per_branch": selected_limits["max_members_per_branch"],
+						"max_trainers_per_branch": selected_limits["max_trainers_per_branch"],
 					"contact_phone": payload.get("contact_phone", ""),
 				},
 			)
@@ -590,6 +733,8 @@ class SuperadminInvitationAPIView(APIView):
 				)
 
 			domain = domain_name
+			plan_slug = normalize_plan_slug(payload.get("plan") or "pro")
+			plan_limits = _get_package_limits(plan_slug)
 			raw_token, invitation = Invitation.issue_token(
 				token_type=Invitation.TOKEN_TYPE_INVITATION,
 				email=payload["admin_email"],
@@ -601,9 +746,11 @@ class SuperadminInvitationAPIView(APIView):
 				metadata={
 					"domain": domain,
 					"custom_domain": payload.get("custom_domain", ""),
-					"plan": normalize_plan_slug(payload.get("plan") or "pro"),
-					"max_users": payload.get("max_users", 10),
-					"max_branches": payload.get("max_branches", 1),
+					"plan": plan_slug,
+					"max_users": payload.get("max_users", plan_limits["max_users"]),
+					"max_branches": payload.get("max_branches", plan_limits["max_branches"]),
+					"max_members_per_branch": plan_limits["max_members_per_branch"],
+					"max_trainers_per_branch": plan_limits["max_trainers_per_branch"],
 				},
 			)
 
@@ -759,6 +906,8 @@ class PasswordSetupAPIView(APIView):
 					primary_domain=metadata.get("domain", ""),
 					max_users=int(metadata.get("max_users", 10) or 10),
 					max_branches=int(metadata.get("max_branches", 1) or 1),
+					max_members_per_branch=int(metadata.get("max_members_per_branch", 0) or 0),
+					max_trainers_per_branch=int(metadata.get("max_trainers_per_branch", 0) or 0),
 					plan=plan_slug,
 				)
 				invitation.tenant = tenant
@@ -818,20 +967,33 @@ class PasswordSetupAPIView(APIView):
 				# Assign the tenant RBAC role for member invitations.
 				if is_member_invite:
 					role_slug = metadata.get("role_slug", "")
+					invite_branch_id = metadata.get("branch_id")
 					if role_slug:
 						from apps.access.models import Role, UserRole as TenantUserRole
 						try:
 							role_obj = Role.objects.get(slug=role_slug)
-							TenantUserRole.objects.get_or_create(
+							user_role, _ = TenantUserRole.objects.get_or_create(
 								user_id=user.id,
 								role=role_obj,
 								defaults={
 									"user_email": user.email,
 									"assigned_by_email": invitation.invited_by_email,
+									"branch_id": invite_branch_id,
 								},
 							)
+							if invite_branch_id and user_role.branch_id != invite_branch_id:
+								user_role.branch_id = invite_branch_id
+								user_role.save(update_fields=["branch"])
 						except Role.DoesNotExist:
 							pass  # Role deleted since invite was sent; user can still log in
+
+					# Apply branch assignment to TrainerProfile if present.
+					if invite_branch_id:
+						try:
+							from apps.trainer.models import TrainerProfile
+							TrainerProfile.objects.filter(user=user).update(branch_id=invite_branch_id)
+						except Exception:
+							pass  # Best-effort; TrainerProfile may not exist yet
 
 			invitation.used_at = setup_time
 			invitation.save(update_fields=["used_at"])
@@ -855,7 +1017,15 @@ class PasswordSetupAPIView(APIView):
 		# when the selected package requires immediate charge.
 		payment_info = None
 		if plan_slug and is_owner_setup and not is_member_invite:
-			payment_info = _maybe_initiate_subscription_payment(tenant, plan_slug, request)
+			contact_phone = str((metadata or {}).get("contact_phone", "") or "").strip()
+			payment_info = _maybe_initiate_subscription_payment(
+				tenant,
+				plan_slug,
+				request,
+				contact_phone=contact_phone,
+				contact_email=email,
+				contact_name=(invitation.invitee_full_name or tenant.name or "Customer"),
+			)
 			if payment_info and not payment_info.get('is_trial', True):
 				try:
 					from apps.reminder.utils import create_notification
@@ -1096,6 +1266,17 @@ class TenantAdminDetailAPIView(generics.RetrieveUpdateAPIView):
 	def perform_update(self, serializer):
 		with schema_context(get_public_schema_name()):
 			tenant = serializer.save()
+			new_timezone = serializer.validated_data.get("timezone")
+			new_locale = serializer.validated_data.get("locale")
+
+		if new_timezone or new_locale:
+			_sync_tenant_dashboard_settings(
+				tenant_id=tenant.id,
+				schema_name=tenant.schema_name,
+				timezone_value=new_timezone,
+				locale_value=new_locale,
+			)
+
 		_record_audit(
 			self.request,
 			action="tenant.updated",
@@ -1192,12 +1373,19 @@ class TenantMemberInviteAPIView(APIView):
 				status=status.HTTP_403_FORBIDDEN,
 			)
 
-		if not self._assert_role_admin(request.user):
+		from apps.access.models import UserRole
+		has_branch_manager_role = UserRole.objects.filter(
+			user_id=request.user.id,
+			role__slug="branch_manager",
+		).exists()
+
+		if not self._assert_role_admin(request.user) and not has_branch_manager_role:
 			return Response({"detail": "You do not have permission to invite members."}, status=status.HTTP_403_FORBIDDEN)
 
 		email = (request.data.get("email") or "").strip().lower()
 		full_name = (request.data.get("full_name") or "").strip()
 		role_slug = (request.data.get("role_slug") or "").strip()
+		branch_id = request.data.get("branch_id") or request.data.get("branch") or None
 
 		if not email:
 			return Response({"detail": "email is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1213,6 +1401,41 @@ class TenantMemberInviteAPIView(APIView):
 				{"detail": f"Role '{role_slug}' does not exist in this workspace."},
 				status=status.HTTP_400_BAD_REQUEST,
 			)
+
+		# Branch managers can only invite users to branches they manage.
+		is_tenant_admin = bool(
+			request.user.is_superuser
+			or request.user.is_staff
+			or getattr(request.user, "role", "") == "admin"
+		)
+		if not is_tenant_admin:
+			from apps.gym_branch.models import Branch
+			if has_branch_manager_role:
+				managed_branch_ids = list(
+					Branch.objects.filter(manager_id=request.user.id).values_list("id", flat=True)
+				)
+				if not managed_branch_ids:
+					return Response(
+						{"detail": "No managed branch is configured for this account."},
+						status=status.HTTP_403_FORBIDDEN,
+					)
+
+				if branch_id is None:
+					branch_id = managed_branch_ids[0]
+				else:
+					try:
+						branch_id_int = int(branch_id)
+					except (TypeError, ValueError):
+						return Response(
+							{"detail": "Invalid branch selection."},
+							status=status.HTTP_400_BAD_REQUEST,
+						)
+					if branch_id_int not in managed_branch_ids:
+						return Response(
+							{"detail": "You can only invite users to your managed branch."},
+							status=status.HTTP_403_FORBIDDEN,
+						)
+					branch_id = branch_id_int
 
 		# Get the tenant from the current request.
 		tenant = getattr(request, "tenant", None)
@@ -1252,6 +1475,7 @@ class TenantMemberInviteAPIView(APIView):
 					"role_slug": role_slug,
 					"role_name": role_obj.name,
 					"domain": primary_domain,
+					**({"branch_id": int(branch_id)} if branch_id else {}),
 				},
 			)
 
@@ -1334,3 +1558,45 @@ class ChangePasswordView(APIView):
 		request.user.password_set_at = timezone.now()
 		request.user.save(update_fields=["password", "password_set_at"])
 		return Response({"detail": "Password changed successfully."})
+
+
+class PlatformSettingsAPIView(APIView):
+	"""Singleton platform-wide settings (public schema only).
+
+	GET  /tenants/admin/platform-settings/ — requires platform.settings:view
+	PATCH /tenants/admin/platform-settings/ — requires platform.settings:edit
+	"""
+
+	def get_permissions(self):
+		if self.request.method.upper() in {"PATCH", "PUT"}:
+			return [IsPlatformFeaturePermission.require("platform.settings", "edit")()]
+		return [IsPlatformFeaturePermission.require("platform.settings", "view")()]
+
+	def _obj(self):
+		with schema_context(get_public_schema_name()):
+			obj, _ = PlatformSettings.objects.get_or_create(pk=1)
+			return obj
+
+	def get(self, request):
+		obj = self._obj()
+		return Response(PlatformSettingsSerializer(obj).data)
+
+	def patch(self, request):
+		obj = self._obj()
+		previous_default_language = obj.default_language
+		serializer = PlatformSettingsSerializer(obj, data=request.data, partial=True)
+		serializer.is_valid(raise_exception=True)
+		with schema_context(get_public_schema_name()):
+			serializer.save()
+
+		new_default_language = serializer.instance.default_language
+		if (
+			"default_language" in serializer.validated_data
+			and previous_default_language != new_default_language
+		):
+			_propagate_platform_default_language(
+				old_language=previous_default_language,
+				new_language=new_default_language,
+			)
+
+		return Response(serializer.data)

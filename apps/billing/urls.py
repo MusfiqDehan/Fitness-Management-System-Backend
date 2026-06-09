@@ -19,6 +19,8 @@ from .views import (
     SubscriptionInvoiceListView,
     SubscriptionInvoicePdfView,
     TenantGatewayConfigView,
+    TenantInitiateSubscriptionChangeView,
+    TenantSubscriptionInvoiceAdminView,
 )
 
 app_name = 'billing'
@@ -48,5 +50,8 @@ urlpatterns = [
     # Tenant subscription invoice history (public schema read via schema_context)
     path('subscription/invoices/', SubscriptionInvoiceListView.as_view(), name='subscription-invoice-list'),
     path('subscription/invoices/<int:pk>/invoice/', SubscriptionInvoicePdfView.as_view(), name='subscription-invoice-pdf'),
+    # Tenant subscription plan change & admin invoice view (no payments feature gate)
+    path('subscription/initiate-change/', TenantInitiateSubscriptionChangeView.as_view(), name='subscription-initiate-change'),
+    path('subscription/admin-invoices/', TenantSubscriptionInvoiceAdminView.as_view(), name='subscription-admin-invoices'),
 ]
 

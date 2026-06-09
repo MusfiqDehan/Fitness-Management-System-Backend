@@ -96,6 +96,7 @@ TENANT_APPS = [
     'apps.attendance.apps.AttendanceConfig',
     'apps.trainer.apps.TrainerConfig',
     'apps.reminder.apps.ReminderConfig',
+    'apps.gym_branch.apps.GymBranchConfig',
 ]
 
 # Django requires a flat INSTALLED_APPS list; django-tenants merges both lists
@@ -119,10 +120,17 @@ DATABASE_ROUTERS = ['django_tenants.routers.TenantSyncRouter']
 SHOW_PUBLIC_IF_NO_TENANT_FOUND = True
 
 MIDDLEWARE = [
-    # TenantMainMiddleware resolves the tenant from the request hostname
-    # and activates the correct PostgreSQL schema before any view runs.
+    # MobileAwareTenantMainMiddleware resolves the tenant from the request
+    # hostname (browser/subdomain flows) AND from a signed JWT tenant_schema
+    # claim or X-Tenant-Subdomain header (hostless native mobile clients),
+    # then activates the correct PostgreSQL schema before any view runs.
     # It must be the very first middleware in the stack.
-    'django_tenants.middleware.main.TenantMainMiddleware',
+    'apps.tenancy.middleware.MobileAwareTenantMainMiddleware',
+    # TimezoneMiddleware reads the active tenant's GymProfile.timezone and
+    # activates the correct IANA timezone for every request.  Priority:
+    #   GymProfile.timezone → Tenant.timezone → PlatformSettings.default_timezone
+    #   → settings.TIME_ZONE (= Asia/Dhaka).
+    'utils.timezone_middleware.TimezoneMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -155,6 +163,14 @@ if not _cors_allow_all:
 
 # Support cookie/session-based auth flows across origins when needed.
 CORS_ALLOW_CREDENTIALS = os.environ.get('CORS_ALLOW_CREDENTIALS', 'true').lower() in ('true', '1')
+
+# Allow the custom tenant-hint headers used by hostless native clients so that
+# browser-based preflight requests are not rejected when CORS is enforced.
+from corsheaders.defaults import default_headers as _cors_default_headers  # noqa: E402
+CORS_ALLOW_HEADERS = list(_cors_default_headers) + [
+    'x-tenant-subdomain',
+    'x-tenant-schema',
+]
 
 _cors_allowed_origin_regexes = [
     o.strip()
@@ -230,11 +246,16 @@ ASGI_APPLICATION = 'config.asgi.application'
 # django-tenants requires PostgreSQL with a schema-aware backend.
 # When DATABASE_URL is set (e.g. via Docker), it takes priority.
 # Otherwise fall back to explicit env vars for local dev with PostgreSQL.
+try:
+    DB_CONN_MAX_AGE = max(0, int(os.environ.get('DB_CONN_MAX_AGE', '0')))
+except ValueError:
+    DB_CONN_MAX_AGE = 0
+
 _database_url = os.environ.get('DATABASE_URL', '')
 if _database_url:
     _db_cfg = dj_database_url.parse(
         _database_url,
-        conn_max_age=600,
+        conn_max_age=DB_CONN_MAX_AGE,
         conn_health_checks=True,
     )
 
@@ -274,6 +295,8 @@ else:
             'PASSWORD': os.environ.get('DB_PASSWORD', 'postgres'),
             'HOST': os.environ.get('DB_HOST', 'localhost'),
             'PORT': os.environ.get('DB_PORT', '5432'),
+            'CONN_MAX_AGE': DB_CONN_MAX_AGE,
+            'CONN_HEALTH_CHECKS': True,
         }
     }
 
@@ -302,7 +325,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Dhaka'
 
 USE_I18N = True
 

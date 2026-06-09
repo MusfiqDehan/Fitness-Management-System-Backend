@@ -65,6 +65,14 @@ class Member(BaseModel):
         related_name='members'
     )
 
+    branch = models.ForeignKey(
+        'gym_branch.Branch',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='members',
+    )
+
     start_date = models.DateField(default=date.today)
     end_date = models.DateField(blank=True, null=True)
 

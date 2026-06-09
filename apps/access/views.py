@@ -11,8 +11,11 @@ from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.tenancy.models import Feature, TenantFeatureFlag
+from apps.gym_branch.models import Branch
+from utils.limits import branch_capacity_exceeded
 
 from .models import Role, RolePermission, UserRole
 from .permissions import IsRoleAdmin
@@ -22,6 +25,33 @@ from .serializers import (
     UserRoleSerializer,
 )
 from .utils import get_user_permission_map
+
+
+def _is_tenant_admin(user) -> bool:
+    return bool(
+        user
+        and user.is_authenticated
+        and (user.is_superuser or user.is_staff or getattr(user, "role", "") == "admin")
+    )
+
+
+def _branch_manager_scope_ids(user):
+    """Return managed branch IDs for branch-managers, None for unrestricted users."""
+    if not (user and user.is_authenticated):
+        return None
+    if _is_tenant_admin(user):
+        return None
+
+    has_branch_manager_role = UserRole.objects.filter(
+        user_id=user.id,
+        role__slug="branch_manager",
+    ).exists()
+    if not has_branch_manager_role:
+        return None
+
+    return list(
+        Branch.objects.filter(manager_id=user.id).values_list("id", flat=True)
+    )
 
 
 class RoleListCreateView(generics.ListCreateAPIView):
@@ -87,15 +117,57 @@ class UserRoleListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsRoleAdmin]
     pagination_class = None  # user-role list is small; return a plain array
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        scope_ids = _branch_manager_scope_ids(self.request.user)
+        if scope_ids is None:
+            return queryset
+        if not scope_ids:
+            return queryset.none()
+        return queryset.filter(branch_id__in=scope_ids)
+
     def perform_create(self, serializer):
         actor_email = getattr(self.request.user, "email", "") or ""
-        serializer.save(assigned_by_email=actor_email)
+        scope_ids = _branch_manager_scope_ids(self.request.user)
+
+        save_kwargs = {"assigned_by_email": actor_email}
+        branch = serializer.validated_data.get("branch")
+
+        if scope_ids is not None:
+            if not scope_ids:
+                raise ValidationError("No managed branch is configured for this account.")
+            if branch is not None and branch.id not in scope_ids:
+                raise ValidationError("You can only assign employees within your managed branch.")
+            if branch is None:
+                save_kwargs["branch_id"] = scope_ids[0]
+
+        target_branch_id = save_kwargs.get("branch_id") or (branch.id if branch is not None else None)
+        if target_branch_id is not None:
+            breach = branch_capacity_exceeded(
+                UserRole.objects.all(),
+                target_branch_id,
+                "max_employees_per_branch",
+                limit_type="employees",
+            )
+            if breach is not None:
+                raise PermissionDenied(breach)
+
+        serializer.save(**save_kwargs)
 
 
 class UserRoleDetailView(generics.RetrieveDestroyAPIView):
     queryset = UserRole.objects.all()
     serializer_class = UserRoleSerializer
     permission_classes = [IsRoleAdmin]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        scope_ids = _branch_manager_scope_ids(self.request.user)
+        if scope_ids is None:
+            return queryset
+        if not scope_ids:
+            return queryset.none()
+        return queryset.filter(branch_id__in=scope_ids)
 
 
 class MyPermissionsView(APIView):
@@ -111,17 +183,33 @@ class MyPermissionsView(APIView):
             or getattr(user, "role", "") == "admin"
         )
         permission_map = get_user_permission_map(user)
+        role_slugs = list(
+            UserRole.objects.filter(user_id=user.id)
+            .select_related("role")
+            .values_list("role__slug", flat=True)
+            .distinct()
+        )
         # Resolve tenant from request first; older users can have null/stale user.tenant.
         tenant = getattr(request, "tenant", None) or getattr(user, "tenant", None)
         feature_keys: list[str] = []
         if tenant is not None and connection.schema_name != get_public_schema_name():
             flags = TenantFeatureFlag.objects.filter(tenant=tenant).select_related("feature")
             feature_keys = [f.feature.key for f in flags if f.is_effectively_enabled]
+            # 'custom_domain' is only exposed when the global master switch, the
+            # per-tenant switch, and (when present) the feature flag all agree.
+            from apps.tenancy.services import (
+                CUSTOM_DOMAIN_FEATURE_KEY,
+                custom_domain_effectively_enabled,
+            )
+            feature_keys = [k for k in feature_keys if k != CUSTOM_DOMAIN_FEATURE_KEY]
+            if custom_domain_effectively_enabled(tenant):
+                feature_keys.append(CUSTOM_DOMAIN_FEATURE_KEY)
         return Response({
             "user_id": user.id,
             "email": user.email,
             "full_name": getattr(user, "full_name", "") or "",
             "role": getattr(user, "role", "") or "",
+            "role_slugs": role_slugs,
             "is_tenant_admin": is_tenant_admin,
             "permissions": permission_map,
             "enabled_features": feature_keys,

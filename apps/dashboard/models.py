@@ -35,15 +35,56 @@ class NotificationPreferences(models.Model):
         return "Notification Preferences"
 
 
+LANGUAGE_CHOICES = [
+    ("en", "English"),
+    ("bn", "বাংলা (Bengali)"),
+    ("hi", "हिंदी (Hindi)"),
+    ("ar", "العربية (Arabic)"),
+    ("ur", "اردو (Urdu)"),
+    ("zh", "中文 (Chinese)"),
+    ("ja", "日本語 (Japanese)"),
+    ("ko", "한국어 (Korean)"),
+    ("fr", "Français (French)"),
+    ("es", "Español (Spanish)"),
+    ("de", "Deutsch (German)"),
+    ("pt", "Português (Portuguese)"),
+    ("ru", "Русский (Russian)"),
+    ("tr", "Türkçe (Turkish)"),
+]
+
+
 class GymPreferences(models.Model):
-    LANGUAGE_CHOICES = [("en", "English"), ("bn", "বাংলা")]
-    CURRENCY_CHOICES = [("BDT", "BDT — Tk."), ("USD", "USD — $")]
+    LANGUAGE_CHOICES = LANGUAGE_CHOICES  # module-level list shared with serializers / migrations
+    CURRENCY_CHOICES = [
+        ("USD", "USD — $"),
+        ("EUR", "EUR — €"),
+        ("GBP", "GBP — £"),
+        ("BDT", "BDT — Tk."),
+        ("INR", "INR — ₹"),
+        ("AUD", "AUD — A$"),
+        ("CAD", "CAD — C$"),
+        ("SGD", "SGD — S$"),
+        ("AED", "AED — AED"),
+        ("SAR", "SAR — SR"),
+        ("OMR", "OMR — OMR"),
+        ("QAR", "QAR — QR"),
+        ("KWD", "KWD — KD"),
+        ("BHD", "BHD — BD"),
+        ("MYR", "MYR — RM"),
+        ("IDR", "IDR — Rp"),
+        ("CNY", "CNY — ¥"),
+        ("JPY", "JPY — ¥"),
+        ("TRY", "TRY — ₺"),
+        ("RUB", "RUB — ₽"),
+        ("ZAR", "ZAR — R"),
+        ("BRL", "BRL — R$"),
+    ]
     DATE_FORMAT_CHOICES = [("dmy", "DD/MM/YYYY"), ("mdy", "MM/DD/YYYY")]
     WEEK_START_CHOICES = [("sun", "Sunday"), ("mon", "Monday"), ("sat", "Saturday")]
     THEME_CHOICES = [("light", "Light"), ("dark", "Dark"), ("system", "System")]
 
     language = models.CharField(max_length=10, choices=LANGUAGE_CHOICES, default="en")
-    currency = models.CharField(max_length=10, choices=CURRENCY_CHOICES, default="BDT")
+    currency = models.CharField(max_length=10, choices=CURRENCY_CHOICES, default="USD")
     date_format = models.CharField(max_length=20, choices=DATE_FORMAT_CHOICES, default="dmy")
     week_start = models.CharField(max_length=10, choices=WEEK_START_CHOICES, default="sat")
     theme = models.CharField(max_length=20, choices=THEME_CHOICES, default="light")
