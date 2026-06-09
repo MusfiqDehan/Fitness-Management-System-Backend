@@ -10,7 +10,6 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Q
 from django.db import transaction
@@ -43,9 +42,13 @@ from .serializers import (
     GymScheduleSerializer,
 )
 from utils.base_view import ModelCRUDView
+from utils.list_mixins import BranchScopedListMixin, SearchFilterSortPaginationMixin
 from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
+from utils.tenancy_helpers import (
+    get_branch_manager_scope_ids as _branch_manager_scope_ids,
+    scope_queryset_by_branch_access,
+)
 from apps.access.permissions import HasFeatureMethodPermission
-from apps.access.models import UserRole
 from apps.crm.email_delivery import resolve_tenant_mail_route
 from apps.gym_branch.models import Branch
 from apps.tenancy.models import PaymentGateway
@@ -56,12 +59,6 @@ logger = logging.getLogger(__name__)
 
 
 _MEMBER_IMPORT_ALLOWED_EXTENSIONS = {'.csv', '.xls', '.xlsx', '.xlx'}
-
-
-class MemberPagination(PageNumberPagination):
-    page_size = 10
-    page_size_query_param = 'page_size'
-    max_page_size = 100
 
 
 def _normalize_import_header(value):
@@ -177,31 +174,6 @@ def _resolve_branch_id(raw_value, branch_name_map):
     if as_text.isdigit():
         return int(as_text)
     return branch_name_map.get(as_text.lower())
-
-
-def _is_tenant_admin_user(user) -> bool:
-    return bool(
-        user
-        and user.is_authenticated
-        and (user.is_superuser or user.is_staff or getattr(user, 'role', '') == 'admin')
-    )
-
-
-def _branch_manager_scope_ids(user):
-    """Return managed branch IDs for branch managers, otherwise None."""
-    if not (user and user.is_authenticated):
-        return None
-    if _is_tenant_admin_user(user):
-        return None
-
-    has_branch_manager_role = UserRole.objects.filter(
-        user_id=user.id,
-        role__slug='branch_manager',
-    ).exists()
-    if not has_branch_manager_role:
-        return None
-
-    return list(Branch.objects.filter(manager_id=user.id).values_list('id', flat=True))
 
 
 def _build_member_invite_url(request, token: str) -> str:
@@ -352,12 +324,16 @@ class MemberPackageActions:
         return Response({'message': msg, field: value})
 
 
-class MemberPackageView(MemberPackageActions, ModelCRUDView):
+class MemberPackageView(SearchFilterSortPaginationMixin, MemberPackageActions, ModelCRUDView):
     """Handles all MemberPackage operations and actions."""
     feature_key = 'members.packages'
     queryset = MemberPackage.objects.all().order_by('display_order', 'name')
     serializer_class = MemberPackageSerializer
     permission_classes = [HasFeatureMethodPermission]
+    filterset_fields = ['is_active', 'is_published', 'is_highlighted', 'package_type']
+    search_fields = ['name', 'description']
+    ordering_fields = ['id', 'display_order', 'name', 'price', 'created_at']
+    ordering = ['id']
 
 
 # =============================================================================
@@ -401,14 +377,13 @@ class MemberActions:
         return Response({'message': 'Member restored', 'is_deleted': False})
 
 
-class MemberView(MemberActions, ModelCRUDView):
+class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
     """Handles all Member operations and actions."""
     feature_key = 'members'
     queryset = Member.objects.select_related('member_package', 'branch').all()
     serializer_class = MemberSerializer
     permission_classes = [HasFeatureMethodPermission]
-    pagination_class = MemberPagination
-    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    branch_scope_field = 'branch_id'
     filterset_fields = ['is_active', 'membership_type', 'payment_status', 'branch', 'member_package']
     search_fields = [
         'full_name',
@@ -419,17 +394,24 @@ class MemberView(MemberActions, ModelCRUDView):
         'card_id',
         'fingerprint_id',
     ]
-    ordering_fields = ['id', 'created_at', 'start_date', 'end_date', 'full_name']
+    ordering_fields = [
+        'id',
+        'full_name',
+        'phone_number',
+        'email',
+        'branch__name',
+        'member_package__name',
+        'is_active',
+        'payment_status',
+        'start_date',
+        'end_date',
+        'created_at',
+    ]
     ordering = ['id']
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        scope_ids = _branch_manager_scope_ids(self.request.user)
-        if scope_ids is None:
-            return queryset
-        if not scope_ids:
-            return queryset.none()
-        return queryset.filter(branch_id__in=scope_ids)
+        return self.scope_branch_queryset(queryset)
 
     def _create(self, request):
         payload = request.data.copy()
@@ -932,7 +914,12 @@ class MemberAnalyticsAPIView(APIView):
         in_7_days = today + timedelta(days=7)
         month_start = today.replace(day=1)
 
-        base_qs = Member.objects.all()
+        base_qs = scope_queryset_by_branch_access(
+            Member.objects.all(),
+            request.user,
+            branch_field='branch_id',
+            branch_filter_id=request.query_params.get('branch'),
+        )
 
         total = base_qs.count()
         active = base_qs.filter(is_active=True, end_date__gte=today).count()
@@ -1189,12 +1176,40 @@ class CompleteMemberRegistrationAPIView(APIView):
 # PAYMENT VIEW
 # =============================================================================
 
-class PaymentView(ModelCRUDView):
+class PaymentView(BranchScopedListMixin, ModelCRUDView):
     """Handles all Payment operations."""
     feature_key = 'payments'
-    queryset = Payment.objects.all().order_by('-payment_date')
+    queryset = Payment.objects.select_related('member', 'member__member_package', 'member__branch').all().order_by('id')
     serializer_class = PaymentSerializer
     permission_classes = [HasFeatureMethodPermission]
+    branch_scope_field = 'member__branch_id'
+    filterset_fields = ['payment_type', 'payment_method', 'payment_status', 'member']
+    search_fields = ['member__full_name', 'member__phone_number', 'member__email', 'invoice_no', 'note']
+    ordering_fields = [
+        'id',
+        'payment_date',
+        'amount',
+        'member__full_name',
+        'member__phone_number',
+        'member__email',
+        'member__member_package__name',
+        'payment_method',
+        'payment_status',
+        'created_at',
+    ]
+    ordering = ['id']
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        from_date = self.request.query_params.get('from_date')
+        to_date = self.request.query_params.get('to_date')
+
+        if from_date:
+            queryset = queryset.filter(payment_date__date__gte=from_date)
+        if to_date:
+            queryset = queryset.filter(payment_date__date__lte=to_date)
+
+        return queryset
 
 
 # =============================================================================
@@ -1230,12 +1245,17 @@ class MemberMySubscriptionAPIView(APIView):
 # ATTENDANCE VIEW
 # =============================================================================
 
-class AttendanceView(ModelCRUDView):
+class AttendanceView(BranchScopedListMixin, ModelCRUDView):
     """Handles all Attendance operations."""
     feature_key = 'attendance'
-    queryset = Attendance.objects.all().order_by('-check_in_time')
+    queryset = Attendance.objects.select_related('member', 'member__branch').all().order_by('id')
     serializer_class = AttendanceSerializer
     permission_classes = [HasFeatureMethodPermission]
+    branch_scope_field = 'member__branch_id'
+    filterset_fields = ['entry_method', 'member']
+    search_fields = ['member__full_name', 'device_id']
+    ordering_fields = ['id', 'check_in_time', 'check_out_time', 'member__full_name', 'created_at']
+    ordering = ['id']
 
 
 # =============================================================================
@@ -1265,7 +1285,12 @@ class PaymentAnalyticsAPIView(APIView):
         else:
             start = today.replace(day=1)
 
-        qs = Payment.objects.filter(payment_date__date__gte=start, is_deleted=False)
+        qs = scope_queryset_by_branch_access(
+            Payment.objects.filter(payment_date__date__gte=start, is_deleted=False),
+            request.user,
+            branch_field='member__branch_id',
+            branch_filter_id=request.query_params.get('branch'),
+        )
 
         total_collected = qs.filter(payment_status='paid').aggregate(s=Sum('amount'))['s'] or Decimal('0')
         total_due = qs.filter(payment_status='due').aggregate(s=Sum('amount'))['s'] or Decimal('0')
@@ -1275,7 +1300,12 @@ class PaymentAnalyticsAPIView(APIView):
         # Previous period for trend
         delta = (today - start).days or 1
         prev_start = start - timedelta(days=delta)
-        prev_qs = Payment.objects.filter(payment_date__date__gte=prev_start, payment_date__date__lt=start, is_deleted=False)
+        prev_qs = scope_queryset_by_branch_access(
+            Payment.objects.filter(payment_date__date__gte=prev_start, payment_date__date__lt=start, is_deleted=False),
+            request.user,
+            branch_field='member__branch_id',
+            branch_filter_id=request.query_params.get('branch'),
+        )
         prev_collected = prev_qs.filter(payment_status='paid').aggregate(s=Sum('amount'))['s'] or Decimal('0')
         if prev_collected > 0:
             trend_pct = round(float((total_collected - prev_collected) / prev_collected * 100), 1)
