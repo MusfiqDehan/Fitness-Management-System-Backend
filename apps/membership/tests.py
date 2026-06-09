@@ -1,16 +1,21 @@
 from unittest.mock import MagicMock, patch
+from datetime import timedelta
 
 from django.urls import reverse
+from django.utils import timezone
 from django_tenants.utils import schema_context
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, APITestCase, force_authenticate
 
+from apps.access.models import Role, UserRole
+from apps.gym_branch.models import Branch
 from apps.identity.models import User
 from apps.tenancy.models import Domain, Feature, PaymentGateway, Tenant, TenantFeatureFlag
 from apps.billing.models import PaymentTransaction, TenantPaymentGateway
+from utils.tenancy_helpers import scope_queryset_by_branch_access
 
 from .models import GymClass, Member, MemberPackage, Payment
-from .views import GymClassView, PublicGymClassListAPIView, PublicMemberRegistrationAPIView
+from .views import GymClassView, PaymentView, PublicGymClassListAPIView, PublicMemberRegistrationAPIView
 
 
 class GymClassMediaApiTests(APITestCase):
@@ -253,3 +258,140 @@ class PublicMemberCheckoutFlowTests(APITestCase):
 
 			self.assertIsNotNone(member.id)
 			self.assertEqual(Payment.objects.filter(member=member).count(), 0)
+
+
+class BranchScopedListHelpersTests(APITestCase):
+	def setUp(self):
+		with schema_context('public'):
+			self.public = Tenant.objects.create(
+				schema_name='public',
+				name='Public',
+				slug='public',
+				code='PUBMEM03',
+				owner_email='root3@membership.test',
+				billing_email='root3@membership.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain='testserver',
+				tenant=self.public,
+				defaults={'is_primary': True},
+			)
+
+			self.tenant = Tenant.objects.create(
+				schema_name='membership_scope_test',
+				name='Membership Scope Tenant',
+				slug='membership-scope',
+				code='MEMSCOPE1',
+				owner_email='admin@scope.test',
+				billing_email='admin@scope.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.create(domain='scope.testserver', tenant=self.tenant, is_primary=True)
+
+		with schema_context(self.tenant.schema_name):
+			self.admin = User.objects.create_superuser(
+				email='admin@scope.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+			)
+			self.branch_manager = User.objects.create_user(
+				email='manager@scope.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+				full_name='Branch Manager',
+			)
+			self.branch_a = Branch.objects.create(name='Downtown', manager_id=self.branch_manager.id)
+			self.branch_b = Branch.objects.create(name='Uptown')
+
+			role = Role.objects.create(name='Branch Manager', slug='branch_manager')
+			UserRole.objects.create(
+				user_id=self.branch_manager.id,
+				user_email=self.branch_manager.email,
+				branch=self.branch_a,
+				role=role,
+			)
+
+			package = MemberPackage.objects.create(
+				name='Starter',
+				package_type='monthly',
+				duration_in_days=30,
+				price='1200.00',
+			)
+
+			self.member_a = Member.objects.create(
+				full_name='Alice Downtown',
+				phone_number='01710010001',
+				membership_type='package',
+				member_package=package,
+				branch=self.branch_a,
+			)
+			self.member_b = Member.objects.create(
+				full_name='Bob Uptown',
+				phone_number='01710010002',
+				membership_type='package',
+				member_package=package,
+				branch=self.branch_b,
+			)
+
+			self.payment_old = Payment.objects.create(
+				member=self.member_a,
+				payment_type='package',
+				amount='500.00',
+				payment_method='cash',
+				payment_status='paid',
+				payment_date=timezone.now() - timedelta(days=10),
+			)
+			self.payment_recent = Payment.objects.create(
+				member=self.member_a,
+				payment_type='package',
+				amount='700.00',
+				payment_method='cash',
+				payment_status='paid',
+				payment_date=timezone.now() - timedelta(days=1),
+			)
+
+		self.factory = APIRequestFactory()
+
+	def test_branch_manager_member_scope_returns_only_managed_branch_records(self):
+		with schema_context(self.tenant.schema_name):
+			queryset = scope_queryset_by_branch_access(
+				Member.objects.order_by('id'),
+				self.branch_manager,
+				branch_field='branch_id',
+			)
+
+			self.assertEqual(list(queryset.values_list('id', flat=True)), [self.member_a.id])
+
+	def test_admin_branch_filter_returns_only_requested_branch_records(self):
+		with schema_context(self.tenant.schema_name):
+			queryset = scope_queryset_by_branch_access(
+				Member.objects.order_by('id'),
+				self.admin,
+				branch_field='branch_id',
+				branch_filter_id=str(self.branch_b.id),
+			)
+
+			self.assertEqual(list(queryset.values_list('id', flat=True)), [self.member_b.id])
+
+	def test_payment_view_get_queryset_applies_date_range_filters(self):
+		request = self.factory.get(
+			reverse('membership:payment-list'),
+			{
+				'from_date': (timezone.now() - timedelta(days=2)).date().isoformat(),
+				'to_date': timezone.now().date().isoformat(),
+			},
+		)
+		force_authenticate(request, user=self.admin)
+
+		with schema_context(self.tenant.schema_name):
+			view = PaymentView()
+			view.request = request
+			view.args = ()
+			view.kwargs = {}
+
+			queryset = view.get_queryset()
+
+			self.assertEqual(list(queryset.values_list('id', flat=True)), [self.payment_recent.id])
