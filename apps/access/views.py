@@ -14,8 +14,12 @@ from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.tenancy.models import Feature, TenantFeatureFlag
-from apps.gym_branch.models import Branch
 from utils.limits import branch_capacity_exceeded
+from utils.tenancy_helpers import (
+    get_branch_manager_scope_ids as _branch_manager_scope_ids,
+    is_tenant_admin_user as _is_tenant_admin,
+    scope_queryset_by_branch_access,
+)
 
 from .models import Role, RolePermission, UserRole
 from .permissions import IsRoleAdmin
@@ -25,35 +29,6 @@ from .serializers import (
     UserRoleSerializer,
 )
 from .utils import get_user_permission_map
-
-
-def _is_tenant_admin(user) -> bool:
-    return bool(
-        user
-        and user.is_authenticated
-        and (user.is_superuser or user.is_staff or getattr(user, "role", "") == "admin")
-    )
-
-
-def _branch_manager_scope_ids(user):
-    """Return managed branch IDs for branch-managers, None for unrestricted users."""
-    if not (user and user.is_authenticated):
-        return None
-    if _is_tenant_admin(user):
-        return None
-
-    has_branch_manager_role = UserRole.objects.filter(
-        user_id=user.id,
-        role__slug="branch_manager",
-    ).exists()
-    if not has_branch_manager_role:
-        return None
-
-    return list(
-        Branch.objects.filter(manager_id=user.id).values_list("id", flat=True)
-    )
-
-
 class RoleListCreateView(generics.ListCreateAPIView):
     queryset = Role.objects.all().prefetch_related("permissions", "user_assignments").order_by("id")
     serializer_class = RoleSerializer
@@ -119,12 +94,12 @@ class UserRoleListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        scope_ids = _branch_manager_scope_ids(self.request.user)
-        if scope_ids is None:
-            return queryset
-        if not scope_ids:
-            return queryset.none()
-        return queryset.filter(branch_id__in=scope_ids)
+        return scope_queryset_by_branch_access(
+            queryset,
+            self.request.user,
+            branch_field="branch_id",
+            branch_filter_id=self.request.query_params.get("branch"),
+        )
 
     def perform_create(self, serializer):
         actor_email = getattr(self.request.user, "email", "") or ""
@@ -162,12 +137,12 @@ class UserRoleDetailView(generics.RetrieveDestroyAPIView):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        scope_ids = _branch_manager_scope_ids(self.request.user)
-        if scope_ids is None:
-            return queryset
-        if not scope_ids:
-            return queryset.none()
-        return queryset.filter(branch_id__in=scope_ids)
+        return scope_queryset_by_branch_access(
+            queryset,
+            self.request.user,
+            branch_field="branch_id",
+            branch_filter_id=self.request.query_params.get("branch"),
+        )
 
 
 class MyPermissionsView(APIView):
