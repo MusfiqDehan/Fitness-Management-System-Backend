@@ -201,6 +201,7 @@ class MemberSerializer(serializers.ModelSerializer):
     duration_years = serializers.SerializerMethodField()
     age = serializers.SerializerMethodField()
     age_years = serializers.SerializerMethodField()
+    invitation_pending = serializers.SerializerMethodField()
 
     class Meta:
         model = Member
@@ -213,7 +214,8 @@ class MemberSerializer(serializers.ModelSerializer):
             'emergency_contact_name', 'emergency_contact_phone', 'notes',
             'payment_method', 'payment_status', 'photo',
             'branch', 'branch_name',
-            'is_active', 'is_published', 'created_at', 'updated_at',
+            'is_active', 'is_published', 'invitation_pending',
+            'created_at', 'updated_at',
         )
         read_only_fields = ['created_at', 'updated_at', 'remaining_days']
 
@@ -228,6 +230,9 @@ class MemberSerializer(serializers.ModelSerializer):
 
     def get_age_years(self, obj):
         return _format_elapsed_years(obj.date_of_birth)
+
+    def get_invitation_pending(self, obj):
+        return bool(obj.invitation_token)
 
     def validate(self, attrs):
         membership_type = attrs.get('membership_type', getattr(self.instance, 'membership_type', None))
@@ -290,34 +295,7 @@ class MemberPublicSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-# ----------------------------
-# Payment
-# ----------------------------
-class PaymentSerializer(serializers.ModelSerializer):
-    member_name = serializers.CharField(source='member.full_name', read_only=True)
-    member_phone = serializers.CharField(source='member.phone_number', read_only=True)
-    member_email = serializers.CharField(source='member.email', read_only=True)
-    package_name = serializers.CharField(source='member.member_package.name', read_only=True)
-    payment_type_display = serializers.CharField(source='get_payment_type_display', read_only=True)
-    payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
-    payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
-
-    class Meta:
-        model = Payment
-        fields = (
-            'id', 'member', 'member_name', 'member_phone', 'member_email', 'package_name',
-            'payment_type', 'payment_type_display',
-            'amount',
-            'payment_method', 'payment_method_display',
-            'payment_status', 'payment_status_display',
-            'payment_date', 'invoice_no', 'note', 'is_paid',
-            'is_active', 'is_published', 'created_at',
-        )
-        read_only_fields = [
-            'created_at', 'member_name', 'member_phone', 'member_email', 'package_name',
-            'payment_type_display', 'payment_method_display', 'payment_status_display',
-        ]
-
+# PaymentSerializer (notify dispatch, renewal sync) lives in apps.billing.serializers.
 
 # ----------------------------
 # Attendance
