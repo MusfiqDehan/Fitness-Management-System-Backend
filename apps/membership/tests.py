@@ -15,7 +15,7 @@ from apps.billing.models import PaymentTransaction, TenantPaymentGateway
 from utils.tenancy_helpers import scope_queryset_by_branch_access
 
 from .models import GymClass, Member, MemberPackage, Payment
-from .views import GymClassView, PaymentView, PublicGymClassListAPIView, PublicMemberRegistrationAPIView
+from .views import GymClassView, MemberView, PaymentView, PublicGymClassListAPIView, PublicMemberRegistrationAPIView
 
 
 class GymClassMediaApiTests(APITestCase):
@@ -376,6 +376,49 @@ class BranchScopedListHelpersTests(APITestCase):
 
 			self.assertEqual(list(queryset.values_list('id', flat=True)), [self.member_b.id])
 
+	@patch("apps.billing.services.payment_confirmation.dispatch_member_payment")
+	def test_membership_payment_create_dispatches_notify_channels(self, mock_dispatch):
+		payload = {
+			"member": self.member_a.id,
+			"payment_type": "package",
+			"amount": "900.00",
+			"payment_method": "cash",
+			"payment_status": "paid",
+			"notify_channels": ["email", "in_app"],
+		}
+		self.client.force_authenticate(user=self.admin)
+		with self.captureOnCommitCallbacks(execute=True):
+			response = self.client.post(
+				"/api/v1/membership/payments/",
+				payload,
+				format="json",
+				HTTP_HOST="scope.testserver",
+			)
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		mock_dispatch.assert_called_once()
+		channels = mock_dispatch.call_args[0][1]
+		self.assertEqual(channels, ["email", "in_app"])
+
+	def test_membership_payment_create_auto_generates_invoice_no(self):
+		payload = {
+			"member": self.member_a.id,
+			"payment_type": "package",
+			"amount": "850.00",
+			"payment_method": "cash",
+			"payment_status": "paid",
+		}
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			"/api/v1/membership/payments/",
+			payload,
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(response.data["invoice_no"], f"INV-{response.data['id']:06d}")
+
 	def test_payment_view_get_queryset_applies_date_range_filters(self):
 		request = self.factory.get(
 			reverse('membership:payment-list'),
@@ -395,3 +438,97 @@ class BranchScopedListHelpersTests(APITestCase):
 			queryset = view.get_queryset()
 
 			self.assertEqual(list(queryset.values_list('id', flat=True)), [self.payment_recent.id])
+
+
+class MemberInvitationResendTests(APITestCase):
+	def setUp(self):
+		with schema_context('public'):
+			self.public = Tenant.objects.create(
+				schema_name='public',
+				name='Public',
+				slug='public',
+				code='PUBMEM04',
+				owner_email='root4@membership.test',
+				billing_email='root4@membership.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain='testserver',
+				tenant=self.public,
+				defaults={'is_primary': True},
+			)
+
+			self.tenant = Tenant.objects.create(
+				schema_name='membership_invite_resend',
+				name='Membership Invite Resend Tenant',
+				slug='membership-invite-resend',
+				code='MEMINV001',
+				owner_email='admin@invite.test',
+				billing_email='admin@invite.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.create(domain='invite.testserver', tenant=self.tenant, is_primary=True)
+
+		with schema_context(self.tenant.schema_name):
+			self.admin = User.objects.create_superuser(
+				email='admin@invite.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+			)
+			self.pending_member = Member.objects.create(
+				full_name='Pending Member',
+				phone_number='01710020001',
+				email='pending@example.com',
+				membership_type='monthly',
+				invitation_token='pending-token-abc',
+				invitation_sent_at=timezone.now(),
+				invitation_expires_at=timezone.now() + timedelta(days=7),
+				is_active=False,
+			)
+			self.registered_member = Member.objects.create(
+				full_name='Registered Member',
+				phone_number='01710020002',
+				email='registered@example.com',
+				membership_type='monthly',
+				is_active=True,
+			)
+
+		self.factory = APIRequestFactory()
+
+	def _patch_member_action(self, member_id, action, user=None):
+		path = reverse('membership:member-detail', kwargs={'pk': member_id})
+		request = self.factory.patch(f'{path}?action={action}')
+		request.tenant = self.tenant
+		force_authenticate(request, user=user or self.admin)
+		with schema_context(self.tenant.schema_name):
+			return MemberView.as_view()(request, pk=member_id)
+
+	@patch('apps.membership.views._send_member_invitation_email')
+	def test_resend_invitation_success(self, mock_send):
+		mock_send.return_value = 'https://example.com/register?token=new'
+
+		response = self._patch_member_action(self.pending_member.id, 'resend_invitation')
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertTrue(response.data['invitation_sent'])
+		mock_send.assert_called_once()
+
+	def test_resend_invitation_rejects_registered_member(self):
+		response = self._patch_member_action(self.registered_member.id, 'resend_invitation')
+
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertIn('already completed', response.data['detail'])
+
+	@patch('apps.membership.views._send_member_invitation_email')
+	def test_member_serializer_exposes_invitation_pending(self, mock_send):
+		mock_send.return_value = 'https://example.com/register?token=new'
+		from .serializers import MemberSerializer
+
+		with schema_context(self.tenant.schema_name):
+			pending_data = MemberSerializer(self.pending_member).data
+			registered_data = MemberSerializer(self.registered_member).data
+
+		self.assertTrue(pending_data['invitation_pending'])
+		self.assertFalse(registered_data['invitation_pending'])
