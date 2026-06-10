@@ -30,13 +30,13 @@ import io
 import os
 
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
+from apps.billing.serializers import PaymentSerializer
 from .serializers import (
     MemberSerializer,
     MemberPublicSerializer,
     MemberPackageSerializer,
     MemberPackagePublicSerializer,
     MemberMinimalSerializer,
-    PaymentSerializer,
     AttendanceSerializer,
     GymClassSerializer,
     GymScheduleSerializer,
@@ -346,6 +346,7 @@ class MemberActions:
         'activate':   lambda self, req, pk: self._toggle_flag(Member, pk, 'is_active', True),
         'deactivate': lambda self, req, pk: self._toggle_flag(Member, pk, 'is_active', False),
         'restore':    lambda self, req, pk: self._restore(pk),
+        'resend_invitation': lambda self, req, pk: self._resend_invitation(req, pk),
     }
 
     def _scope_members_queryset(self, include_deleted=False):
@@ -375,6 +376,48 @@ class MemberActions:
             return Response({'error': 'Member is not deleted'}, status=status.HTTP_400_BAD_REQUEST)
         member.restore()
         return Response({'message': 'Member restored', 'is_deleted': False})
+
+    def _resend_invitation(self, request, pk):
+        try:
+            member = self._scope_members_queryset().get(pk=pk)
+        except Member.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not member.email:
+            return Response(
+                {'detail': 'Member does not have an email address.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not member.invitation_token:
+            return Response(
+                {'detail': 'Member has already completed registration.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        inviter = (
+            request.user
+            if getattr(request, 'user', None) and request.user.is_authenticated
+            else None
+        )
+        try:
+            invite_url = _send_member_invitation_email(
+                member,
+                request,
+                invited_by=inviter,
+                force_new_token=True,
+            )
+        except Exception as exc:
+            return Response(
+                {'error': f'Failed to send invitation email: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response({
+            'message': 'Invitation resent successfully',
+            'invitation_sent': bool(invite_url),
+            'invite_url': invite_url,
+        })
 
 
 class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
@@ -1184,6 +1227,12 @@ class PaymentView(BranchScopedListMixin, ModelCRUDView):
     serializer_class = PaymentSerializer
     permission_classes = [HasFeatureMethodPermission]
     branch_scope_field = 'member__branch_id'
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["tenant"] = getattr(self.request, "tenant", None)
+        context["actor"] = self.request.user
+        return context
     filterset_fields = ['payment_type', 'payment_method', 'payment_status', 'member']
     search_fields = ['member__full_name', 'member__phone_number', 'member__email', 'invoice_no', 'note']
     ordering_fields = [
