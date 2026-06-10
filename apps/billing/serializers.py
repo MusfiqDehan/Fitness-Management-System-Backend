@@ -10,6 +10,7 @@ its own clean, focused API surface (separate from the broader RBAC views).
 """
 from decimal import Decimal, InvalidOperation
 
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.tenancy.models import (
@@ -238,6 +239,12 @@ class PaymentMemberOptionSerializer(serializers.ModelSerializer):
 
 
 class PaymentSerializer(serializers.ModelSerializer):
+    notify_channels = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        write_only=True,
+        default=list,
+    )
     member_name = serializers.CharField(source='member.full_name', read_only=True)
     member_phone = serializers.CharField(source='member.phone_number', read_only=True)
     member_email = serializers.CharField(source='member.email', read_only=True)
@@ -271,6 +278,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'payment_date',
             'invoice_no',
             'note',
+            'notify_channels',
             'is_paid',
             'is_active',
             'is_published',
@@ -318,6 +326,44 @@ class PaymentSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+    def _post_save(self, payment, *, previous_status: str | None, notify_channels: list):
+        from apps.billing.services.member_renewal import apply_paid_payment
+        from apps.billing.services.payment_confirmation import dispatch_member_payment
+
+        apply_paid_payment(payment, previous_status=previous_status)
+        if payment.payment_status == Payment.STATUS_PAID:
+            dispatch_member_payment(
+                payment,
+                notify_channels,
+                actor=self.context.get("actor"),
+                tenant=self.context.get("tenant"),
+            )
+
+    def create(self, validated_data):
+        notify_channels = validated_data.pop("notify_channels", [])
+        payment = super().create(validated_data)
+        self._post_save(payment, previous_status=None, notify_channels=notify_channels)
+        return payment
+
+    def update(self, instance, validated_data):
+        notify_channels = validated_data.pop("notify_channels", [])
+        previous_status = instance.payment_status
+        payment = super().update(instance, validated_data)
+        self._post_save(payment, previous_status=previous_status, notify_channels=notify_channels)
+        return payment
+
+
+class SubscriptionSummarySerializer(serializers.Serializer):
+    total_paid = serializers.DecimalField(max_digits=12, decimal_places=2)
+    currency = serializers.CharField()
+    upcoming_renewal_date = serializers.DateTimeField(allow_null=True)
+    upcoming_amount = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    current_plan_slug = serializers.CharField(allow_blank=True)
+    current_plan_name = serializers.CharField(allow_blank=True)
+    billing_cycle = serializers.CharField(allow_blank=True)
+    status = serializers.CharField()
+    is_trial = serializers.BooleanField()
 
 
 # ---------------------------------------------------------------
@@ -407,6 +453,86 @@ class PaymentInitiateSerializer(serializers.Serializer):
 
     payment_id = serializers.IntegerField()
     gateway_slug = serializers.CharField(max_length=50)
+
+
+class PlatformSubscriptionPaymentUpdateSerializer(serializers.ModelSerializer):
+    """PATCH payload for platform-admin subscription invoice updates."""
+
+    reference_note = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    notify_channels = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        write_only=True,
+    )
+
+    class Meta:
+        from apps.tenancy.models import TenantSubscriptionInvoice
+
+        model = TenantSubscriptionInvoice
+        fields = [
+            "status",
+            "amount",
+            "billing_cycle",
+            "period_start",
+            "period_end",
+            "reference_note",
+            "notify_channels",
+        ]
+
+    def validate(self, attrs):
+        instance = self.instance
+        if instance is None:
+            return attrs
+
+        pending_gateway = (
+            instance.status == instance.STATUS_PENDING
+            and instance.gateway_slug not in ("", "manual")
+        )
+        if pending_gateway:
+            allowed = {"status", "notify_channels"}
+            blocked = set(attrs.keys()) - allowed
+            if blocked:
+                raise serializers.ValidationError(
+                    "Pending gateway invoices only allow status changes."
+                )
+            new_status = attrs.get("status", instance.status)
+            if new_status not in (instance.STATUS_CANCELLED, instance.STATUS_FAILED, instance.STATUS_PENDING):
+                raise serializers.ValidationError(
+                    "Pending gateway invoices may only be set to cancelled or failed."
+                )
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        reference_note = validated_data.pop("reference_note", None)
+        notify_channels = validated_data.pop("notify_channels", None)
+        previous_status = instance.status
+
+        if reference_note is not None:
+            gw_resp = dict(instance.gateway_response or {})
+            gw_resp["reference_note"] = reference_note
+            instance.gateway_response = gw_resp
+
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+
+        if instance.status == instance.STATUS_SUCCESS and not instance.validated_at:
+            instance.validated_at = timezone.now()
+
+        instance.save()
+        instance.refresh_from_db()
+
+        if instance.status == instance.STATUS_SUCCESS and previous_status != instance.STATUS_SUCCESS:
+            from apps.billing.services.subscription_billing import activate_tenant_subscription
+
+            activate_tenant_subscription(instance)
+
+        if notify_channels:
+            from apps.billing.services.payment_confirmation import dispatch_subscription_invoice
+
+            dispatch_subscription_invoice(instance, notify_channels, actor=self.context.get("actor"))
+
+        return instance
 
 
 class TenantSubscriptionInvoiceSerializer(serializers.Serializer):
