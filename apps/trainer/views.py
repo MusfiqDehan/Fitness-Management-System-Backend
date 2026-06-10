@@ -8,6 +8,7 @@ from django.db import transaction
 from django.db.models import Avg, Sum
 from django.utils import timezone
 from django.conf import settings
+import secrets
 
 from utils.base_view import ModelCRUDView
 from utils.list_mixins import BranchScopedListMixin, SearchFilterSortPaginationMixin
@@ -112,7 +113,22 @@ class TrainerProfileView(BranchScopedListMixin, TrainerModelActions, ModelCRUDVi
 
     actions = {
         'recalc': lambda self, req, pk: self._recalc(req, pk),
+        'activate': lambda self, req, pk: self._toggle_trainer_active(req, pk, True),
+        'deactivate': lambda self, req, pk: self._toggle_trainer_active(req, pk, False),
     }
+
+    def _toggle_trainer_active(self, request, pk, value):
+        try:
+            profile = self.get_queryset().get(pk=pk)
+        except TrainerProfile.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        user = profile.user
+        user.is_active = value
+        user.save(update_fields=['is_active'])
+        return Response({
+            'message': 'Activated' if value else 'Deactivated',
+            'is_active': value,
+        })
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -689,6 +705,61 @@ class MyTrainerRatingsView(APIView):
 # =============================================================================
 # TRAINER INVITATION
 # =============================================================================
+def _send_trainer_invitation_email(invitation, request, force_new_token=False) -> str:
+    """Send trainer invitation email. Returns invite URL."""
+    from django.core.mail import EmailMultiAlternatives
+    from django.template.loader import render_to_string
+
+    now = timezone.now()
+    if force_new_token or invitation.is_expired():
+        invitation.token = secrets.token_urlsafe(48)
+        invitation.invitation_expires_at = now + timezone.timedelta(days=7)
+        invitation.save(update_fields=['token', 'invitation_expires_at', 'updated_at'])
+
+    invite_url = f"{request.scheme}://{request.get_host()}/trainer/register?token={invitation.token}"
+    company_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'Your Gym'
+    invited_by_name = getattr(getattr(request, 'user', None), 'full_name', None) or getattr(
+        getattr(request, 'user', None), 'email', ''
+    )
+
+    context = {
+        'company_name': company_name,
+        'invited_by_name': invited_by_name,
+        'invitation_url': invite_url,
+        'expires_at': invitation.invitation_expires_at,
+    }
+    html_body = render_to_string('trainer/emails/trainer_invitation_email.html', context)
+    fallback_text = (
+        f"Hi,\n\n"
+        f"{invited_by_name} has invited you to join {company_name} as a Trainer on Fitssort.\n\n"
+        f"Complete your registration here:\n{invite_url}\n\n"
+        f"This link expires on {invitation.invitation_expires_at}."
+    )
+    tenant = getattr(request, 'tenant', None)
+    from_email, connection = resolve_tenant_mail_route(tenant)
+    email = EmailMultiAlternatives(
+        subject=f"You're invited to join {company_name} as a Trainer",
+        body=fallback_text,
+        from_email=from_email,
+        to=[invitation.invited_email],
+        connection=connection,
+    )
+    email.attach_alternative(html_body, 'text/html')
+    try:
+        email.send(fail_silently=False)
+    except Exception:
+        fallback_email = EmailMultiAlternatives(
+            subject=f"You're invited to join {company_name} as a Trainer",
+            body=fallback_text,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
+            to=[invitation.invited_email],
+        )
+        fallback_email.attach_alternative(html_body, 'text/html')
+        fallback_email.send(fail_silently=False)
+
+    return invite_url
+
+
 class TrainerInvitationView(BranchScopedListMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerInvitation."""
     feature_key = 'instructors'
@@ -702,9 +773,49 @@ class TrainerInvitationView(BranchScopedListMixin, TrainerModelActions, ModelCRU
     ordering_fields = ['id', 'created_at', 'invited_email', 'full_name']
     ordering = ['id']
 
+    actions = {
+        'resend': lambda self, req, pk: self._resend_invitation(req, pk),
+    }
+
     def get_queryset(self):
         queryset = super().get_queryset()
         return self.scope_branch_queryset(queryset)
+
+    def _resend_invitation(self, request, pk):
+        try:
+            invitation = self.get_queryset().get(pk=pk)
+        except TrainerInvitation.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if invitation.accepted_at:
+            return Response(
+                {'detail': 'Invitation has already been accepted.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not invitation.invited_email:
+            return Response(
+                {'detail': 'Invitation does not have an email address.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            invite_url = _send_trainer_invitation_email(
+                invitation,
+                request,
+                force_new_token=True,
+            )
+        except Exception as exc:
+            return Response(
+                {'error': f'Failed to send invitation email: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response({
+            'message': 'Invitation resent successfully',
+            'invitation_sent': True,
+            'invite_url': invite_url,
+        })
 
     def _create(self, request):
         payload = request.data.copy()
@@ -751,53 +862,10 @@ class TrainerInvitationView(BranchScopedListMixin, TrainerModelActions, ModelCRU
         serializer.is_valid(raise_exception=True)
         invitation = serializer.save()
 
-        # Build invitation URL
-        invite_url = f"{request.scheme}://{request.get_host()}/trainer/register?token={invitation.token}"
-
-        # Resolve gym name from tenant context
-        company_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'Your Gym'
-        invited_by_name = getattr(request.user, 'full_name', None) or getattr(request.user, 'email', '')
-
-        # Send HTML email using the trainer invitation template
         try:
-            from django.core.mail import EmailMultiAlternatives
-            from django.template.loader import render_to_string
-
-            context = {
-                'company_name': company_name,
-                'invited_by_name': invited_by_name,
-                'invitation_url': invite_url,
-                'expires_at': invitation.invitation_expires_at,
-            }
-            html_body = render_to_string('trainer/emails/trainer_invitation_email.html', context)
-            fallback_text = (
-                f"Hi,\n\n"
-                f"{invited_by_name} has invited you to join {company_name} as a Trainer on Fitssort.\n\n"
-                f"Complete your registration here:\n{invite_url}\n\n"
-                f"This link expires on {invitation.invitation_expires_at}."
-            )
-            tenant = getattr(request, 'tenant', None)
-            from_email, connection = resolve_tenant_mail_route(tenant)
-            email = EmailMultiAlternatives(
-                subject=f"You're invited to join {company_name} as a Trainer",
-                body=fallback_text,
-                from_email=from_email,
-                to=[invitation.invited_email],
-                connection=connection,
-            )
-            email.attach_alternative(html_body, 'text/html')
-            try:
-                email.send(fail_silently=False)
-            except Exception:
-                fallback_email = EmailMultiAlternatives(
-                    subject=f"You're invited to join {company_name} as a Trainer",
-                    body=fallback_text,
-                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
-                    to=[invitation.invited_email],
-                )
-                fallback_email.attach_alternative(html_body, 'text/html')
-                fallback_email.send(fail_silently=False)
+            invite_url = _send_trainer_invitation_email(invitation, request)
         except Exception as e:
+            invite_url = f"{request.scheme}://{request.get_host()}/trainer/register?token={invitation.token}"
             return Response({
                 'error': f'Invitation created but email failed: {str(e)}',
                 'invitation_id': invitation.id,
