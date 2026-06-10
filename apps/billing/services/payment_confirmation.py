@@ -26,14 +26,18 @@ def _filter_channels(channels: list[str] | None) -> list[str]:
 
 
 def _member_user(member):
+    """Resolve the auth User for a member (mirrors User.member lookup)."""
     if not member:
         return None
+    qs = User.objects.filter(is_active=True)
     if member.email:
-        user = User.objects.filter(email__iexact=member.email, role="student").first()
+        user = qs.filter(email__iexact=member.email).first()
         if user:
             return user
     if member.phone_number:
-        return User.objects.filter(phone=member.phone_number, role="student").first()
+        user = qs.filter(phone=member.phone_number).first()
+        if user:
+            return user
     return None
 
 
