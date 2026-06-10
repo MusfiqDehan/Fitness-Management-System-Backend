@@ -19,7 +19,7 @@ from io import BytesIO
 from urllib.parse import urlparse
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Count, Sum, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
@@ -1707,6 +1707,7 @@ class PaymentInitiateView(APIView):
 
         payment_id = serializer.validated_data["payment_id"]
         gateway_slug = serializer.validated_data["gateway_slug"]
+        notify_channels = serializer.validated_data.get("notify_channels") or []
 
         payment = get_object_or_404(
             Payment.objects.select_related("member"),
@@ -1795,7 +1796,10 @@ class PaymentInitiateView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         tx.status = PaymentTransaction.STATUS_PENDING
-        tx.gateway_response = result.get("raw", {})
+        gateway_response = dict(result.get("raw", {}) or {})
+        if notify_channels:
+            gateway_response["notify_channels"] = list(notify_channels)
+        tx.gateway_response = gateway_response
         tx.save(update_fields=["status", "gateway_response", "updated_at"])
 
         return Response({"gateway_url": result["gateway_url"], "tran_id": tran_id})
@@ -1877,7 +1881,17 @@ def _process_gateway_callback(tran_id: str, val_id: str, raw_amount: str) -> Pay
                         payment.is_paid = True
                         payment.save(update_fields=["payment_status", "is_paid", "updated_at"])
                         from apps.billing.services.member_renewal import apply_paid_payment
+                        from apps.billing.services.payment_confirmation import dispatch_member_payment
+
                         apply_paid_payment(payment, previous_status=previous_status)
+                        notify_channels = (existing_gateway_response or {}).get("notify_channels") or []
+                        if notify_channels:
+                            tenant = getattr(connection, "tenant", None)
+                            dispatch_member_payment(
+                                payment,
+                                notify_channels,
+                                tenant=tenant,
+                            )
             else:
                 tx.status = PaymentTransaction.STATUS_FAILED
                 tx.gateway_response = {
