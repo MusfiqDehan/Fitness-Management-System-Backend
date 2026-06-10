@@ -142,6 +142,7 @@ TENANT_REGISTRY: list[RegistryItem] = [
         "group": "Finance",
         "children": [
             {"key": "payments",          "name": "Payments",         "route": "/payments",         "icon": "CreditCard"},
+            {"key": "subscriptions",   "name": "Subscriptions",    "route": "/subscriptions",    "icon": "Receipt"},
             {"key": "payments.invoices", "name": "Invoices",          "route": None,                "icon": "FileText"},
             {"key": "payments.gateways", "name": "Payment Gateways",  "route": "/payment-gateways", "icon": "Landmark"},
             {"key": "members.packages",  "name": "Packages",          "route": "/packages",         "icon": "Boxes"},
