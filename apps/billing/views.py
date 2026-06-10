@@ -567,6 +567,12 @@ class PaymentAPIView(BranchScopedListMixin, ModelCRUDView):
     """Tenant payment CRUD under /api/v1/billing/payments/."""
 
     feature_key = 'payments'
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["tenant"] = getattr(self.request, "tenant", None)
+        context["actor"] = self.request.user
+        return context
     queryset = Payment.objects.select_related('member', 'member__member_package', 'member__branch').all().order_by('id')
     serializer_class = PaymentSerializer
     permission_classes = [HasFeatureMethodPermission]
@@ -1120,76 +1126,204 @@ class PaymentGatewaySetDefaultView(APIView):
         return Response(PaymentGatewaySerializer(gateway).data)
 
 
+_PLATFORM_PAYMENT_ORDERING = {
+    "id": "id",
+    "-id": "-id",
+    "created_at": "created_at",
+    "-created_at": "-created_at",
+    "amount": "amount",
+    "-amount": "-amount",
+    "status": "status",
+    "-status": "-status",
+    "tenant__name": "tenant__name",
+    "-tenant__name": "-tenant__name",
+    "package_name": "package_name",
+    "-package_name": "-package_name",
+    "tran_id": "tran_id",
+    "-tran_id": "-tran_id",
+    "gateway_slug": "gateway_slug",
+    "-gateway_slug": "-gateway_slug",
+}
+
+
+def _platform_subscription_payment_stats():
+    from apps.tenancy.models import TenantSubscriptionInvoice
+
+    all_invoices = TenantSubscriptionInvoice.objects.all()
+    total_revenue = (
+        all_invoices.filter(status=TenantSubscriptionInvoice.STATUS_SUCCESS)
+        .aggregate(total=Sum("amount"))["total"]
+        or 0
+    )
+    count_by_status = {
+        row["status"]: row["count"]
+        for row in all_invoices.values("status").annotate(count=Count("id"))
+    }
+    unique_paying_tenants = (
+        all_invoices.filter(status=TenantSubscriptionInvoice.STATUS_SUCCESS)
+        .values("tenant_id")
+        .distinct()
+        .count()
+    )
+    return {
+        "total_revenue": str(total_revenue),
+        "total_payments": all_invoices.count(),
+        "successful_payments": count_by_status.get(TenantSubscriptionInvoice.STATUS_SUCCESS, 0),
+        "failed_payments": count_by_status.get(TenantSubscriptionInvoice.STATUS_FAILED, 0),
+        "pending_payments": count_by_status.get(TenantSubscriptionInvoice.STATUS_PENDING, 0),
+        "unique_paying_tenants": unique_paying_tenants,
+    }
+
+
+def _filter_platform_subscription_invoices(request):
+    from apps.tenancy.models import TenantSubscriptionInvoice
+
+    ordering = request.GET.get("ordering", "-created_at").strip() or "-created_at"
+    if ordering not in _PLATFORM_PAYMENT_ORDERING:
+        ordering = "-created_at"
+
+    invoices_qs = TenantSubscriptionInvoice.objects.select_related("tenant").order_by(
+        _PLATFORM_PAYMENT_ORDERING[ordering]
+    )
+
+    status_filter = request.GET.get("status", "").strip()
+    search = request.GET.get("search", "").strip()
+    gateway_slug = request.GET.get("gateway_slug", "").strip()
+    from_date = request.GET.get("from_date", "").strip()
+    to_date = request.GET.get("to_date", "").strip()
+
+    if status_filter:
+        invoices_qs = invoices_qs.filter(status=status_filter)
+    if gateway_slug:
+        invoices_qs = invoices_qs.filter(gateway_slug=gateway_slug)
+    if search:
+        invoices_qs = invoices_qs.filter(
+            Q(tenant__name__icontains=search)
+            | Q(tenant__schema_name__icontains=search)
+            | Q(tran_id__icontains=search)
+            | Q(package_name__icontains=search)
+        )
+    if from_date:
+        invoices_qs = invoices_qs.filter(created_at__date__gte=from_date)
+    if to_date:
+        invoices_qs = invoices_qs.filter(created_at__date__lte=to_date)
+
+    return invoices_qs
+
+
+def _serialize_platform_subscription_invoices(invoices):
+    from .serializers import TenantSubscriptionInvoiceSerializer
+
+    serialized = TenantSubscriptionInvoiceSerializer(invoices, many=True).data
+    rows = []
+    for inv, data in zip(invoices, serialized):
+        row = dict(data)
+        row["tenant_name"] = inv.tenant.name if inv.tenant else ""
+        row["tenant_schema"] = inv.tenant.schema_name if inv.tenant else ""
+        rows.append(row)
+    return rows
+
+
 class PlatformSubscriptionPaymentsView(APIView):
     """GET /api/v1/billing/subscription/payments/ — platform-admin payment overview.
 
-    Returns all TenantSubscriptionInvoice records across all tenants along with
-    aggregate stats (total revenue, count by status).  Gated by the
-    `platform.payments` platform module permission.
+    Returns paginated TenantSubscriptionInvoice records across all tenants along
+    with aggregate stats (total revenue, count by status). Gated by
+    `platform.payments` view permission.
     """
 
     permission_classes = [IsPlatformFeaturePermission.require("platform.payments", "view")]
 
     def get(self, request):
-        from apps.tenancy.models import TenantSubscriptionInvoice, Tenant
-        from .serializers import TenantSubscriptionInvoiceSerializer
+        from django.core.paginator import EmptyPage, Paginator
 
-        # Build queryset with tenant info denormalised
-        invoices_qs = (
-            TenantSubscriptionInvoice.objects
-            .select_related("tenant")
-            .order_by("-created_at")
-        )
+        invoices_qs = _filter_platform_subscription_invoices(request)
+        stats = _platform_subscription_payment_stats()
 
-        # Optional filter params
-        status_filter = request.GET.get("status", "").strip()
-        search = request.GET.get("search", "").strip()
-        if status_filter:
-            invoices_qs = invoices_qs.filter(status=status_filter)
-        if search:
-            invoices_qs = invoices_qs.filter(
-                Q(tenant__name__icontains=search)
-                | Q(tran_id__icontains=search)
-                | Q(package_name__icontains=search)
-            )
+        try:
+            page = max(int(request.GET.get("page", 1)), 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = min(max(int(request.GET.get("page_size", 10)), 1), 100)
+        except (TypeError, ValueError):
+            page_size = 10
 
-        invoices = list(invoices_qs)
+        paginator = Paginator(invoices_qs, page_size)
+        try:
+            page_obj = paginator.page(page)
+        except EmptyPage:
+            page_obj = paginator.page(paginator.num_pages or 1)
 
-        # Aggregate stats
-        all_invoices = TenantSubscriptionInvoice.objects.all()
-        total_revenue = (
-            all_invoices.filter(status=TenantSubscriptionInvoice.STATUS_SUCCESS)
-            .aggregate(total=Sum("amount"))["total"] or 0
-        )
-        count_by_status = {
-            row["status"]: row["count"]
-            for row in all_invoices.values("status").annotate(count=Count("id"))
-        }
-        unique_paying_tenants = (
-            all_invoices.filter(status=TenantSubscriptionInvoice.STATUS_SUCCESS)
-            .values("tenant_id").distinct().count()
-        )
-
-        serialized = TenantSubscriptionInvoiceSerializer(invoices, many=True).data
-        # Attach tenant name to each item
-        rows = []
-        for inv, data in zip(invoices, serialized):
-            row = dict(data)
-            row["tenant_name"] = inv.tenant.name if inv.tenant else ""
-            row["tenant_schema"] = inv.tenant.schema_name if inv.tenant else ""
-            rows.append(row)
+        rows = _serialize_platform_subscription_invoices(page_obj.object_list)
 
         return Response({
-            "stats": {
-                "total_revenue": str(total_revenue),
-                "total_payments": all_invoices.count(),
-                "successful_payments": count_by_status.get(TenantSubscriptionInvoice.STATUS_SUCCESS, 0),
-                "failed_payments": count_by_status.get(TenantSubscriptionInvoice.STATUS_FAILED, 0),
-                "pending_payments": count_by_status.get(TenantSubscriptionInvoice.STATUS_PENDING, 0),
-                "unique_paying_tenants": unique_paying_tenants,
-            },
+            "stats": stats,
+            "count": paginator.count,
+            "total_pages": paginator.num_pages,
             "results": rows,
         })
+
+
+class PlatformSubscriptionPaymentDetailView(APIView):
+    """PATCH/DELETE /api/v1/billing/subscription/payments/<pk>/ — platform admin."""
+
+    permission_classes = [IsPlatformFeaturePermission.require("platform.payments", "edit")]
+
+    def patch(self, request, pk):
+        from apps.tenancy.models import TenantSubscriptionInvoice
+        from .serializers import (
+            PlatformSubscriptionPaymentUpdateSerializer,
+            TenantSubscriptionInvoiceSerializer,
+        )
+
+        invoice = get_object_or_404(TenantSubscriptionInvoice.objects.select_related("tenant"), pk=pk)
+        serializer = PlatformSubscriptionPaymentUpdateSerializer(
+            invoice,
+            data=request.data,
+            partial=True,
+            context={"actor": request.user},
+        )
+        serializer.is_valid(raise_exception=True)
+        invoice = serializer.save()
+        row = dict(TenantSubscriptionInvoiceSerializer(invoice).data)
+        row["tenant_name"] = invoice.tenant.name if invoice.tenant else ""
+        row["tenant_schema"] = invoice.tenant.schema_name if invoice.tenant else ""
+        return Response(row)
+
+    def delete(self, request, pk):
+        from apps.tenancy.models import TenantSubscriptionInvoice
+        from apps.billing.services.subscription_billing import recalc_tenant_subscription
+
+        invoice = get_object_or_404(TenantSubscriptionInvoice.objects.select_related("tenant"), pk=pk)
+
+        if invoice.status == TenantSubscriptionInvoice.STATUS_PENDING and invoice.gateway_slug not in (
+            "",
+            "manual",
+        ):
+            return Response(
+                {"detail": "Cancel pending gateway invoices via PATCH before deleting."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if invoice.status == TenantSubscriptionInvoice.STATUS_SUCCESS:
+            confirm = request.data.get("confirm_success_delete") or request.query_params.get(
+                "confirm_success_delete"
+            )
+            if str(confirm).lower() not in ("true", "1", "yes"):
+                return Response(
+                    {"detail": "Success invoices require confirm_success_delete=true."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        tenant = invoice.tenant
+        was_success = invoice.status == TenantSubscriptionInvoice.STATUS_SUCCESS
+        invoice.delete()
+
+        if was_success and tenant is not None:
+            recalc_tenant_subscription(tenant)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ===============================================================
@@ -1307,14 +1441,12 @@ def _process_subscription_callback(request, *, tran_id=None):
 
             # On success, activate the tenant subscription
             if new_status == TenantSubscriptionInvoice.STATUS_SUCCESS:
-                tenant = invoice.tenant
-                tenant.is_trial = False
-                tenant.status = "active"
-                tenant.plan = invoice.package_slug
-                tenant.subscription_start = timezone.now()
-                tenant.subscription_end = invoice.period_end
-                tenant.save(update_fields=["is_trial", "status", "plan", "subscription_start", "subscription_end", "updated_at"])
-                _sync_tenant_limits_from_package(tenant, invoice.package_slug)
+                from apps.billing.services.subscription_billing import activate_tenant_subscription
+                from apps.billing.services.payment_confirmation import dispatch_subscription_invoice
+
+                activate_tenant_subscription(invoice)
+                gw_resp = invoice.gateway_response if isinstance(invoice.gateway_response, dict) else {}
+                dispatch_subscription_invoice(invoice, gw_resp.get("notify_channels"))
 
     except Exception:
         return None, f"{public_frontend}/subscription/fail?reason=error"
@@ -1740,9 +1872,12 @@ def _process_gateway_callback(tran_id: str, val_id: str, raw_amount: str) -> Pay
                         .first()
                     )
                     if payment is not None:
+                        previous_status = payment.payment_status
                         payment.payment_status = Payment.STATUS_PAID
                         payment.is_paid = True
                         payment.save(update_fields=["payment_status", "is_paid", "updated_at"])
+                        from apps.billing.services.member_renewal import apply_paid_payment
+                        apply_paid_payment(payment, previous_status=previous_status)
             else:
                 tx.status = PaymentTransaction.STATUS_FAILED
                 tx.gateway_response = {
@@ -2096,5 +2231,183 @@ class TenantSubscriptionInvoiceAdminView(APIView):
                 .order_by("-created_at")
             )
             return Response(TenantSubscriptionInvoiceSerializer(invoices, many=True).data)
+
+
+class SubscriptionSummaryView(APIView):
+    """GET /api/v1/billing/subscription/summary/ — tenant admin subscription overview."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_tenant_admin_user(request.user):
+            return Response(
+                {"detail": "Only tenant administrators can view subscription summary."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            return Response({"detail": "Tenant context not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        public_schema = get_public_schema_name()
+        with schema_context(public_schema):
+            from apps.tenancy.models import Tenant as PublicTenant, TenantSubscriptionInvoice, PlatformSettings
+            from .serializers import SubscriptionSummarySerializer
+
+            live = PublicTenant.objects.filter(pk=tenant.pk).first()
+            if live is None:
+                return Response({"detail": "Tenant not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            ps = PlatformSettings.objects.filter(pk=1).first()
+            currency = ps.default_currency if ps else "USD"
+
+            invoices = TenantSubscriptionInvoice.objects.filter(tenant=live)
+            total_paid = (
+                invoices.filter(status=TenantSubscriptionInvoice.STATUS_SUCCESS)
+                .aggregate(total=Sum("amount"))["total"]
+                or Decimal("0")
+            )
+
+            latest_success = (
+                invoices.filter(status=TenantSubscriptionInvoice.STATUS_SUCCESS)
+                .order_by("-created_at")
+                .first()
+            )
+            billing_cycle = latest_success.billing_cycle if latest_success else "monthly"
+            upcoming_renewal = live.subscription_end or (latest_success.period_end if latest_success else None)
+
+            upcoming_amount = None
+            if not live.is_trial and live.status != "trial":
+                pkg = PlatformPackage.objects.filter(slug=live.plan, is_active=True).first()
+                if pkg:
+                    from utils.currency import convert_currency
+                    raw = pkg.price_yearly if billing_cycle == "yearly" else pkg.price_monthly
+                    upcoming_amount = convert_currency(raw, "USD", currency)
+
+            plan_name = (
+                PlatformPackage.objects.filter(slug=live.plan).values_list("name", flat=True).first()
+                or live.plan
+                or ""
+            )
+            data = {
+                "total_paid": total_paid,
+                "currency": currency,
+                "upcoming_renewal_date": upcoming_renewal,
+                "upcoming_amount": upcoming_amount,
+                "current_plan_slug": live.plan or "",
+                "current_plan_name": plan_name,
+                "billing_cycle": billing_cycle,
+                "status": live.status,
+                "is_trial": live.is_trial,
+            }
+            return Response(SubscriptionSummarySerializer(data).data)
+
+
+class PlatformManualSubscriptionView(APIView):
+    """POST /api/v1/billing/subscription/payments/manual/ — platform admin offline subscription."""
+
+    permission_classes = [IsPlatformFeaturePermission.require("platform.payments", "edit")]
+
+    def post(self, request):
+        from apps.tenancy.models import Tenant as PublicTenant
+        from apps.billing.services.subscription_billing import create_manual_subscription
+        from apps.billing.services.payment_confirmation import dispatch_subscription_invoice
+        from .serializers import TenantSubscriptionInvoiceSerializer
+
+        tenant_id = request.data.get("tenant_id")
+        package_slug = (request.data.get("package_slug") or "").strip()
+        billing_cycle = (request.data.get("billing_cycle") or "monthly").strip()
+        reference_note = (request.data.get("reference_note") or "").strip()
+        notify_channels = request.data.get("notify_channels") or []
+
+        if not tenant_id:
+            return Response({"detail": "tenant_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not package_slug:
+            return Response({"detail": "package_slug is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if billing_cycle not in ("monthly", "yearly"):
+            return Response(
+                {"detail": "billing_cycle must be 'monthly' or 'yearly'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not reference_note:
+            return Response(
+                {"detail": "reference_note is required for manual subscriptions."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        public_schema = get_public_schema_name()
+        with schema_context(public_schema):
+            tenant = PublicTenant.objects.filter(pk=tenant_id).first()
+            if tenant is None:
+                return Response({"detail": "Tenant not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            amount_override = request.data.get("amount")
+            try:
+                amount_dec = Decimal(str(amount_override)) if amount_override not in (None, "") else None
+            except Exception:
+                return Response({"detail": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                invoice = create_manual_subscription(
+                    tenant=tenant,
+                    package_slug=package_slug,
+                    billing_cycle=billing_cycle,
+                    reference_note=reference_note,
+                    actor=request.user,
+                    amount_override=amount_dec,
+                    notify_channels=notify_channels,
+                )
+            except ValueError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+            dispatch_subscription_invoice(invoice, notify_channels, actor=request.user)
+            return Response(TenantSubscriptionInvoiceSerializer(invoice).data, status=status.HTTP_201_CREATED)
+
+
+class PlatformGatewaySubscriptionView(APIView):
+    """POST /api/v1/billing/subscription/payments/gateway/ — platform admin gateway subscription."""
+
+    permission_classes = [IsPlatformFeaturePermission.require("platform.payments", "edit")]
+
+    def post(self, request):
+        from apps.tenancy.models import Tenant as PublicTenant
+        from apps.billing.services.subscription_billing import initiate_for_tenant
+
+        tenant_id = request.data.get("tenant_id")
+        package_slug = (request.data.get("package_slug") or "").strip()
+        billing_cycle = (request.data.get("billing_cycle") or "monthly").strip()
+        notify_channels = request.data.get("notify_channels") or []
+
+        if not tenant_id:
+            return Response({"detail": "tenant_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not package_slug:
+            return Response({"detail": "package_slug is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if billing_cycle not in ("monthly", "yearly"):
+            return Response(
+                {"detail": "billing_cycle must be 'monthly' or 'yearly'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        public_schema = get_public_schema_name()
+        with schema_context(public_schema):
+            tenant = PublicTenant.objects.filter(pk=tenant_id).first()
+            if tenant is None:
+                return Response({"detail": "Tenant not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            try:
+                gateway_url, tran_id, _invoice = initiate_for_tenant(
+                    tenant=tenant,
+                    package_slug=package_slug,
+                    billing_cycle=billing_cycle,
+                    request=request,
+                    notify_channels=notify_channels,
+                    initiated_by_platform=True,
+                )
+            except ValueError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            except RuntimeError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+            return Response({"gateway_url": gateway_url, "tran_id": tran_id}, status=status.HTTP_200_OK)
 
 
