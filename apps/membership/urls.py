@@ -34,7 +34,7 @@ urlpatterns = [
     # ========== MEMBERS ==========
     # GET/POST         /members/                            → list / create
     # GET/PUT/PATCH/DELETE /members/{pk}/                   → retrieve / update / soft delete
-    # PATCH            /members/{pk}/?action=activate|deactivate|restore
+    # PATCH            /members/{pk}/?action=activate|deactivate|restore|resend_invitation
     path('members/', MemberView.as_view(), name='member-list'),
     path('members/import/', MemberImportAPIView.as_view(), name='member-import'),
     path('members/<int:pk>/', MemberView.as_view(), name='member-detail'),
