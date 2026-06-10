@@ -288,6 +288,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'created_at',
             'updated_at',
+            'invoice_no',
             'member_name',
             'member_phone',
             'member_email',
@@ -328,28 +329,51 @@ class PaymentSerializer(serializers.ModelSerializer):
         return attrs
 
     def _post_save(self, payment, *, previous_status: str | None, notify_channels: list):
+        from django.db import transaction
+
         from apps.billing.services.member_renewal import apply_paid_payment
         from apps.billing.services.payment_confirmation import dispatch_member_payment
 
         apply_paid_payment(payment, previous_status=previous_status)
-        if payment.payment_status == Payment.STATUS_PAID:
+
+        if payment.payment_status != Payment.STATUS_PAID or not notify_channels:
+            return
+
+        actor = self.context.get("actor")
+        tenant = self.context.get("tenant")
+
+        def _dispatch():
+            # Re-fetch member relation after commit.
+            payment.refresh_from_db()
             dispatch_member_payment(
                 payment,
                 notify_channels,
-                actor=self.context.get("actor"),
-                tenant=self.context.get("tenant"),
+                actor=actor,
+                tenant=tenant,
             )
+
+        transaction.on_commit(_dispatch)
+
+    def _ensure_invoice_no(self, payment: Payment) -> Payment:
+        if not (payment.invoice_no or "").strip():
+            payment.invoice_no = f"INV-{payment.id:06d}"
+            payment.save(update_fields=["invoice_no"])
+        return payment
 
     def create(self, validated_data):
         notify_channels = validated_data.pop("notify_channels", [])
+        validated_data.pop("invoice_no", None)
         payment = super().create(validated_data)
+        payment = self._ensure_invoice_no(payment)
         self._post_save(payment, previous_status=None, notify_channels=notify_channels)
         return payment
 
     def update(self, instance, validated_data):
         notify_channels = validated_data.pop("notify_channels", [])
+        validated_data.pop("invoice_no", None)
         previous_status = instance.payment_status
         payment = super().update(instance, validated_data)
+        payment = self._ensure_invoice_no(payment)
         self._post_save(payment, previous_status=previous_status, notify_channels=notify_channels)
         return payment
 
@@ -453,6 +477,11 @@ class PaymentInitiateSerializer(serializers.Serializer):
 
     payment_id = serializers.IntegerField()
     gateway_slug = serializers.CharField(max_length=50)
+    notify_channels = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        default=list,
+    )
 
 
 class PlatformSubscriptionPaymentUpdateSerializer(serializers.ModelSerializer):
