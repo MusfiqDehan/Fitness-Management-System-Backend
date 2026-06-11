@@ -1,6 +1,8 @@
 """Serializers for tenant-scoped RBAC API."""
 from rest_framework import serializers
 
+from utils.query_optimization import prefetched_relation_count
+
 from .models import Role, RolePermission, UserRole
 
 
@@ -23,7 +25,7 @@ class RoleSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "is_system", "created_at", "updated_at"]
 
     def get_user_count(self, obj):
-        return obj.user_assignments.count()
+        return prefetched_relation_count(obj, "user_assignments")
 
 
 class RolePermissionsBulkSerializer(serializers.Serializer):
