@@ -12,7 +12,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Q
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
@@ -47,10 +47,12 @@ from .serializers import (
 from utils.base_view import ModelCRUDView
 from utils.list_mixins import BranchScopedListMixin, SearchFilterSortPaginationMixin
 from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
+from utils.query_optimization import optimized_payment_queryset
 from utils.tenancy_helpers import (
     get_branch_manager_scope_ids as _branch_manager_scope_ids,
     scope_queryset_by_branch_access,
 )
+from utils.cache_helpers import STATS_TTL, get_cached_value, stats_key, stats_scope_token
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.crm.email_delivery import resolve_tenant_mail_route
 from apps.gym_branch.models import Branch
@@ -952,57 +954,73 @@ class MemberAnalyticsAPIView(APIView):
     permission_classes = [HasFeatureMethodPermission]
 
     def get(self, request):
-        from django.db.models import Count, Q
-        from django.utils import timezone
+        from django.db.models import Count
         from datetime import timedelta
 
-        now = timezone.now()
-        today = now.date()
-        in_7_days = today + timedelta(days=7)
-        month_start = today.replace(day=1)
+        branch_filter = request.query_params.get("branch")
+        schema_name = connection.schema_name
+        scope = stats_scope_token(request.user, branch_filter)
 
-        base_qs = scope_queryset_by_branch_access(
-            Member.objects.all(),
-            request.user,
-            branch_field='branch_id',
-            branch_filter_id=request.query_params.get('branch'),
+        def load():
+            now = timezone.now()
+            today = now.date()
+            in_7_days = today + timedelta(days=7)
+            month_start = today.replace(day=1)
+
+            base_qs = scope_queryset_by_branch_access(
+                Member.objects.all(),
+                request.user,
+                branch_field="branch_id",
+                branch_filter_id=request.query_params.get("branch"),
+            )
+
+            total = base_qs.count()
+            active = base_qs.filter(is_active=True, end_date__gte=today).count()
+            expired = base_qs.filter(end_date__lt=today).count()
+            expiring_soon = base_qs.filter(
+                end_date__gte=today, end_date__lte=in_7_days
+            ).count()
+            new_this_month = base_qs.filter(created_at__date__gte=month_start).count()
+
+            last_month_start = (month_start - timedelta(days=1)).replace(day=1)
+            last_month_end = month_start - timedelta(days=1)
+            new_last_month = base_qs.filter(
+                created_at__date__gte=last_month_start,
+                created_at__date__lte=last_month_end,
+            ).count()
+
+            gender_dist = {
+                "male": base_qs.filter(gender="male").count(),
+                "female": base_qs.filter(gender="female").count(),
+                "other": base_qs.exclude(gender__in=["male", "female", ""]).count(),
+            }
+
+            package_dist = (
+                base_qs.values("member_package__name")
+                .annotate(count=Count("id"))
+                .order_by("-count")
+            )
+            package_dist_dict = {
+                p["member_package__name"] or "No Package": p["count"] for p in package_dist
+            }
+
+            return {
+                "total": total,
+                "active": active,
+                "expired": expired,
+                "expiring_soon": expiring_soon,
+                "new_this_month": new_this_month,
+                "new_last_month": new_last_month,
+                "gender_dist": gender_dist,
+                "package_dist": package_dist_dict,
+            }
+
+        payload = get_cached_value(
+            stats_key(schema_name, "member_analytics", scope),
+            STATS_TTL,
+            load,
         )
-
-        total = base_qs.count()
-        active = base_qs.filter(is_active=True, end_date__gte=today).count()
-        expired = base_qs.filter(end_date__lt=today).count()
-        expiring_soon = base_qs.filter(end_date__gte=today, end_date__lte=in_7_days).count()
-        new_this_month = base_qs.filter(created_at__date__gte=month_start).count()
-
-        # Trend: last month new members
-        last_month_start = (month_start - timedelta(days=1)).replace(day=1)
-        last_month_end = month_start - timedelta(days=1)
-        new_last_month = base_qs.filter(
-            created_at__date__gte=last_month_start,
-            created_at__date__lte=last_month_end
-        ).count()
-
-        # Gender distribution
-        gender_dist = {
-            'male': base_qs.filter(gender='male').count(),
-            'female': base_qs.filter(gender='female').count(),
-            'other': base_qs.exclude(gender__in=['male', 'female', '']).count(),
-        }
-
-        # Package distribution
-        package_dist = (
-            base_qs
-            .values('member_package__name')
-            .annotate(count=Count('id'))
-            .order_by('-count')
-        )
-        package_dist_dict = {p['member_package__name'] or 'No Package': p['count'] for p in package_dist}
-
-        return Response({
-            'total': total, 'active': active, 'expired': expired, 'expiring_soon': expiring_soon,
-            'new_this_month': new_this_month, 'new_last_month': new_last_month,
-            'gender_dist': gender_dist, 'package_dist': package_dist_dict,
-        })
+        return Response(payload)
 
 
 # =============================================================================
@@ -1226,7 +1244,7 @@ class CompleteMemberRegistrationAPIView(APIView):
 class PaymentView(BranchScopedListMixin, ModelCRUDView):
     """Handles all Payment operations."""
     feature_key = 'payments'
-    queryset = Payment.objects.select_related('member', 'member__member_package', 'member__branch').all().order_by('id')
+    queryset = optimized_payment_queryset(Payment.objects.all()).order_by('id')
     serializer_class = PaymentSerializer
     permission_classes = [HasFeatureMethodPermission]
     branch_scope_field = 'member__branch_id'
