@@ -26,6 +26,8 @@ so existing browser/subdomain flows are completely unaffected.
 from django_tenants.middleware.main import TenantMainMiddleware
 from django_tenants.utils import get_public_schema_name
 
+from utils.cache_helpers import DOMAIN_TTL, domain_schema_key, get_cached_value
+
 from .models import Domain
 
 
@@ -66,17 +68,22 @@ class MobileAwareTenantMainMiddleware(TenantMainMiddleware):
         # Prefer the signed token claim; fall back to the header hint.
         return self._schema_from_token(request) or self._schema_from_header(request)
 
-    def hostname_from_request(self, request):
-        schema = self._hint_schema(request)
-        if schema and schema != get_public_schema_name():
-            # Resolve a real domain row for this tenant schema and let the
-            # parent middleware perform schema activation + URL routing.
-            domain = (
+    def _domain_for_schema(self, schema: str) -> str | None:
+        return get_cached_value(
+            domain_schema_key(schema),
+            DOMAIN_TTL,
+            lambda: (
                 Domain.objects.filter(tenant__schema_name=schema)
                 .order_by("-is_primary", "id")
                 .values_list("domain", flat=True)
                 .first()
-            )
+            ),
+        )
+
+    def hostname_from_request(self, request):
+        schema = self._hint_schema(request)
+        if schema and schema != get_public_schema_name():
+            domain = self._domain_for_schema(schema)
             if domain:
                 return domain
         return super().hostname_from_request(request)
