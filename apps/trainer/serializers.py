@@ -29,9 +29,14 @@ class TrainerProfileSerializer(serializers.ModelSerializer):
         pending = self._get_pending_invitation(obj)
         return pending.id if pending else None
 
-    @staticmethod
-    def _get_pending_invitation(obj):
-        email = getattr(getattr(obj, 'user', None), 'email', None)
+    def _get_pending_invitation(self, obj):
+        invitation_map = self.context.get("pending_invitation_map")
+        email = getattr(getattr(obj, "user", None), "email", None)
+        if invitation_map is not None:
+            if not email:
+                return None
+            return invitation_map.get(email.lower())
+
         if not email:
             return None
         return (
@@ -40,7 +45,7 @@ class TrainerProfileSerializer(serializers.ModelSerializer):
                 accepted_at__isnull=True,
                 is_deleted=False,
             )
-            .order_by('-created_at')
+            .order_by("-created_at")
             .first()
         )
 
