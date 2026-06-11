@@ -1,6 +1,7 @@
 from django.db import models
 from django.utils import timezone
 from django.conf import settings
+from django.db.models import Q
 from utils.base_model import BaseModel
 import secrets
 
@@ -59,6 +60,19 @@ class TrainerProfile(BaseModel):
 
     class Meta:
         ordering = ['-is_highlighted', '-average_rating', 'user__full_name']
+        indexes = [
+            models.Index(
+                fields=[
+                    'branch',
+                    'is_deleted',
+                    'is_published',
+                    'is_highlighted',
+                    'average_rating',
+                ],
+                name='idx_trainer_branch_pub_rating',
+                condition=Q(is_deleted=False),
+            ),
+        ]
 
     def __str__(self):
         return f"{self.user.full_name} (@{self.username})"
@@ -216,6 +230,15 @@ class TrainerSchedule(BaseModel):
         indexes = [
             models.Index(fields=['scheduled_date', 'start_time']),
             models.Index(fields=['trainer', 'is_published']),
+            models.Index(
+                fields=['scheduled_date', 'start_time'],
+                name='idx_trsched_pub_date_time',
+                condition=Q(
+                    is_deleted=False,
+                    is_published=True,
+                    is_cancelled=False,
+                ),
+            ),
         ]
 
     def __str__(self):
@@ -267,6 +290,18 @@ class ScheduleBooking(BaseModel):
     class Meta:
         unique_together = ['schedule', 'member']
         ordering = ['-booked_at']
+        indexes = [
+            models.Index(
+                fields=['member', 'is_deleted', 'status'],
+                name='idx_booking_member_status',
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=['schedule', 'is_deleted', 'status'],
+                name='idx_booking_schedule_status',
+                condition=Q(is_deleted=False),
+            ),
+        ]
 
     def __str__(self):
         return f"{self.member.full_name} -> {self.schedule}"
