@@ -160,6 +160,10 @@ class Reminder(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status", "reminder_type"], name="idx_reminder_status_type"),
+            models.Index(fields=["status", "created_at"], name="idx_reminder_status_created"),
+        ]
 
     def __str__(self):
         return f"{self.member} — {self.reminder_type} ({self.status})"
