@@ -13,6 +13,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.identity.models import User
+from utils.cache_helpers import (
+    invalidate_platform_role_permissions,
+    invalidate_platform_user_permissions,
+    invalidate_public_packages,
+    invalidate_tenant_features,
+    PUBLIC_PACKAGE_TTL,
+    PUBLIC_PRICING_CONFIG_TTL,
+    get_cached_value,
+    public_packages_key,
+    public_pricing_config_key,
+)
 from .constants import PLATFORM_MODULES, PLATFORM_MODULE_KEYS
 from .models import (
     Feature,
@@ -129,7 +140,9 @@ class PlatformRoleDetailView(generics.RetrieveUpdateDestroyAPIView):
         if instance.is_system:
             from rest_framework.exceptions import ValidationError
             raise ValidationError("System roles cannot be deleted.")
+        role_id = instance.id
         instance.delete()
+        invalidate_platform_role_permissions(role_id)
 
 
 class PlatformRolePermissionsView(APIView):
@@ -168,6 +181,7 @@ class PlatformRolePermissionsView(APIView):
                     PlatformRolePermission.objects.create(
                         role=role, module_key=key, permission_level=level
                     )
+        invalidate_platform_role_permissions(role.id)
         return Response({"status": "ok"})
 
 
@@ -188,6 +202,7 @@ class PlatformUserRoleListCreateView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         serializer.save(assigned_by=self.request.user)
+        invalidate_platform_user_permissions(serializer.instance.user_id)
 
 
 class PlatformUserRoleDetailView(generics.RetrieveDestroyAPIView):
@@ -196,6 +211,11 @@ class PlatformUserRoleDetailView(generics.RetrieveDestroyAPIView):
     permission_classes = [
         IsPlatformFeaturePermission.require("platform.platform_users", "edit"),
     ]
+
+    def perform_destroy(self, instance):
+        user_id = instance.user_id
+        instance.delete()
+        invalidate_platform_user_permissions(user_id)
 
 
 # ===============================================================
@@ -242,6 +262,19 @@ class PublicPlatformPackageListView(generics.ListAPIView):
     serializer_class = PublicPlatformPackageSerializer
     permission_classes = [AllowAny]
 
+    def list(self, request, *args, **kwargs):
+        data = get_cached_value(
+            public_packages_key(),
+            PUBLIC_PACKAGE_TTL,
+            self._serialize_packages,
+        )
+        return Response(data)
+
+    def _serialize_packages(self):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return serializer.data
+
 
 class PublicPlatformPricingConfigView(APIView):
     """Public endpoint: returns the global yearly discount for the pricing page billing toggle."""
@@ -249,10 +282,19 @@ class PublicPlatformPricingConfigView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
+        payload = get_cached_value(
+            public_pricing_config_key(),
+            PUBLIC_PRICING_CONFIG_TTL,
+            self._load_pricing_config,
+        )
+        return Response(payload)
+
+    @staticmethod
+    def _load_pricing_config():
         config = PlatformPricingConfig.get_instance()
-        return Response({
+        return {
             "default_yearly_discount_percent": config.default_yearly_discount_percent,
-        })
+        }
 
 
 class TenantCurrentSubscriptionView(APIView):
@@ -372,6 +414,7 @@ class PlatformPackageFeaturesView(APIView):
                 if fid not in feature_ids and pf.is_enabled:
                     pf.is_enabled = False
                     pf.save(update_fields=["is_enabled"])
+        invalidate_public_packages()
         return Response({"status": "ok"})
 
 
@@ -417,6 +460,7 @@ class TenantFeatureFlagListView(APIView):
                         "updated_by_email": actor_email,
                     },
                 )
+        invalidate_tenant_features(tenant.id)
         return Response({"status": "ok"})
 
 
