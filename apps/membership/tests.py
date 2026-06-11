@@ -80,6 +80,21 @@ class GymClassMediaApiTests(APITestCase):
 			return view(request, **kwargs)
 
 	def test_gym_class_admin_create_accepts_uploaded_media_url(self):
+		with schema_context(self.tenant.schema_name):
+			from apps.trainer.models import TrainerProfile
+
+			trainer_user = User.objects.create_user(
+				email='ava@membership.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+				full_name='Ava Stone',
+			)
+			trainer_profile = TrainerProfile.objects.create(
+				user=trainer_user,
+				username='ava-stone',
+				title='Yoga Instructor',
+			)
+
 		response = self._call_tenant_view(
 			GymClassView.as_view(),
 			'post',
@@ -89,6 +104,7 @@ class GymClassMediaApiTests(APITestCase):
 				'class_type': 'yoga',
 				'level': 'beginner',
 				'instructor': 'Ava Stone',
+				'trainer_profile': trainer_profile.id,
 				'duration_minutes': 45,
 				'capacity': 18,
 				'description': 'Mobility-first morning class',
@@ -99,6 +115,22 @@ class GymClassMediaApiTests(APITestCase):
 
 		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 		self.assertEqual(response.data['image_url'], '/media/uploads/classes/sunrise-flow.jpg')
+		self.assertEqual(response.data['trainer_profile'], trainer_profile.id)
+
+	def test_gym_class_admin_create_requires_trainer(self):
+		response = self._call_tenant_view(
+			GymClassView.as_view(),
+			'post',
+			reverse('membership:gymclass-list'),
+			{
+				'name': 'No Trainer Class',
+				'class_type': 'yoga',
+				'level': 'beginner',
+				'instructor': 'Nobody',
+			},
+			user=self.user,
+		)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 	def test_public_gym_classes_include_image_url(self):
 		with schema_context(self.tenant.schema_name):
