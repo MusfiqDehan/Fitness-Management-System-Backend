@@ -11,6 +11,13 @@ management command sweeps expired grace periods.
 """
 from django.utils import timezone
 
+from utils.cache_helpers import (
+    TENANT_FEATURE_TTL,
+    get_cached_value,
+    invalidate_tenant_features,
+    tenant_feature_key,
+)
+
 from .models import (
     PlatformPackage,
     PlatformPackageFeature,
@@ -105,6 +112,7 @@ def sync_tenant_features(tenant: Tenant, *, force_revoke: bool = False) -> dict:
             flag.save(update_fields=["grace_until", "updated_at"])
             summary["graced"] += 1
 
+    invalidate_tenant_features(tenant.id)
     return summary
 
 
@@ -112,21 +120,38 @@ def expire_grace_periods(now=None) -> int:
     """Disable feature flags whose grace_until has passed. Called by daily cron."""
     now = now or timezone.now()
     qs = TenantFeatureFlag.objects.filter(grace_until__lt=now, is_enabled=True)
+    tenant_ids = list(qs.values_list("tenant_id", flat=True).distinct())
     count = qs.count()
     qs.update(is_enabled=False, grace_until=None)
+    for tenant_id in tenant_ids:
+        invalidate_tenant_features(tenant_id)
     return count
+
+
+def _load_tenant_enabled_feature_keys(tenant: Tenant) -> set[str]:
+    keys: set[str] = set()
+    for flag in TenantFeatureFlag.objects.filter(tenant=tenant).select_related(
+        "feature"
+    ):
+        if flag.is_effectively_enabled:
+            keys.add(flag.feature.key)
+    return keys
+
+
+def get_tenant_enabled_feature_keys(tenant: Tenant) -> set[str]:
+    """Return effectively enabled feature keys for a tenant (cached)."""
+    return get_cached_value(
+        tenant_feature_key(tenant.id),
+        TENANT_FEATURE_TTL,
+        lambda: _load_tenant_enabled_feature_keys(tenant),
+    )
 
 
 def tenant_has_feature(tenant, feature_key: str) -> bool:
     """Check whether a tenant currently has access to a given feature."""
     if tenant is None:
         return False
-    flag = TenantFeatureFlag.objects.filter(
-        tenant=tenant, feature__key=feature_key
-    ).first()
-    if flag is None:
-        return False
-    return flag.is_effectively_enabled
+    return feature_key in get_tenant_enabled_feature_keys(tenant)
 
 
 CUSTOM_DOMAIN_FEATURE_KEY = "custom_domain"
