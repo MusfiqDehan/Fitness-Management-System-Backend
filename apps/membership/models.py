@@ -236,6 +236,20 @@ class GymClass(BaseModel):
     class_type = models.CharField(max_length=20, choices=CLASS_TYPES, default='other')
     level = models.CharField(max_length=20, choices=LEVELS, default='beginner')
     instructor = models.CharField(max_length=150, blank=True, default='')
+    trainer_profile = models.ForeignKey(
+        'trainer.TrainerProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='gym_classes',
+    )
+    trainer_class = models.OneToOneField(
+        'trainer.TrainerClass',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='gym_class',
+    )
     duration_minutes = models.PositiveIntegerField(default=60)
     capacity = models.PositiveIntegerField(default=20)
     description = models.TextField(blank=True, default='')
@@ -262,13 +276,33 @@ class GymSchedule(BaseModel):
         ('thursday', 'Thursday'),
         ('friday', 'Friday'),
     )
+    RECURRENCE_MODES = (
+        ('weekly', 'Weekly'),
+        ('one_off', 'One-off'),
+    )
 
     gym_class = models.ForeignKey(
         GymClass, on_delete=models.CASCADE, related_name='schedules', null=True, blank=True
     )
+    trainer_profile = models.ForeignKey(
+        'trainer.TrainerProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='gym_schedules',
+    )
+    trainer_schedule = models.OneToOneField(
+        'trainer.TrainerSchedule',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='gym_schedule',
+    )
     title = models.CharField(max_length=150)
     class_type = models.CharField(max_length=20, blank=True, default='')
     instructor = models.CharField(max_length=150, blank=True, default='')
+    recurrence_mode = models.CharField(max_length=10, choices=RECURRENCE_MODES, default='weekly')
+    scheduled_date = models.DateField(null=True, blank=True)
     day_of_week = models.CharField(max_length=10, choices=DAYS)
     start_time = models.TimeField()
     end_time = models.TimeField()
