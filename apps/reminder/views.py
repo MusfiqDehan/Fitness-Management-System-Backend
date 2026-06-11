@@ -1,5 +1,6 @@
 from django.shortcuts import render
 
+from django.db import connection
 from django.db.models import Q
 from rest_framework import status
 from rest_framework.permissions import BasePermission, IsAuthenticated
@@ -7,6 +8,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from utils.base_view import ModelCRUDView
+from utils.cache_helpers import (
+    NOTIFICATION_COUNT_TTL,
+    get_cached_value,
+    invalidate_notification_count,
+    notification_count_key,
+)
 from .models import Notification, NotificationRead
 from .serializers import NotificationSerializer
 from .utils import user_can_access_notification_feed
@@ -99,6 +106,7 @@ class NotificationView(NotificationModelActions, ModelCRUDView):
                 [NotificationRead(notification_id=nid, user=request.user) for nid in unread_ids],
                 ignore_conflicts=True,
             )
+            invalidate_notification_count(connection.schema_name, request.user.id)
             return Response({'message': 'All notifications marked as read', 'count': len(unread_ids)})
         return Response({'detail': 'Method not allowed'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
@@ -107,17 +115,28 @@ class NotificationCountView(APIView):
     permission_classes = [IsAuthenticated, CanAccessNotificationFeed]
 
     def get(self, request):
-        if _is_tenant_admin(request.user):
-            base_qs = Notification.objects.filter(
-                Q(recipient__isnull=True) | Q(recipient=request.user)
-            )
-        else:
-            base_qs = Notification.objects.filter(recipient=request.user)
+        schema_name = connection.schema_name
+        user = request.user
 
-        total = base_qs.count()
-        read_ids = NotificationRead.objects.filter(
-            user=request.user, notification_id__in=base_qs.values('id')
-        ).values_list('notification_id', flat=True)
-        read_count = len(read_ids)
-        return Response({'total': total, 'unread': total - read_count})
+        def load():
+            if _is_tenant_admin(user):
+                base_qs = Notification.objects.filter(
+                    Q(recipient__isnull=True) | Q(recipient=user)
+                )
+            else:
+                base_qs = Notification.objects.filter(recipient=user)
+
+            total = base_qs.count()
+            read_ids = NotificationRead.objects.filter(
+                user=user, notification_id__in=base_qs.values("id")
+            ).values_list("notification_id", flat=True)
+            read_count = len(read_ids)
+            return {"total": total, "unread": total - read_count}
+
+        payload = get_cached_value(
+            notification_count_key(schema_name, user.id),
+            NOTIFICATION_COUNT_TTL,
+            load,
+        )
+        return Response(payload)
 
