@@ -235,7 +235,7 @@ class ClassBookingDeleteAPIView(DestroyModelAPIView, ClassBookingBaseAPIView):
 # Contact
 class DashboardContactBaseAPIView(GenericAPIView):
     feature_key = 'crm.contacts'
-    queryset = Contact.objects.all().order_by("-created_at")
+    queryset = Contact.objects.select_related("preferred_branch").all().order_by("-created_at")
     serializer_class = ContactDashboardSerializer
     permission_classes = [HasFeatureMethodPermission]
 
@@ -370,7 +370,7 @@ class DashboardFitHiveSupportMarkAsRespondedAPIView(StatusTransitionAPIView, Das
 # Package
 class PackageDashboardBaseAPIView(GenericAPIView):
     feature_key = 'members.packages'
-    queryset = Package.objects.all().order_by('display_order', 'name')
+    queryset = Package.objects.prefetch_related("features", "addons").all().order_by('display_order', 'name')
     serializer_class = PackageSerializer
     permission_classes = [HasFeatureMethodPermission]
 
