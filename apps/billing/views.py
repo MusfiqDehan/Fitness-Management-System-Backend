@@ -46,7 +46,9 @@ from apps.tenancy.models import (
 from apps.tenancy.permissions import IsPlatformFeaturePermission
 from utils.base_view import ModelCRUDView
 from utils.list_mixins import BranchScopedListMixin
+from utils.query_optimization import optimized_payment_queryset
 from utils.tenancy_helpers import scope_queryset_by_branch_access
+from utils.cache_helpers import STATS_TTL, get_cached_value, stats_key, stats_scope_token
 
 from .models import TenantPaymentGateway, PaymentTransaction
 from .serializers import (
@@ -573,7 +575,7 @@ class PaymentAPIView(BranchScopedListMixin, ModelCRUDView):
         context["tenant"] = getattr(self.request, "tenant", None)
         context["actor"] = self.request.user
         return context
-    queryset = Payment.objects.select_related('member', 'member__member_package', 'member__branch').all().order_by('id')
+    queryset = optimized_payment_queryset(Payment.objects.all()).order_by('id')
     serializer_class = PaymentSerializer
     permission_classes = [HasFeatureMethodPermission]
     branch_scope_field = 'member__branch_id'
@@ -629,55 +631,76 @@ class PaymentStatsAPIView(APIView):
     permission_classes = [HasFeatureMethodPermission]
 
     def get(self, request):
-        payments = scope_queryset_by_branch_access(
-            Payment.objects.all(),
-            request.user,
-            branch_field='member__branch_id',
-            branch_filter_id=request.query_params.get('branch'),
-        )
+        branch_filter = request.query_params.get("branch")
+        schema_name = connection.schema_name
+        scope = stats_scope_token(request.user, branch_filter)
 
-        totals = payments.aggregate(
-            total_collected=Sum('amount', filter=Q(payment_status=Payment.STATUS_PAID)),
-            total_due=Sum('amount', filter=Q(payment_status=Payment.STATUS_DUE)),
-            partial_collected=Sum('amount', filter=Q(payment_status=Payment.STATUS_PARTIAL)),
-            transaction_count=Count('id'),
-            overdue_members=Count('member', filter=Q(payment_status=Payment.STATUS_DUE), distinct=True),
-            partial_members=Count('member', filter=Q(payment_status=Payment.STATUS_PARTIAL), distinct=True),
-        )
-
-        now = timezone.now()
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        previous_month_start = (month_start - timedelta(days=1)).replace(day=1)
-
-        current_month_collected = payments.filter(
-            payment_status=Payment.STATUS_PAID,
-            payment_date__gte=month_start,
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-
-        previous_month_collected = payments.filter(
-            payment_status=Payment.STATUS_PAID,
-            payment_date__gte=previous_month_start,
-            payment_date__lt=month_start,
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-
-        if previous_month_collected > 0:
-            trend_percent = float(
-                ((current_month_collected - previous_month_collected) / previous_month_collected) * 100
+        def load():
+            payments = scope_queryset_by_branch_access(
+                Payment.objects.all(),
+                request.user,
+                branch_field="member__branch_id",
+                branch_filter_id=request.query_params.get("branch"),
             )
-        elif current_month_collected > 0:
-            trend_percent = 100.0
-        else:
-            trend_percent = 0.0
 
-        return Response({
-            'total_collected': float(totals['total_collected'] or 0),
-            'total_due': float(totals['total_due'] or 0),
-            'partial_collected': float(totals['partial_collected'] or 0),
-            'transaction_count': totals['transaction_count'] or 0,
-            'overdue_members': totals['overdue_members'] or 0,
-            'partial_members': totals['partial_members'] or 0,
-            'trend_percent': round(trend_percent, 2),
-        })
+            totals = payments.aggregate(
+                total_collected=Sum("amount", filter=Q(payment_status=Payment.STATUS_PAID)),
+                total_due=Sum("amount", filter=Q(payment_status=Payment.STATUS_DUE)),
+                partial_collected=Sum(
+                    "amount", filter=Q(payment_status=Payment.STATUS_PARTIAL)
+                ),
+                transaction_count=Count("id"),
+                overdue_members=Count(
+                    "member", filter=Q(payment_status=Payment.STATUS_DUE), distinct=True
+                ),
+                partial_members=Count(
+                    "member",
+                    filter=Q(payment_status=Payment.STATUS_PARTIAL),
+                    distinct=True,
+                ),
+            )
+
+            now = timezone.now()
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            previous_month_start = (month_start - timedelta(days=1)).replace(day=1)
+
+            current_month_collected = payments.filter(
+                payment_status=Payment.STATUS_PAID,
+                payment_date__gte=month_start,
+            ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
+
+            previous_month_collected = payments.filter(
+                payment_status=Payment.STATUS_PAID,
+                payment_date__gte=previous_month_start,
+                payment_date__lt=month_start,
+            ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
+
+            if previous_month_collected > 0:
+                trend_percent = float(
+                    ((current_month_collected - previous_month_collected) / previous_month_collected)
+                    * 100
+                )
+            elif current_month_collected > 0:
+                trend_percent = 100.0
+            else:
+                trend_percent = 0.0
+
+            return {
+                "total_collected": float(totals["total_collected"] or 0),
+                "total_due": float(totals["total_due"] or 0),
+                "partial_collected": float(totals["partial_collected"] or 0),
+                "transaction_count": totals["transaction_count"] or 0,
+                "overdue_members": totals["overdue_members"] or 0,
+                "partial_members": totals["partial_members"] or 0,
+                "trend_percent": round(trend_percent, 2),
+            }
+
+        payload = get_cached_value(
+            stats_key(schema_name, "payment_stats", scope),
+            STATS_TTL,
+            load,
+        )
+        return Response(payload)
 
 
 class PDFRenderer(BaseRenderer):
