@@ -19,6 +19,35 @@ class TrainerProfileSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(required=False, allow_blank=True, write_only=True)
     phone = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
     branch_name = serializers.CharField(source='branch.name', read_only=True, default=None)
+    invitation_pending = serializers.SerializerMethodField()
+    invitation_id = serializers.SerializerMethodField()
+
+    def get_invitation_pending(self, obj):
+        return self._get_pending_invitation(obj) is not None
+
+    def get_invitation_id(self, obj):
+        pending = self._get_pending_invitation(obj)
+        return pending.id if pending else None
+
+    def _get_pending_invitation(self, obj):
+        invitation_map = self.context.get("pending_invitation_map")
+        email = getattr(getattr(obj, "user", None), "email", None)
+        if invitation_map is not None:
+            if not email:
+                return None
+            return invitation_map.get(email.lower())
+
+        if not email:
+            return None
+        return (
+            TrainerInvitation.objects.filter(
+                invited_email__iexact=email,
+                accepted_at__isnull=True,
+                is_deleted=False,
+            )
+            .order_by("-created_at")
+            .first()
+        )
 
     def validate_phone(self, value):
         cleaned = (value or '').strip()
@@ -66,6 +95,7 @@ class TrainerProfileSerializer(serializers.ModelSerializer):
             'is_highlighted', 'is_published',
             'instagram', 'facebook', 'youtube', 'website',
             'branch', 'branch_name',
+            'invitation_pending', 'invitation_id',
             'created_at', 'updated_at',
         ]
         read_only_fields = [
@@ -147,16 +177,17 @@ class TrainerDocumentPublicSerializer(serializers.ModelSerializer):
 # =============================================================================
 class TrainerClassSerializer(serializers.ModelSerializer):
     trainer_name = serializers.CharField(source='trainer.user.full_name', read_only=True)
-    
+    gym_class_id = serializers.IntegerField(source='gym_class.id', read_only=True, default=None)
+
     class Meta:
         model = TrainerClass
         fields = [
-            'id', 'trainer', 'trainer_name', 'name', 'description', 'category',
+            'id', 'trainer', 'trainer_name', 'gym_class_id', 'name', 'description', 'category',
             'difficulty_level', 'duration_minutes', 'max_participants',
             'equipment_needed', 'tags', 'fee', 'is_free',
             'is_active', 'is_published', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'gym_class_id']
 
 
 class TrainerClassPublicSerializer(serializers.ModelSerializer):
@@ -181,17 +212,19 @@ class TrainerClassPublicSerializer(serializers.ModelSerializer):
 class TrainerScheduleSerializer(serializers.ModelSerializer):
     trainer_class_name = serializers.CharField(source='trainer_class.name', read_only=True)
     trainer_name = serializers.CharField(source='trainer.user.full_name', read_only=True)
+    gym_schedule_id = serializers.IntegerField(source='gym_schedule.id', read_only=True, default=None)
     available_spots = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = TrainerSchedule
         fields = [
             'id', 'trainer_class', 'trainer_class_name', 'trainer', 'trainer_name',
-            'scheduled_date', 'start_time', 'end_time', 'location', 'room_number',
-            'current_participants', 'available_spots', 'is_full', 'is_cancelled',
-            'cancellation_reason', 'is_active', 'is_published', 'created_at', 'updated_at',
+            'gym_schedule_id', 'day_of_week', 'scheduled_date', 'start_time', 'end_time',
+            'location', 'room_number', 'current_participants', 'available_spots', 'is_full',
+            'is_cancelled', 'cancellation_reason', 'is_active', 'is_published',
+            'created_at', 'updated_at',
         ]
-        read_only_fields = ['created_at', 'updated_at', 'is_full']
+        read_only_fields = ['created_at', 'updated_at', 'is_full', 'gym_schedule_id']
 
     def get_available_spots(self, obj):
         return max(0, obj.trainer_class.max_participants - obj.current_participants)

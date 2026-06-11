@@ -13,9 +13,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from apps.tenancy.models import Feature, TenantFeatureFlag
-from apps.gym_branch.models import Branch
 from utils.limits import branch_capacity_exceeded
+from utils.tenancy_helpers import (
+    get_branch_manager_scope_ids as _branch_manager_scope_ids,
+    is_tenant_admin_user as _is_tenant_admin,
+    scope_queryset_by_branch_access,
+)
 
 from .models import Role, RolePermission, UserRole
 from .permissions import IsRoleAdmin
@@ -25,35 +28,13 @@ from .serializers import (
     UserRoleSerializer,
 )
 from .utils import get_user_permission_map
-
-
-def _is_tenant_admin(user) -> bool:
-    return bool(
-        user
-        and user.is_authenticated
-        and (user.is_superuser or user.is_staff or getattr(user, "role", "") == "admin")
-    )
-
-
-def _branch_manager_scope_ids(user):
-    """Return managed branch IDs for branch-managers, None for unrestricted users."""
-    if not (user and user.is_authenticated):
-        return None
-    if _is_tenant_admin(user):
-        return None
-
-    has_branch_manager_role = UserRole.objects.filter(
-        user_id=user.id,
-        role__slug="branch_manager",
-    ).exists()
-    if not has_branch_manager_role:
-        return None
-
-    return list(
-        Branch.objects.filter(manager_id=user.id).values_list("id", flat=True)
-    )
-
-
+from utils.cache_helpers import (
+    ACCESS_ME_TTL,
+    access_me_key,
+    get_cached_value,
+    invalidate_role_permissions,
+    invalidate_user_permissions,
+)
 class RoleListCreateView(generics.ListCreateAPIView):
     queryset = Role.objects.all().prefetch_related("permissions", "user_assignments").order_by("id")
     serializer_class = RoleSerializer
@@ -70,7 +51,9 @@ class RoleDetailView(generics.RetrieveUpdateDestroyAPIView):
         if instance.is_system:
             from rest_framework.exceptions import ValidationError
             raise ValidationError("System roles cannot be deleted.")
+        role_id = instance.id
         instance.delete()
+        invalidate_role_permissions(connection.schema_name, role_id)
 
 
 class RolePermissionsView(APIView):
@@ -108,23 +91,24 @@ class RolePermissionsView(APIView):
             for key, p in existing.items():
                 if key not in sent_keys:
                     p.delete()
+        invalidate_role_permissions(connection.schema_name, role.id)
         return Response({"status": "ok"})
 
 
 class UserRoleListCreateView(generics.ListCreateAPIView):
-    queryset = UserRole.objects.select_related("role").all().order_by("id")
+    queryset = UserRole.objects.select_related("role", "branch").all().order_by("id")
     serializer_class = UserRoleSerializer
     permission_classes = [IsRoleAdmin]
     pagination_class = None  # user-role list is small; return a plain array
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        scope_ids = _branch_manager_scope_ids(self.request.user)
-        if scope_ids is None:
-            return queryset
-        if not scope_ids:
-            return queryset.none()
-        return queryset.filter(branch_id__in=scope_ids)
+        return scope_queryset_by_branch_access(
+            queryset,
+            self.request.user,
+            branch_field="branch_id",
+            branch_filter_id=self.request.query_params.get("branch"),
+        )
 
     def perform_create(self, serializer):
         actor_email = getattr(self.request.user, "email", "") or ""
@@ -153,21 +137,27 @@ class UserRoleListCreateView(generics.ListCreateAPIView):
                 raise PermissionDenied(breach)
 
         serializer.save(**save_kwargs)
+        invalidate_user_permissions(connection.schema_name, serializer.instance.user_id)
 
 
 class UserRoleDetailView(generics.RetrieveDestroyAPIView):
-    queryset = UserRole.objects.all()
+    queryset = UserRole.objects.select_related("role", "branch").all()
     serializer_class = UserRoleSerializer
     permission_classes = [IsRoleAdmin]
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        scope_ids = _branch_manager_scope_ids(self.request.user)
-        if scope_ids is None:
-            return queryset
-        if not scope_ids:
-            return queryset.none()
-        return queryset.filter(branch_id__in=scope_ids)
+        return scope_queryset_by_branch_access(
+            queryset,
+            self.request.user,
+            branch_field="branch_id",
+            branch_filter_id=self.request.query_params.get("branch"),
+        )
+
+    def perform_destroy(self, instance):
+        user_id = instance.user_id
+        instance.delete()
+        invalidate_user_permissions(connection.schema_name, user_id)
 
 
 class MyPermissionsView(APIView):
@@ -177,43 +167,56 @@ class MyPermissionsView(APIView):
 
     def get(self, request):
         user = request.user
-        is_tenant_admin = bool(
-            user.is_superuser
-            or user.is_staff
-            or getattr(user, "role", "") == "admin"
-        )
-        permission_map = get_user_permission_map(user)
-        role_slugs = list(
-            UserRole.objects.filter(user_id=user.id)
-            .select_related("role")
-            .values_list("role__slug", flat=True)
-            .distinct()
-        )
-        # Resolve tenant from request first; older users can have null/stale user.tenant.
-        tenant = getattr(request, "tenant", None) or getattr(user, "tenant", None)
-        feature_keys: list[str] = []
-        if tenant is not None and connection.schema_name != get_public_schema_name():
-            flags = TenantFeatureFlag.objects.filter(tenant=tenant).select_related("feature")
-            feature_keys = [f.feature.key for f in flags if f.is_effectively_enabled]
-            # 'custom_domain' is only exposed when the global master switch, the
-            # per-tenant switch, and (when present) the feature flag all agree.
-            from apps.tenancy.services import (
-                CUSTOM_DOMAIN_FEATURE_KEY,
-                custom_domain_effectively_enabled,
+        schema_name = connection.schema_name
+
+        def build_payload():
+            is_tenant_admin = bool(
+                user.is_superuser
+                or user.is_staff
+                or getattr(user, "role", "") == "admin"
             )
-            feature_keys = [k for k in feature_keys if k != CUSTOM_DOMAIN_FEATURE_KEY]
-            if custom_domain_effectively_enabled(tenant):
-                feature_keys.append(CUSTOM_DOMAIN_FEATURE_KEY)
-        return Response({
-            "user_id": user.id,
-            "email": user.email,
-            "full_name": getattr(user, "full_name", "") or "",
-            "role": getattr(user, "role", "") or "",
-            "role_slugs": role_slugs,
-            "is_tenant_admin": is_tenant_admin,
-            "permissions": permission_map,
-            "enabled_features": feature_keys,
-        })
+            permission_map = get_user_permission_map(user)
+            role_slugs = list(
+                UserRole.objects.filter(user_id=user.id)
+                .select_related("role")
+                .values_list("role__slug", flat=True)
+                .distinct()
+            )
+            tenant = getattr(request, "tenant", None) or getattr(user, "tenant", None)
+            feature_keys: list[str] = []
+            if tenant is not None and schema_name != get_public_schema_name():
+                from apps.tenancy.services import (
+                    CUSTOM_DOMAIN_FEATURE_KEY,
+                    custom_domain_effectively_enabled,
+                    get_tenant_enabled_feature_keys,
+                )
+
+                feature_keys = sorted(get_tenant_enabled_feature_keys(tenant))
+                feature_keys = [
+                    key for key in feature_keys if key != CUSTOM_DOMAIN_FEATURE_KEY
+                ]
+                if custom_domain_effectively_enabled(tenant):
+                    feature_keys.append(CUSTOM_DOMAIN_FEATURE_KEY)
+            return {
+                "user_id": user.id,
+                "email": user.email,
+                "full_name": getattr(user, "full_name", "") or "",
+                "role": getattr(user, "role", "") or "",
+                "role_slugs": role_slugs,
+                "is_tenant_admin": is_tenant_admin,
+                "permissions": permission_map,
+                "enabled_features": feature_keys,
+            }
+
+        if schema_name == get_public_schema_name():
+            return Response(build_payload())
+
+        payload = get_cached_value(
+            access_me_key(schema_name, user.id),
+            ACCESS_ME_TTL,
+            build_payload,
+        )
+        return Response(payload)
 
 
 class TenantFeatureCatalogView(APIView):

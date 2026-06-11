@@ -13,6 +13,11 @@ from .models import (
     PlatformRolePermission,
     PlatformUserRole,
 )
+from utils.cache_helpers import (
+    PLATFORM_PERMISSION_TTL,
+    get_cached_value,
+    platform_permission_map_key,
+)
 
 
 # ---------------------------------------------------------------
@@ -43,21 +48,43 @@ def is_public_platform_user(user):
     return user_tenant_schema == public_schema
 
 
+def _compute_platform_user_permission_map(user) -> dict[str, str]:
+    role_ids = list(
+        PlatformUserRole.objects.filter(user=user).values_list("role_id", flat=True)
+    )
+    if not role_ids:
+        return {}
+    aggregate: dict[str, str] = {}
+    for module_key, level in PlatformRolePermission.objects.filter(
+        role_id__in=role_ids
+    ).values_list("module_key", "permission_level"):
+        current = aggregate.get(module_key)
+        if current is None or PERMISSION_HIERARCHY.get(level, 0) > PERMISSION_HIERARCHY.get(
+            current, 0
+        ):
+            aggregate[module_key] = level
+    return aggregate
+
+
+def get_platform_user_permission_map(user) -> dict[str, str]:
+    if not (user and user.is_authenticated):
+        return {}
+    if is_superadmin(user):
+        return {module: "full" for module in PLATFORM_MODULES}
+    return get_cached_value(
+        platform_permission_map_key(user.id),
+        PLATFORM_PERMISSION_TTL,
+        lambda: _compute_platform_user_permission_map(user),
+    )
+
+
 def get_platform_user_permission_level(user, module_key):
     """Return the highest permission level a user has across all platform roles."""
     if not (user and user.is_authenticated):
         return "none"
     if is_superadmin(user):
         return "full"
-    role_ids = PlatformUserRole.objects.filter(user=user).values_list("role_id", flat=True)
-    if not role_ids:
-        return "none"
-    levels = PlatformRolePermission.objects.filter(
-        role_id__in=list(role_ids), module_key=module_key
-    ).values_list("permission_level", flat=True)
-    if not levels:
-        return "none"
-    return max(levels, key=lambda lv: PERMISSION_HIERARCHY.get(lv, 0))
+    return get_platform_user_permission_map(user).get(module_key, "none")
 
 
 # ---------------------------------------------------------------

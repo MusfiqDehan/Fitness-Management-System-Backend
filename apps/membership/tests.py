@@ -1,16 +1,21 @@
 from unittest.mock import MagicMock, patch
+from datetime import timedelta
 
 from django.urls import reverse
+from django.utils import timezone
 from django_tenants.utils import schema_context
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, APITestCase, force_authenticate
 
+from apps.access.models import Role, UserRole
+from apps.gym_branch.models import Branch
 from apps.identity.models import User
 from apps.tenancy.models import Domain, Feature, PaymentGateway, Tenant, TenantFeatureFlag
 from apps.billing.models import PaymentTransaction, TenantPaymentGateway
+from utils.tenancy_helpers import scope_queryset_by_branch_access
 
 from .models import GymClass, Member, MemberPackage, Payment
-from .views import GymClassView, PublicGymClassListAPIView, PublicMemberRegistrationAPIView
+from .views import GymClassView, MemberView, PaymentView, PublicGymClassListAPIView, PublicMemberRegistrationAPIView
 
 
 class GymClassMediaApiTests(APITestCase):
@@ -75,6 +80,21 @@ class GymClassMediaApiTests(APITestCase):
 			return view(request, **kwargs)
 
 	def test_gym_class_admin_create_accepts_uploaded_media_url(self):
+		with schema_context(self.tenant.schema_name):
+			from apps.trainer.models import TrainerProfile
+
+			trainer_user = User.objects.create_user(
+				email='ava@membership.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+				full_name='Ava Stone',
+			)
+			trainer_profile = TrainerProfile.objects.create(
+				user=trainer_user,
+				username='ava-stone',
+				title='Yoga Instructor',
+			)
+
 		response = self._call_tenant_view(
 			GymClassView.as_view(),
 			'post',
@@ -84,6 +104,7 @@ class GymClassMediaApiTests(APITestCase):
 				'class_type': 'yoga',
 				'level': 'beginner',
 				'instructor': 'Ava Stone',
+				'trainer_profile': trainer_profile.id,
 				'duration_minutes': 45,
 				'capacity': 18,
 				'description': 'Mobility-first morning class',
@@ -94,6 +115,22 @@ class GymClassMediaApiTests(APITestCase):
 
 		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 		self.assertEqual(response.data['image_url'], '/media/uploads/classes/sunrise-flow.jpg')
+		self.assertEqual(response.data['trainer_profile'], trainer_profile.id)
+
+	def test_gym_class_admin_create_requires_trainer(self):
+		response = self._call_tenant_view(
+			GymClassView.as_view(),
+			'post',
+			reverse('membership:gymclass-list'),
+			{
+				'name': 'No Trainer Class',
+				'class_type': 'yoga',
+				'level': 'beginner',
+				'instructor': 'Nobody',
+			},
+			user=self.user,
+		)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 	def test_public_gym_classes_include_image_url(self):
 		with schema_context(self.tenant.schema_name):
@@ -253,3 +290,277 @@ class PublicMemberCheckoutFlowTests(APITestCase):
 
 			self.assertIsNotNone(member.id)
 			self.assertEqual(Payment.objects.filter(member=member).count(), 0)
+
+
+class BranchScopedListHelpersTests(APITestCase):
+	def setUp(self):
+		with schema_context('public'):
+			self.public = Tenant.objects.create(
+				schema_name='public',
+				name='Public',
+				slug='public',
+				code='PUBMEM03',
+				owner_email='root3@membership.test',
+				billing_email='root3@membership.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain='testserver',
+				tenant=self.public,
+				defaults={'is_primary': True},
+			)
+
+			self.tenant = Tenant.objects.create(
+				schema_name='membership_scope_test',
+				name='Membership Scope Tenant',
+				slug='membership-scope',
+				code='MEMSCOPE1',
+				owner_email='admin@scope.test',
+				billing_email='admin@scope.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.create(domain='scope.testserver', tenant=self.tenant, is_primary=True)
+
+		with schema_context(self.tenant.schema_name):
+			self.admin = User.objects.create_superuser(
+				email='admin@scope.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+			)
+			self.branch_manager = User.objects.create_user(
+				email='manager@scope.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+				full_name='Branch Manager',
+			)
+			self.branch_a = Branch.objects.create(name='Downtown', manager_id=self.branch_manager.id)
+			self.branch_b = Branch.objects.create(name='Uptown')
+
+			role = Role.objects.create(name='Branch Manager', slug='branch_manager')
+			UserRole.objects.create(
+				user_id=self.branch_manager.id,
+				user_email=self.branch_manager.email,
+				branch=self.branch_a,
+				role=role,
+			)
+
+			package = MemberPackage.objects.create(
+				name='Starter',
+				package_type='monthly',
+				duration_in_days=30,
+				price='1200.00',
+			)
+
+			self.member_a = Member.objects.create(
+				full_name='Alice Downtown',
+				phone_number='01710010001',
+				membership_type='package',
+				member_package=package,
+				branch=self.branch_a,
+			)
+			self.member_b = Member.objects.create(
+				full_name='Bob Uptown',
+				phone_number='01710010002',
+				membership_type='package',
+				member_package=package,
+				branch=self.branch_b,
+			)
+
+			self.payment_old = Payment.objects.create(
+				member=self.member_a,
+				payment_type='package',
+				amount='500.00',
+				payment_method='cash',
+				payment_status='paid',
+				payment_date=timezone.now() - timedelta(days=10),
+			)
+			self.payment_recent = Payment.objects.create(
+				member=self.member_a,
+				payment_type='package',
+				amount='700.00',
+				payment_method='cash',
+				payment_status='paid',
+				payment_date=timezone.now() - timedelta(days=1),
+			)
+
+		self.factory = APIRequestFactory()
+
+	def test_branch_manager_member_scope_returns_only_managed_branch_records(self):
+		with schema_context(self.tenant.schema_name):
+			queryset = scope_queryset_by_branch_access(
+				Member.objects.order_by('id'),
+				self.branch_manager,
+				branch_field='branch_id',
+			)
+
+			self.assertEqual(list(queryset.values_list('id', flat=True)), [self.member_a.id])
+
+	def test_admin_branch_filter_returns_only_requested_branch_records(self):
+		with schema_context(self.tenant.schema_name):
+			queryset = scope_queryset_by_branch_access(
+				Member.objects.order_by('id'),
+				self.admin,
+				branch_field='branch_id',
+				branch_filter_id=str(self.branch_b.id),
+			)
+
+			self.assertEqual(list(queryset.values_list('id', flat=True)), [self.member_b.id])
+
+	@patch("apps.billing.services.payment_confirmation.dispatch_member_payment")
+	def test_membership_payment_create_dispatches_notify_channels(self, mock_dispatch):
+		payload = {
+			"member": self.member_a.id,
+			"payment_type": "package",
+			"amount": "900.00",
+			"payment_method": "cash",
+			"payment_status": "paid",
+			"notify_channels": ["email", "in_app"],
+		}
+		self.client.force_authenticate(user=self.admin)
+		with self.captureOnCommitCallbacks(execute=True):
+			response = self.client.post(
+				"/api/v1/membership/payments/",
+				payload,
+				format="json",
+				HTTP_HOST="scope.testserver",
+			)
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		mock_dispatch.assert_called_once()
+		channels = mock_dispatch.call_args[0][1]
+		self.assertEqual(channels, ["email", "in_app"])
+
+	def test_membership_payment_create_auto_generates_invoice_no(self):
+		payload = {
+			"member": self.member_a.id,
+			"payment_type": "package",
+			"amount": "850.00",
+			"payment_method": "cash",
+			"payment_status": "paid",
+		}
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			"/api/v1/membership/payments/",
+			payload,
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(response.data["invoice_no"], f"INV-{response.data['id']:06d}")
+
+	def test_payment_view_get_queryset_applies_date_range_filters(self):
+		request = self.factory.get(
+			reverse('membership:payment-list'),
+			{
+				'from_date': (timezone.now() - timedelta(days=2)).date().isoformat(),
+				'to_date': timezone.now().date().isoformat(),
+			},
+		)
+		force_authenticate(request, user=self.admin)
+
+		with schema_context(self.tenant.schema_name):
+			view = PaymentView()
+			view.request = request
+			view.args = ()
+			view.kwargs = {}
+
+			queryset = view.get_queryset()
+
+			self.assertEqual(list(queryset.values_list('id', flat=True)), [self.payment_recent.id])
+
+
+class MemberInvitationResendTests(APITestCase):
+	def setUp(self):
+		with schema_context('public'):
+			self.public = Tenant.objects.create(
+				schema_name='public',
+				name='Public',
+				slug='public',
+				code='PUBMEM04',
+				owner_email='root4@membership.test',
+				billing_email='root4@membership.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain='testserver',
+				tenant=self.public,
+				defaults={'is_primary': True},
+			)
+
+			self.tenant = Tenant.objects.create(
+				schema_name='membership_invite_resend',
+				name='Membership Invite Resend Tenant',
+				slug='membership-invite-resend',
+				code='MEMINV001',
+				owner_email='admin@invite.test',
+				billing_email='admin@invite.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.create(domain='invite.testserver', tenant=self.tenant, is_primary=True)
+
+		with schema_context(self.tenant.schema_name):
+			self.admin = User.objects.create_superuser(
+				email='admin@invite.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+			)
+			self.pending_member = Member.objects.create(
+				full_name='Pending Member',
+				phone_number='01710020001',
+				email='pending@example.com',
+				membership_type='monthly',
+				invitation_token='pending-token-abc',
+				invitation_sent_at=timezone.now(),
+				invitation_expires_at=timezone.now() + timedelta(days=7),
+				is_active=False,
+			)
+			self.registered_member = Member.objects.create(
+				full_name='Registered Member',
+				phone_number='01710020002',
+				email='registered@example.com',
+				membership_type='monthly',
+				is_active=True,
+			)
+
+		self.factory = APIRequestFactory()
+
+	def _patch_member_action(self, member_id, action, user=None):
+		path = reverse('membership:member-detail', kwargs={'pk': member_id})
+		request = self.factory.patch(f'{path}?action={action}')
+		request.tenant = self.tenant
+		force_authenticate(request, user=user or self.admin)
+		with schema_context(self.tenant.schema_name):
+			return MemberView.as_view()(request, pk=member_id)
+
+	@patch('apps.membership.views._send_member_invitation_email')
+	def test_resend_invitation_success(self, mock_send):
+		mock_send.return_value = 'https://example.com/register?token=new'
+
+		response = self._patch_member_action(self.pending_member.id, 'resend_invitation')
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertTrue(response.data['invitation_sent'])
+		mock_send.assert_called_once()
+
+	def test_resend_invitation_rejects_registered_member(self):
+		response = self._patch_member_action(self.registered_member.id, 'resend_invitation')
+
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertIn('already completed', response.data['detail'])
+
+	@patch('apps.membership.views._send_member_invitation_email')
+	def test_member_serializer_exposes_invitation_pending(self, mock_send):
+		mock_send.return_value = 'https://example.com/register?token=new'
+		from .serializers import MemberSerializer
+
+		with schema_context(self.tenant.schema_name):
+			pending_data = MemberSerializer(self.pending_member).data
+			registered_data = MemberSerializer(self.registered_member).data
+
+		self.assertTrue(pending_data['invitation_pending'])
+		self.assertFalse(registered_data['invitation_pending'])

@@ -69,9 +69,13 @@ class BranchSerializer(serializers.ModelSerializer):
         return None
 
     def get_members_count(self, obj):
+        if hasattr(obj, "members_count"):
+            return obj.members_count
         return obj.members.count() if hasattr(obj, "members") else 0
 
     def get_trainers_count(self, obj):
+        if hasattr(obj, "trainers_count"):
+            return obj.trainers_count
         return obj.trainers.count() if hasattr(obj, "trainers") else 0
 
     # ── Facility JSON normalisation (supports multipart string payloads) ──

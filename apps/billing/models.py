@@ -89,6 +89,12 @@ class PaymentTransaction(BaseModel):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["source_payment", "created_at"],
+                name="idx_paytx_source_created",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.tran_id} [{self.status}]"

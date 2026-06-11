@@ -5,11 +5,55 @@ from django_tenants.utils import get_public_schema_name, schema_context
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 from rest_framework import serializers
+import calendar
 
 from apps.dashboard.models import GymPreferences
 from utils.currency import convert_currency
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
 from datetime import date
+
+
+def _format_elapsed_ymd(start: date | None, end: date | None = None) -> str:
+    """Format elapsed time between two dates as 'x years y months z days'."""
+    if start is None:
+        return "0 years 0 months 0 days"
+
+    effective_end = end or date.today()
+    if start > effective_end:
+        return "0 years 0 months 0 days"
+
+    years = effective_end.year - start.year
+    months = effective_end.month - start.month
+    days = effective_end.day - start.day
+
+    if days < 0:
+        prev_month = effective_end.month - 1 or 12
+        prev_year = effective_end.year if effective_end.month > 1 else effective_end.year - 1
+        days += calendar.monthrange(prev_year, prev_month)[1]
+        months -= 1
+
+    if months < 0:
+        months += 12
+        years -= 1
+
+    if years < 0:
+        return "0 years 0 months 0 days"
+
+    return f"{years} years {months} months {days} days"
+
+
+def _format_elapsed_years(start: date | None, end: date | None = None) -> str:
+    """Format elapsed time between two dates as 'x.y years'."""
+    if start is None:
+        return "0.0 years"
+
+    effective_end = end or date.today()
+    if start > effective_end:
+        return "0.0 years"
+
+    days = (effective_end - start).days
+    years = days / 365.2425
+    return f"{years:.1f} years"
 
 
 class PackageCurrencyDisplayMixin:
@@ -153,6 +197,11 @@ class MemberSerializer(serializers.ModelSerializer):
     )
     remaining_days = serializers.IntegerField(read_only=True)
     branch_name = serializers.CharField(source='branch.name', read_only=True, default=None)
+    duration = serializers.SerializerMethodField()
+    duration_years = serializers.SerializerMethodField()
+    age = serializers.SerializerMethodField()
+    age_years = serializers.SerializerMethodField()
+    invitation_pending = serializers.SerializerMethodField()
 
     class Meta:
         model = Member
@@ -160,21 +209,37 @@ class MemberSerializer(serializers.ModelSerializer):
             'id', 'full_name', 'phone_number', 'email', 'gender',
             'date_of_birth', 'address', 'membership_type',
             'member_package', 'member_package_id',
-            'start_date', 'end_date', 'remaining_days',
+            'start_date', 'end_date', 'remaining_days', 'duration', 'duration_years', 'age', 'age_years',
             'card_id', 'fingerprint_id',
             'emergency_contact_name', 'emergency_contact_phone', 'notes',
             'payment_method', 'payment_status', 'photo',
             'branch', 'branch_name',
-            'is_active', 'is_published', 'created_at', 'updated_at',
+            'is_active', 'is_published', 'invitation_pending',
+            'created_at', 'updated_at',
         )
         read_only_fields = ['created_at', 'updated_at', 'remaining_days']
 
+    def get_duration(self, obj):
+        return _format_elapsed_ymd(obj.start_date)
+
+    def get_duration_years(self, obj):
+        return _format_elapsed_years(obj.start_date)
+
+    def get_age(self, obj):
+        return _format_elapsed_ymd(obj.date_of_birth)
+
+    def get_age_years(self, obj):
+        return _format_elapsed_years(obj.date_of_birth)
+
+    def get_invitation_pending(self, obj):
+        return bool(obj.invitation_token)
+
     def validate(self, attrs):
         membership_type = attrs.get('membership_type', getattr(self.instance, 'membership_type', None))
-        member_package = attrs.get('member_package', getattr(self.instance, 'member_package', None))
+        email = attrs.get('email', getattr(self.instance, 'email', None))
 
-        if membership_type == 'package' and member_package is None:
-            raise serializers.ValidationError({'member_package_id': 'This field is required for package memberships.'})
+        if not email:
+            raise serializers.ValidationError({'email': 'This field is required.'})
 
         if membership_type == 'monthly':
             attrs['member_package'] = None
@@ -230,34 +295,7 @@ class MemberPublicSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-# ----------------------------
-# Payment
-# ----------------------------
-class PaymentSerializer(serializers.ModelSerializer):
-    member_name = serializers.CharField(source='member.full_name', read_only=True)
-    member_phone = serializers.CharField(source='member.phone_number', read_only=True)
-    member_email = serializers.CharField(source='member.email', read_only=True)
-    package_name = serializers.CharField(source='member.member_package.name', read_only=True)
-    payment_type_display = serializers.CharField(source='get_payment_type_display', read_only=True)
-    payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
-    payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
-
-    class Meta:
-        model = Payment
-        fields = (
-            'id', 'member', 'member_name', 'member_phone', 'member_email', 'package_name',
-            'payment_type', 'payment_type_display',
-            'amount',
-            'payment_method', 'payment_method_display',
-            'payment_status', 'payment_status_display',
-            'payment_date', 'invoice_no', 'note', 'is_paid',
-            'is_active', 'is_published', 'created_at',
-        )
-        read_only_fields = [
-            'created_at', 'member_name', 'member_phone', 'member_email', 'package_name',
-            'payment_type_display', 'payment_method_display', 'payment_status_display',
-        ]
-
+# PaymentSerializer (notify dispatch, renewal sync) lives in apps.billing.serializers.
 
 # ----------------------------
 # Attendance
@@ -291,6 +329,8 @@ class MemberMinimalSerializer(serializers.ModelSerializer):
 class GymClassSerializer(serializers.ModelSerializer):
     class_type_display = serializers.CharField(source='get_class_type_display', read_only=True)
     level_display = serializers.CharField(source='get_level_display', read_only=True)
+    trainer_name = serializers.CharField(source='trainer_profile.user.full_name', read_only=True, default=None)
+    trainer_profile_id = serializers.IntegerField(source='trainer_profile_id', read_only=True)
     image_url = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
@@ -298,10 +338,19 @@ class GymClassSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'name', 'class_type', 'class_type_display',
             'level', 'level_display', 'instructor',
-            'duration_minutes', 'capacity', 'description', 'image_url',
-            'is_active', 'created_at', 'updated_at',
+            'trainer_profile', 'trainer_profile_id', 'trainer_name',
+            'trainer_class', 'duration_minutes', 'capacity', 'description', 'image_url',
+            'is_active', 'is_published', 'created_at', 'updated_at',
         )
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'trainer_class', 'trainer_profile_id', 'trainer_name']
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if self.instance is None and not attrs.get('trainer_profile'):
+            raise serializers.ValidationError({'trainer_profile': 'Trainer assignment is required.'})
+        if self.instance is not None and 'trainer_profile' in attrs and attrs['trainer_profile'] is None:
+            raise serializers.ValidationError({'trainer_profile': 'Trainer assignment cannot be removed.'})
+        return attrs
 
     def validate_image_url(self, value):
         normalized = (value or '').strip()
@@ -325,13 +374,42 @@ class GymClassSerializer(serializers.ModelSerializer):
 # ----------------------------
 class GymScheduleSerializer(serializers.ModelSerializer):
     day_of_week_display = serializers.CharField(source='get_day_of_week_display', read_only=True)
+    trainer_name = serializers.CharField(source='trainer_profile.user.full_name', read_only=True, default=None)
+    recurrence_mode_display = serializers.CharField(source='get_recurrence_mode_display', read_only=True)
 
     class Meta:
         model = GymSchedule
         fields = (
-            'id', 'gym_class', 'title', 'class_type', 'instructor',
+            'id', 'gym_class', 'trainer_profile', 'trainer_schedule', 'title', 'class_type', 'instructor',
+            'recurrence_mode', 'recurrence_mode_display', 'scheduled_date',
             'day_of_week', 'day_of_week_display',
             'start_time', 'end_time', 'capacity',
-            'is_active', 'created_at', 'updated_at',
+            'is_active', 'is_published', 'created_at', 'updated_at',
         )
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'trainer_schedule', 'trainer_name', 'recurrence_mode_display']
+
+
+class UnifiedClassSerializer(GymClassSerializer):
+    source = serializers.SerializerMethodField()
+
+    class Meta(GymClassSerializer.Meta):
+        fields = GymClassSerializer.Meta.fields + ('source',)
+
+    def get_source(self, obj):
+        return 'admin' if obj.trainer_profile_id else 'trainer'
+
+
+class UnifiedScheduleSerializer(GymScheduleSerializer):
+    trainer_class_name = serializers.SerializerMethodField()
+    source = serializers.SerializerMethodField()
+
+    class Meta(GymScheduleSerializer.Meta):
+        fields = GymScheduleSerializer.Meta.fields + ('trainer_class_name', 'source')
+
+    def get_trainer_class_name(self, obj):
+        if obj.gym_class and obj.gym_class.trainer_class_id:
+            return obj.gym_class.trainer_class.name
+        return obj.title
+
+    def get_source(self, obj):
+        return 'weekly' if obj.recurrence_mode == 'weekly' else 'one_off'

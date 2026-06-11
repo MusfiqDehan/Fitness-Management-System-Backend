@@ -14,6 +14,8 @@ from .views import (
     AttendanceView,
     GymClassView,
     GymScheduleView,
+    UnifiedClassListAPIView,
+    UnifiedScheduleListAPIView,
     PublicMemberRegistrationAPIView,
     PublicPackageListAPIView,
     PublicPackageRetrieveAPIView,
@@ -34,7 +36,7 @@ urlpatterns = [
     # ========== MEMBERS ==========
     # GET/POST         /members/                            → list / create
     # GET/PUT/PATCH/DELETE /members/{pk}/                   → retrieve / update / soft delete
-    # PATCH            /members/{pk}/?action=activate|deactivate|restore
+    # PATCH            /members/{pk}/?action=activate|deactivate|restore|resend_invitation
     path('members/', MemberView.as_view(), name='member-list'),
     path('members/import/', MemberImportAPIView.as_view(), name='member-import'),
     path('members/<int:pk>/', MemberView.as_view(), name='member-detail'),
@@ -56,6 +58,8 @@ urlpatterns = [
     path('gym-classes/<int:pk>/', GymClassView.as_view(), name='gymclass-detail'),
     path('gym-schedules/', GymScheduleView.as_view(), name='gymschedule-list'),
     path('gym-schedules/<int:pk>/', GymScheduleView.as_view(), name='gymschedule-detail'),
+    path('unified-classes/', UnifiedClassListAPIView.as_view(), name='unified-class-list'),
+    path('unified-schedules/', UnifiedScheduleListAPIView.as_view(), name='unified-schedule-list'),
 
     # ========== PUBLIC (Landing Page) ==========
     path('public/register/', PublicMemberRegistrationAPIView.as_view(), name='public-register'),

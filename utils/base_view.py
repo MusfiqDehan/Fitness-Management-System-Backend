@@ -86,8 +86,11 @@ class ModelCRUDView(GenericAPIView):
     def put(self, request, pk, **kwargs):
         return self._update(pk, request, partial=False)
 
-    # PATCH /resources/{pk}/ — partial update
+    # PATCH /resources/{pk}/ — partial update or action dispatch
     def patch(self, request, pk, **kwargs):
+        action = request.query_params.get('action')
+        if action:
+            return self._handle_action(pk, action, request)
         return self._update(pk, request, partial=True)
 
     # DELETE /resources/{pk}/ — soft delete

@@ -12,7 +12,18 @@ from apps.attendance.models import AccessDevice, AttendanceIngestEvent, DeviceUs
 from apps.attendance.serializers import AccessDeviceSerializer
 from apps.attendance.services import realtime as realtime_service
 from apps.attendance.services.ingestion import ADMSIngestionService
-from apps.attendance.views import AccessCheckAPIView, IclockCdataAPIView, IclockGetRequestAPIView, _build_attlog_sync_command
+from apps.attendance.views import (
+	AccessCheckAPIView,
+	AttendanceLogListAPIView,
+	IclockCdataAPIView,
+	IclockGetRequestAPIView,
+	MemberAttendanceLogListAPIView,
+	MembersInsideAPIView,
+	_build_attlog_sync_command,
+)
+from apps.access.models import Role, UserRole
+from apps.gym_branch.models import Branch
+from apps.identity.models import User
 from apps.membership.models import Attendance, Member
 from apps.tenancy.models import AccessDeviceRoute, Domain, Tenant
 
@@ -358,3 +369,171 @@ class AttendanceRealtimePublishTests(TestCase):
 		realtime_service.publish_attendance_event("attendance-updated", {"member_id": 11})
 
 		mock_async_to_sync.assert_not_called()
+
+
+class AttendanceBranchScopeTests(TestCase):
+	@classmethod
+	def setUpTestData(cls):
+		with schema_context("public"):
+			cls.public_tenant = Tenant.objects.create(
+				schema_name="public",
+				name="Public",
+				slug="public",
+				code="PUBATTS1",
+				owner_email="root@attendance-scope.test",
+				billing_email="root@attendance-scope.test",
+				status="active",
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain="testserver",
+				tenant=cls.public_tenant,
+				defaults={"is_primary": True},
+			)
+
+			cls.tenant = Tenant.objects.create(
+				schema_name="attendance_scope_test",
+				name="Attendance Scope Tenant",
+				slug="attendance-scope-tenant",
+				code="ATTSCOPE1",
+				owner_email="admin@attendance-scope.test",
+				billing_email="admin@attendance-scope.test",
+				status="active",
+				is_trial=False,
+			)
+			Domain.objects.create(domain="attendance-scope.testserver", tenant=cls.tenant, is_primary=True)
+
+		with schema_context(cls.tenant.schema_name):
+			cls.branch_manager = User.objects.create_user(
+				email="manager@attendance-scope.test",
+				password="StrongPass123!",
+				tenant=cls.tenant,
+				full_name="Branch Manager",
+			)
+			cls.other_user = User.objects.create_user(
+				email="staff@attendance-scope.test",
+				password="StrongPass123!",
+				tenant=cls.tenant,
+				full_name="Staff User",
+			)
+
+			cls.branch_a = Branch.objects.create(name="Downtown", manager=cls.branch_manager)
+			cls.branch_b = Branch.objects.create(name="Uptown")
+
+			role = Role.objects.create(name="Branch Manager", slug="branch_manager")
+			UserRole.objects.create(
+				user_id=cls.branch_manager.id,
+				user_email=cls.branch_manager.email,
+				branch=cls.branch_a,
+				role=role,
+			)
+
+			cls.member_a = Member.objects.create(
+				full_name="Alice Downtown",
+				phone_number="01770010001",
+				branch=cls.branch_a,
+			)
+			cls.member_b = Member.objects.create(
+				full_name="Bob Uptown",
+				phone_number="01770010002",
+				branch=cls.branch_b,
+			)
+
+			Attendance.objects.create(
+				member=cls.member_a,
+				entry_method="card",
+				device_id="SN-A",
+			)
+			Attendance.objects.create(
+				member=cls.member_b,
+				entry_method="fingerprint",
+				device_id="SN-B",
+			)
+
+			cls.member_user = User.objects.create_user(
+				email="member-self@attendance-scope.test",
+				password="StrongPass123!",
+				tenant=cls.tenant,
+				role="student",
+			)
+			cls.member_self = Member.objects.create(
+				full_name="Self Member",
+				phone_number="01770010003",
+				email=cls.member_user.email,
+				branch=cls.branch_a,
+			)
+			self_log_current = Attendance.objects.create(
+				member=cls.member_self,
+				entry_method="card",
+				device_id="SN-SELF-1",
+			)
+			self_log_old = Attendance.objects.create(
+				member=cls.member_self,
+				entry_method="fingerprint",
+				device_id="SN-SELF-2",
+			)
+			Attendance.objects.filter(id=self_log_old.id).update(
+				check_in_time=timezone.now() - timedelta(days=40),
+			)
+
+	def setUp(self):
+		self.factory = APIRequestFactory()
+
+	def test_attendance_logs_only_return_managed_branch_records_for_branch_manager(self):
+		request = self.factory.get("/api/v1/attendance/logs/")
+		request.user = self.branch_manager
+
+		with schema_context(self.tenant.schema_name):
+			view = AttendanceLogListAPIView()
+			view.request = request
+			view.args = ()
+			view.kwargs = {}
+
+			queryset = view.get_queryset()
+			self.assertEqual(list(queryset.values_list("member_id", flat=True)), [self.member_a.id])
+
+	def test_members_inside_only_return_managed_branch_records_for_branch_manager(self):
+		request = self.factory.get("/api/v1/attendance/access/members-inside/")
+		request.user = self.branch_manager
+
+		with schema_context(self.tenant.schema_name):
+			response = MembersInsideAPIView().get(request)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data["total_inside"], 1)
+		self.assertEqual(response.data["members"][0]["member_name"], "Alice Downtown")
+
+	def test_attendance_logs_default_to_today_when_no_filters(self):
+		request = self.factory.get("/api/v1/attendance/logs/")
+		request.user = self.branch_manager
+
+		with schema_context(self.tenant.schema_name):
+			stale_log = Attendance.objects.create(
+				member=self.member_a,
+				entry_method="card",
+				device_id="SN-OLD",
+			)
+			Attendance.objects.filter(id=stale_log.id).update(
+				check_in_time=timezone.now() - timedelta(days=1),
+			)
+
+			view = AttendanceLogListAPIView()
+			view.request = request
+			view.args = ()
+			view.kwargs = {}
+
+			queryset = view.get_queryset()
+			self.assertNotIn(stale_log.id, list(queryset.values_list("id", flat=True)))
+
+	def test_member_attendance_logs_default_to_current_month(self):
+		request = self.factory.get("/api/v1/attendance/logs/my/")
+		request.user = self.member_user
+
+		with schema_context(self.tenant.schema_name):
+			view = MemberAttendanceLogListAPIView()
+			view.request = request
+			view.args = ()
+			view.kwargs = {}
+
+			queryset = view.get_queryset()
+			self.assertEqual(list(queryset.values_list("member_id", flat=True)), [self.member_self.id])

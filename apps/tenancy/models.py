@@ -3,6 +3,7 @@ import secrets
 from datetime import timedelta
 
 from django.db import models
+from django.db.models import Q
 from django_tenants.models import TenantMixin, DomainMixin
 from django.utils import timezone
 
@@ -116,6 +117,14 @@ class Tenant(TenantMixin):
 # schema before the view is called.
 # ---------------------------------------------------------------
 class Domain(DomainMixin):
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["tenant", "is_primary", "id"],
+                name="idx_domain_tenant_primary",
+            ),
+        ]
+
     def save(self, *args, **kwargs):
         if self.domain:
             self.domain = self.domain.strip().lower()
@@ -559,6 +568,12 @@ class PlatformPackage(models.Model):
 
     class Meta:
         ordering = ["sort_order", "price_monthly"]
+        indexes = [
+            models.Index(
+                fields=["is_active", "is_public", "sort_order", "price_monthly"],
+                name="idx_platpkg_active_public_sort",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.slug})"
@@ -638,6 +653,14 @@ class TenantFeatureFlag(models.Model):
         unique_together = [("tenant", "feature")]
         indexes = [
             models.Index(fields=["tenant", "is_enabled"], name="idx_tff_tenant_enabled"),
+            models.Index(
+                fields=["grace_until"],
+                name="idx_tff_grace_expiry",
+                condition=Q(
+                    is_enabled=True,
+                    grace_until__isnull=False,
+                ),
+            ),
         ]
 
     def __str__(self):
@@ -760,6 +783,10 @@ class TenantSubscriptionInvoice(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["tenant", "created_at"], name="idx_tsubinv_tenant_created"),
+            models.Index(fields=["status", "created_at"], name="idx_tsubinv_status_created"),
+        ]
 
     def __str__(self):
         return f"Invoice {self.tran_id} — {self.tenant.schema_name} [{self.status}]"

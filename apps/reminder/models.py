@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from utils.base_model import BaseModel
 
 
@@ -16,6 +17,9 @@ class Notification(BaseModel):
     CLASS_BOOKING_CONFIRMED = 'class_booking_confirmed'
     NEW_BOOKING_RECEIVED = 'new_booking_received'
     BOOKING_CANCELLED = 'booking_cancelled'
+    PAYMENT_CONFIRMED = 'payment_confirmed'
+    PAYMENT_RECEIVED = 'payment_received'
+    SUBSCRIPTION_PAYMENT_CONFIRMED = 'subscription_payment_confirmed'
 
     NOTIFICATION_TYPE_CHOICES = [
         (TENANT_REGISTERED, 'Tenant Registered'),
@@ -27,6 +31,9 @@ class Notification(BaseModel):
         (CLASS_BOOKING_CONFIRMED, 'Class Booking Confirmed'),
         (NEW_BOOKING_RECEIVED, 'New Booking Received'),
         (BOOKING_CANCELLED, 'Booking Cancelled'),
+        (PAYMENT_CONFIRMED, 'Payment Confirmed'),
+        (PAYMENT_RECEIVED, 'Payment Received'),
+        (SUBSCRIPTION_PAYMENT_CONFIRMED, 'Subscription Payment Confirmed'),
     ]
 
     notification_type = models.CharField(
@@ -53,6 +60,17 @@ class Notification(BaseModel):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(
+                fields=['recipient', 'created_at'],
+                name='idx_notif_recip_created',
+            ),
+            models.Index(
+                fields=['created_at'],
+                name='idx_notif_broadcast',
+                condition=Q(recipient__isnull=True),
+            ),
+        ]
 
     def __str__(self):
         return f"[{self.notification_type}] {self.title}"

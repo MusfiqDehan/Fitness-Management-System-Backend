@@ -33,6 +33,7 @@ from apps.access.permissions import HasFeatureMethodPermission
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.response import Response
+from utils.list_mixins import BranchScopedListMixin
 
 
 class ListModelAPIView(GenericAPIView):
@@ -234,7 +235,7 @@ class ClassBookingDeleteAPIView(DestroyModelAPIView, ClassBookingBaseAPIView):
 # Contact
 class DashboardContactBaseAPIView(GenericAPIView):
     feature_key = 'crm.contacts'
-    queryset = Contact.objects.all().order_by("-created_at")
+    queryset = Contact.objects.select_related("preferred_branch").all().order_by("-created_at")
     serializer_class = ContactDashboardSerializer
     permission_classes = [HasFeatureMethodPermission]
 
@@ -369,7 +370,7 @@ class DashboardFitHiveSupportMarkAsRespondedAPIView(StatusTransitionAPIView, Das
 # Package
 class PackageDashboardBaseAPIView(GenericAPIView):
     feature_key = 'members.packages'
-    queryset = Package.objects.all().order_by('display_order', 'name')
+    queryset = Package.objects.prefetch_related("features", "addons").all().order_by('display_order', 'name')
     serializer_class = PackageSerializer
     permission_classes = [HasFeatureMethodPermission]
 
@@ -423,17 +424,28 @@ class PackageDashboardDeleteAPIView(DestroyModelAPIView, MemberPackageDashboardB
 
 
 # Member
-class MemberDashboardBaseAPIView(GenericAPIView):
+class MemberDashboardBaseAPIView(BranchScopedListMixin, GenericAPIView):
     feature_key = 'members'
-    queryset = Member.objects.select_related('member_package').all().order_by('-created_at')
+    queryset = Member.objects.select_related('member_package', 'branch').all().order_by('id')
     serializer_class = MemberSerializer
     permission_classes = [HasFeatureMethodPermission]
-
-    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['membership_type', 'member_package', 'is_active']
-    search_fields = ['full_name', 'phone_number', 'card_id', 'fingerprint_id']
-    ordering_fields = ['start_date', 'end_date', 'full_name', 'created_at']
-    ordering = ['-created_at']
+    branch_scope_field = 'branch_id'
+    filterset_fields = ['membership_type', 'member_package', 'is_active', 'branch']
+    search_fields = ['full_name', 'phone_number', 'email', 'branch__name', 'card_id', 'fingerprint_id']
+    ordering_fields = [
+        'id',
+        'full_name',
+        'phone_number',
+        'email',
+        'branch__name',
+        'member_package__name',
+        'is_active',
+        'payment_status',
+        'start_date',
+        'end_date',
+        'created_at',
+    ]
+    ordering = ['id']
 
 
 class MemberDashboardListAPIView(ListModelAPIView, MemberDashboardBaseAPIView):
@@ -457,17 +469,16 @@ class MemberDashboardDeleteAPIView(DestroyModelAPIView, MemberDashboardBaseAPIVi
 
 
 # Attendance
-class AttendanceDashboardBaseAPIView(GenericAPIView):
+class AttendanceDashboardBaseAPIView(BranchScopedListMixin, GenericAPIView):
     feature_key = 'members.attendance'
-    queryset = Attendance.objects.select_related('member').all().order_by('-check_in_time')
+    queryset = Attendance.objects.select_related('member', 'member__branch').all().order_by('id')
     serializer_class = AttendanceSerializer
     permission_classes = [HasFeatureMethodPermission]
-
-    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    branch_scope_field = 'member__branch_id'
     filterset_fields = ['entry_method', 'member']
     search_fields = ['member__full_name', 'device_id']
-    ordering_fields = ['check_in_time', 'check_out_time', 'member__full_name']
-    ordering = ['-check_in_time']
+    ordering_fields = ['id', 'check_in_time', 'check_out_time', 'member__full_name', 'device_id', 'created_at']
+    ordering = ['id']
 
 
 class AttendanceDashboardListAPIView(ListModelAPIView, AttendanceDashboardBaseAPIView):

@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 import hashlib
 import hmac
 import logging
@@ -6,22 +6,27 @@ import secrets
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import connection
 from django.db import transaction
 from django.http import HttpResponse as PlainTextResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_tenants.utils import get_public_schema_name, schema_context
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status
 from rest_framework.generics import ListAPIView, ListCreateAPIView, RetrieveUpdateDestroyAPIView
 from rest_framework.permissions import AllowAny
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import BasePermission, IsAuthenticated
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.membership.models import Attendance, Member
 from apps.tenancy.models import AccessDeviceRoute, Tenant
+from utils.pagination import StandardPagination
+from utils.tenancy_helpers import scope_queryset_by_branch_access
 from .models import AccessDevice, AttendanceIngestEvent, DeviceCredential, DeviceUser
 
 logger = logging.getLogger(__name__)
@@ -173,6 +178,12 @@ class MembersInsideAPIView(APIView):
 		inside_members = Attendance.objects.filter(
 			check_out_time__isnull=True,
 		).select_related("member")
+		inside_members = scope_queryset_by_branch_access(
+			inside_members,
+			request.user,
+			branch_field="member__branch_id",
+			branch_filter_id=request.query_params.get("branch"),
+		)
 
 		data = [
 			{
@@ -345,17 +356,111 @@ class DeviceHealthAPIView(APIView):
 		)
 
 
+def _parse_int_query_param(value):
+	if value in (None, ""):
+		return None
+	try:
+		return int(value)
+	except (TypeError, ValueError):
+		return None
+
+
+def _apply_attendance_date_filters(queryset, query_params, *, default_mode="day"):
+	raw_day = (query_params.get("day") or "").strip()
+	if raw_day:
+		try:
+			day_value = date.fromisoformat(raw_day)
+		except ValueError:
+			return queryset.none()
+		return queryset.filter(check_in_time__date=day_value)
+
+	month_value = _parse_int_query_param(query_params.get("month"))
+	year_value = _parse_int_query_param(query_params.get("year"))
+
+	if month_value is not None:
+		if month_value < 1 or month_value > 12:
+			return queryset.none()
+		effective_year = year_value if year_value and year_value > 0 else timezone.localdate().year
+		return queryset.filter(check_in_time__year=effective_year, check_in_time__month=month_value)
+
+	if year_value is not None:
+		if year_value <= 0:
+			return queryset.none()
+		return queryset.filter(check_in_time__year=year_value)
+
+	today = timezone.localdate()
+	if default_mode == "month":
+		return queryset.filter(check_in_time__year=today.year, check_in_time__month=today.month)
+	return queryset.filter(check_in_time__date=today)
+
+
 class AttendanceLogListAPIView(ListAPIView):
 	feature_keys = ["members.attendance", "attendance.access_gate"]
 	permission_classes = [HasFeatureMethodPermission]
 	serializer_class = AttendanceLogSerializer
+	pagination_class = StandardPagination
+	filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+	filterset_fields = ["entry_method"]
+	search_fields = ["member__full_name", "device_id"]
+	ordering_fields = ["id", "check_in_time", "check_out_time", "member__full_name", "device_id"]
+	ordering = ["-check_in_time"]
 
 	def get_queryset(self):
 		queryset = Attendance.objects.select_related("member").order_by("-check_in_time")
+		queryset = scope_queryset_by_branch_access(
+			queryset,
+			self.request.user,
+			branch_field="member__branch_id",
+			branch_filter_id=self.request.query_params.get("branch"),
+		)
+		queryset = _apply_attendance_date_filters(
+			queryset,
+			self.request.query_params,
+			default_mode="day",
+		)
 		device_sn = self.request.query_params.get("device_sn")
 		if device_sn:
 			queryset = queryset.filter(device_id=device_sn)
+
+		checkout_status = (self.request.query_params.get("checkout_status") or "").strip().lower()
+		if checkout_status == "inside":
+			queryset = queryset.filter(check_out_time__isnull=True)
+		elif checkout_status == "completed":
+			queryset = queryset.filter(check_out_time__isnull=False)
+
 		return queryset
+
+
+class MemberAttendanceLogListAPIView(ListAPIView):
+	permission_classes = [IsAuthenticated]
+	serializer_class = AttendanceLogSerializer
+	pagination_class = StandardPagination
+	filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+	filterset_fields = ["entry_method"]
+	search_fields = ["device_id"]
+	ordering_fields = ["id", "check_in_time", "check_out_time", "device_id"]
+	ordering = ["-check_in_time"]
+
+	def get_queryset(self):
+		queryset = Attendance.objects.select_related("member").order_by("-check_in_time")
+		try:
+			member = self.request.user.member
+		except ObjectDoesNotExist:
+			return queryset.none()
+
+		queryset = queryset.filter(member=member)
+
+		checkout_status = (self.request.query_params.get("checkout_status") or "").strip().lower()
+		if checkout_status == "inside":
+			queryset = queryset.filter(check_out_time__isnull=True)
+		elif checkout_status == "completed":
+			queryset = queryset.filter(check_out_time__isnull=False)
+
+		return _apply_attendance_date_filters(
+			queryset,
+			self.request.query_params,
+			default_mode="month",
+		)
 
 
 class FingerprintUnlinkedListAPIView(ListAPIView):

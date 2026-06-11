@@ -44,8 +44,9 @@ CORE_FEATURES = [
     ("reminders", "Reminders & Notifications", None),
     ("settings", "Settings", None),
     ("permissions", "Roles & Permissions", None),
-    ("email_config", "Email Config", None),
     # Gated capability without a sidebar entry (controls custom-domain self-service).
+    ("email_config", "Email Config", None),
+    ("public_website", "Landing Page Setup", None),
     ("custom_domain", "Custom Domain", None),
 ]
 
@@ -90,10 +91,10 @@ PACKAGES = {
         "features": [
             "dashboard", "members", "members.attendance", "members.packages",
             "attendance.devices", "attendance.access_gate", "attendance.fingerprints", "attendance.iclock",
-            "instructors", "classes", "classes.bookings",
+            "instructors", "classes", "reports",
             "payments", "payments.invoices",
             "crm.contacts", "crm.inquiries",
-            "reminders", "settings", "email_config",
+            "settings", "email_config",
         ],
     },
     "growth": {
@@ -134,11 +135,11 @@ PACKAGES = {
         "features": [
             "dashboard", "members", "members.attendance", "members.packages",
             "attendance.devices", "attendance.access_gate", "attendance.fingerprints", "attendance.iclock",
-            "instructors", "classes", "classes.bookings",
+            "instructors", "classes",
             "payments", "payments.invoices", "payments.gateways",
             "crm.contacts", "crm.inquiries",
             "cms.banners", "cms.blogs",
-            "branches", "reports", "reminders", "settings", "permissions", "email_config",
+            "branches", "reports", "settings", "permissions", "email_config", "public_website",
             "custom_domain",
         ],
     },

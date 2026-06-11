@@ -142,6 +142,7 @@ TENANT_REGISTRY: list[RegistryItem] = [
         "group": "Finance",
         "children": [
             {"key": "payments",          "name": "Payments",         "route": "/payments",         "icon": "CreditCard"},
+            {"key": "subscriptions",   "name": "Subscriptions",    "route": "/subscriptions",    "icon": "Receipt"},
             {"key": "payments.invoices", "name": "Invoices",          "route": None,                "icon": "FileText"},
             {"key": "payments.gateways", "name": "Payment Gateways",  "route": "/payment-gateways", "icon": "Landmark"},
             {"key": "members.packages",  "name": "Packages",          "route": "/packages",         "icon": "Boxes"},
@@ -174,6 +175,8 @@ TENANT_REGISTRY: list[RegistryItem] = [
             {"key": "attendance.fingerprints", "name": "Fingerprints",       "route": "/fingerprints", "icon": "UserCheck"},
             {"key": "attendance.access_gate",  "name": "Access Gate",        "route": None,           "icon": "DoorOpen"},
             {"key": "attendance.iclock",       "name": "iClock Ingestion",   "route": None,           "icon": "Cpu"},
+            {"key": "email_config", "name": "Email Config", "route": None, "icon": "Mail"},
+            {"key": "public_website", "name": "Landing Page Setup", "route": None, "icon": "Monitor"},
             {"key": "permissions",   "name": "Rules & Permission", "route": "/permissions", "icon": "ShieldCheck"},
             {"key": "settings",      "name": "Settings",           "route": "/settings",    "icon": "Settings"},
         ],

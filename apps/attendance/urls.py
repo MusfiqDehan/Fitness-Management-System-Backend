@@ -18,6 +18,7 @@ from .views import (
 	IclockDeviceCmdAPIView,
 	IclockGetRequestAPIView,
 	MembersInsideAPIView,
+	MemberAttendanceLogListAPIView,
 )
 
 app_name = 'attendance'
@@ -25,6 +26,7 @@ app_name = 'attendance'
 urlpatterns = [
 	path('access/check/', AccessCheckAPIView.as_view(), name='access-check'),
 	path('access/members-inside/', MembersInsideAPIView.as_view(), name='access-members-inside'),
+	path('logs/my/', MemberAttendanceLogListAPIView.as_view(), name='logs-my-list'),
 	path('logs/', AttendanceLogListAPIView.as_view(), name='logs-list'),
 	path('fingerprints/unlinked/', FingerprintUnlinkedListAPIView.as_view(), name='fingerprints-unlinked'),
 	path('fingerprints/link/', FingerprintLinkAPIView.as_view(), name='fingerprints-link'),

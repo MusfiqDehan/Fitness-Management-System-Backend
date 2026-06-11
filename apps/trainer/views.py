@@ -8,14 +8,17 @@ from django.db import transaction
 from django.db.models import Avg, Sum
 from django.utils import timezone
 from django.conf import settings
+import secrets
 
 from utils.base_view import ModelCRUDView
+from utils.list_mixins import BranchScopedListMixin, SearchFilterSortPaginationMixin
 from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
+from utils.query_optimization import build_pending_trainer_invitation_map
+from utils.tenancy_helpers import get_branch_manager_scope_ids as _branch_manager_scope_ids
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.access.utils import user_can
-from apps.access.models import UserRole
 from apps.crm.email_delivery import resolve_tenant_mail_route
-from apps.gym_branch.models import Branch
+from apps.membership.services.class_catalog import ClassCatalogService, ClassCatalogServiceError
 from .models import (
     TrainerProfile, TrainerDocument, TrainerClass,
     TrainerSchedule, ScheduleBooking, TrainerRating, TrainerInvitation,
@@ -35,31 +38,6 @@ from .serializers import (
 
 def _is_trainer_user(user) -> bool:
     return bool(getattr(user, 'is_authenticated', False) and getattr(user, 'role', '') == 'trainer')
-
-
-def _is_tenant_admin_user(user) -> bool:
-    return bool(
-        user
-        and user.is_authenticated
-        and (user.is_superuser or user.is_staff or getattr(user, 'role', '') == 'admin')
-    )
-
-
-def _branch_manager_scope_ids(user):
-    """Return managed branch IDs for branch managers, otherwise None."""
-    if not (user and user.is_authenticated):
-        return None
-    if _is_tenant_admin_user(user):
-        return None
-
-    has_branch_manager_role = UserRole.objects.filter(
-        user_id=user.id,
-        role__slug='branch_manager',
-    ).exists()
-    if not has_branch_manager_role:
-        return None
-
-    return list(Branch.objects.filter(manager_id=user.id).values_list('id', flat=True))
 
 
 def _get_trainer_profile_for_user(user):
@@ -122,28 +100,59 @@ class TrainerModelActions:
 # =============================================================================
 # TRAINER PROFILE
 # =============================================================================
-class TrainerProfileView(TrainerModelActions, ModelCRUDView):
+class TrainerProfileView(BranchScopedListMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerProfile + actions."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
-    queryset = TrainerProfile.objects.select_related('user').all()
+    queryset = TrainerProfile.objects.select_related('user', 'branch').all()
     serializer_class = TrainerProfileSerializer
     permission_classes = [IsTrainerOrFeaturePermission]
+    branch_scope_field = 'branch_id'
+    filterset_fields = ['branch', 'is_active', 'is_highlighted', 'is_published']
+    search_fields = ['user__full_name', 'user__email', 'username', 'title']
+    ordering_fields = ['id', 'user__full_name', 'average_rating', 'experience_years', 'created_at']
+    ordering = ['id']
 
     actions = {
         'recalc': lambda self, req, pk: self._recalc(req, pk),
+        'activate': lambda self, req, pk: self._toggle_trainer_active(req, pk, True),
+        'deactivate': lambda self, req, pk: self._toggle_trainer_active(req, pk, False),
     }
+
+    def _list(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        items = page if page is not None else queryset
+        emails = [
+            getattr(getattr(profile, "user", None), "email", None)
+            for profile in items
+        ]
+        context = self.get_serializer_context()
+        context["pending_invitation_map"] = build_pending_trainer_invitation_map(emails)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True, context=context)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True, context=context)
+        return Response(serializer.data)
+
+    def _toggle_trainer_active(self, request, pk, value):
+        try:
+            profile = self.get_queryset().get(pk=pk)
+        except TrainerProfile.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        user = profile.user
+        user.is_active = value
+        user.save(update_fields=['is_active'])
+        return Response({
+            'message': 'Activated' if value else 'Deactivated',
+            'is_active': value,
+        })
 
     def get_queryset(self):
         queryset = super().get_queryset()
         if _is_trainer_user(self.request.user):
             queryset = queryset.filter(user=self.request.user)
-        scope_ids = _branch_manager_scope_ids(self.request.user)
-        if scope_ids is not None:
-            if not scope_ids:
-                return queryset.none()
-            queryset = queryset.filter(branch_id__in=scope_ids)
-        return queryset
+        return self.scope_branch_queryset(queryset)
 
     def _create(self, request):
         if _is_trainer_user(request.user):
@@ -185,25 +194,15 @@ class TrainerProfileView(TrainerModelActions, ModelCRUDView):
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-    def _list(self, request):
-        queryset = self.filter_queryset(self.get_queryset())
-        # Highlighted trainers first
-        queryset = queryset.order_by('-is_highlighted', '-average_rating', 'user__full_name')
-        page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
-
-
 class TrainerProfileMeView(APIView):
     """GET /api/v1/trainer/me/ — current trainer's profile."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
-            profile = TrainerProfile.objects.get(user=request.user, is_deleted=False)
+            profile = TrainerProfile.objects.select_related('user', 'branch').get(
+                user=request.user, is_deleted=False
+            )
         except TrainerProfile.DoesNotExist:
             return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
         serializer = TrainerProfileSerializer(profile)
@@ -245,7 +244,7 @@ class TrainerPublicProfileView(APIView):
 
     def get(self, request, username):
         try:
-            profile = TrainerProfile.objects.get(
+            profile = TrainerProfile.objects.select_related('user').get(
                 username=username,
                 is_published=True,
                 is_deleted=False,
@@ -298,7 +297,7 @@ class TrainerPublicProfileView(APIView):
 # =============================================================================
 # TRAINER DOCUMENT
 # =============================================================================
-class TrainerDocumentView(TrainerModelActions, ModelCRUDView):
+class TrainerDocumentView(SearchFilterSortPaginationMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerDocument."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
@@ -346,11 +345,11 @@ class TrainerDocumentView(TrainerModelActions, ModelCRUDView):
 # =============================================================================
 # TRAINER CLASS
 # =============================================================================
-class TrainerClassView(TrainerModelActions, ModelCRUDView):
+class TrainerClassView(SearchFilterSortPaginationMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerClass."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
-    queryset = TrainerClass.objects.select_related('trainer__user').all()
+    queryset = TrainerClass.objects.select_related('trainer__user', 'gym_class').all()
     serializer_class = TrainerClassSerializer
     permission_classes = [IsTrainerOrFeaturePermission]
 
@@ -360,18 +359,23 @@ class TrainerClassView(TrainerModelActions, ModelCRUDView):
             queryset = queryset.filter(trainer__user=self.request.user)
         return queryset
 
+    def _catalog_service(self, request):
+        return ClassCatalogService(user=request.user)
+
     def _create(self, request):
         if _is_trainer_user(request.user):
             profile = _get_trainer_profile_for_user(request.user)
             if profile is None:
                 return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
-            data = request.data.copy()
-            data['trainer'] = profile.id
-            serializer = self.get_serializer(data=data)
+            serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
-            instance = serializer.save()
-            if getattr(instance, 'trainer', None) and hasattr(instance.trainer, 'recalc_stats'):
-                instance.trainer.recalc_stats()
+            try:
+                instance = self._catalog_service(request).create_trainer_class(
+                    profile,
+                    serializer.validated_data,
+                )
+            except ClassCatalogServiceError as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
             return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -385,9 +389,14 @@ class TrainerClassView(TrainerModelActions, ModelCRUDView):
         old_trainer = getattr(instance, 'trainer', None)
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        updated = serializer.save()
+        if _is_trainer_user(request.user):
+            try:
+                updated = self._catalog_service(request).update_trainer_class(instance, serializer.validated_data)
+            except ClassCatalogServiceError as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        else:
+            updated = serializer.save()
 
-        # Recalculate old/new trainer stats in case trainer ownership changed.
         if old_trainer and hasattr(old_trainer, 'recalc_stats'):
             old_trainer.recalc_stats()
         if getattr(updated, 'trainer', None) and hasattr(updated.trainer, 'recalc_stats'):
@@ -445,12 +454,12 @@ class TrainerClassListPublicView(APIView):
 # =============================================================================
 # TRAINER SCHEDULE
 # =============================================================================
-class TrainerScheduleView(TrainerModelActions, ModelCRUDView):
+class TrainerScheduleView(SearchFilterSortPaginationMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerSchedule."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
     queryset = TrainerSchedule.objects.select_related(
-        'trainer_class', 'trainer__user'
+        'trainer_class', 'trainer__user', 'gym_schedule'
     ).all()
     serializer_class = TrainerScheduleSerializer
     permission_classes = [IsTrainerOrFeaturePermission]
@@ -461,22 +470,24 @@ class TrainerScheduleView(TrainerModelActions, ModelCRUDView):
             queryset = queryset.filter(trainer__user=self.request.user)
         return queryset
 
+    def _catalog_service(self, request):
+        return ClassCatalogService(user=request.user)
+
     def _create(self, request):
         if _is_trainer_user(request.user):
             profile = _get_trainer_profile_for_user(request.user)
             if profile is None:
                 return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
 
-            trainer_class_id = request.data.get('trainer_class')
-            trainer_class = TrainerClass.objects.filter(pk=trainer_class_id, trainer=profile, is_deleted=False).first()
-            if trainer_class is None:
-                return Response({'error': 'Class not found or not owned by this trainer'}, status=status.HTTP_400_BAD_REQUEST)
-
-            data = request.data.copy()
-            data['trainer'] = profile.id
-            serializer = self.get_serializer(data=data)
+            serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
-            instance = serializer.save()
+            try:
+                instance = self._catalog_service(request).create_trainer_schedule(
+                    profile,
+                    serializer.validated_data,
+                )
+            except ClassCatalogServiceError as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
             return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
         return super()._create(request)
 
@@ -589,7 +600,11 @@ class BookingCheckInView(APIView):
 
     def patch(self, request, pk):
         try:
-            booking = ScheduleBooking.objects.get(pk=pk, is_deleted=False)
+            booking = ScheduleBooking.objects.select_related(
+                'schedule__trainer_class',
+                'schedule__trainer__user',
+                'member',
+            ).get(pk=pk, is_deleted=False)
         except ScheduleBooking.DoesNotExist:
             return Response({'error': 'Booking not found'}, status=status.HTTP_404_NOT_FOUND)
         
@@ -608,7 +623,11 @@ class BookingCancelView(APIView):
 
     def delete(self, request, pk):
         try:
-            booking = ScheduleBooking.objects.get(pk=pk, is_deleted=False)
+            booking = ScheduleBooking.objects.select_related(
+                'schedule__trainer_class',
+                'schedule__trainer__user',
+                'member',
+            ).get(pk=pk, is_deleted=False)
         except ScheduleBooking.DoesNotExist:
             return Response({'error': 'Booking not found'}, status=status.HTTP_404_NOT_FOUND)
         
@@ -628,7 +647,7 @@ class BookingCancelView(APIView):
 # =============================================================================
 # TRAINER RATING
 # =============================================================================
-class TrainerRatingView(TrainerModelActions, ModelCRUDView):
+class TrainerRatingView(SearchFilterSortPaginationMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerRating."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
@@ -726,22 +745,117 @@ class MyTrainerRatingsView(APIView):
 # =============================================================================
 # TRAINER INVITATION
 # =============================================================================
-class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
+def _send_trainer_invitation_email(invitation, request, force_new_token=False) -> str:
+    """Send trainer invitation email. Returns invite URL."""
+    from django.core.mail import EmailMultiAlternatives
+    from django.template.loader import render_to_string
+
+    now = timezone.now()
+    if force_new_token or invitation.is_expired():
+        invitation.token = secrets.token_urlsafe(48)
+        invitation.invitation_expires_at = now + timezone.timedelta(days=7)
+        invitation.save(update_fields=['token', 'invitation_expires_at', 'updated_at'])
+
+    invite_url = f"{request.scheme}://{request.get_host()}/trainer/register?token={invitation.token}"
+    company_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'Your Gym'
+    invited_by_name = getattr(getattr(request, 'user', None), 'full_name', None) or getattr(
+        getattr(request, 'user', None), 'email', ''
+    )
+
+    context = {
+        'company_name': company_name,
+        'invited_by_name': invited_by_name,
+        'invitation_url': invite_url,
+        'expires_at': invitation.invitation_expires_at,
+    }
+    html_body = render_to_string('trainer/emails/trainer_invitation_email.html', context)
+    fallback_text = (
+        f"Hi,\n\n"
+        f"{invited_by_name} has invited you to join {company_name} as a Trainer on Fitssort.\n\n"
+        f"Complete your registration here:\n{invite_url}\n\n"
+        f"This link expires on {invitation.invitation_expires_at}."
+    )
+    tenant = getattr(request, 'tenant', None)
+    from_email, connection = resolve_tenant_mail_route(tenant)
+    email = EmailMultiAlternatives(
+        subject=f"You're invited to join {company_name} as a Trainer",
+        body=fallback_text,
+        from_email=from_email,
+        to=[invitation.invited_email],
+        connection=connection,
+    )
+    email.attach_alternative(html_body, 'text/html')
+    try:
+        email.send(fail_silently=False)
+    except Exception:
+        fallback_email = EmailMultiAlternatives(
+            subject=f"You're invited to join {company_name} as a Trainer",
+            body=fallback_text,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
+            to=[invitation.invited_email],
+        )
+        fallback_email.attach_alternative(html_body, 'text/html')
+        fallback_email.send(fail_silently=False)
+
+    return invite_url
+
+
+class TrainerInvitationView(BranchScopedListMixin, TrainerModelActions, ModelCRUDView):
     """CRUD for TrainerInvitation."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
-    queryset = TrainerInvitation.objects.select_related('invited_by').all()
+    queryset = TrainerInvitation.objects.select_related('invited_by', 'branch').all()
     serializer_class = TrainerInvitationSerializer
     permission_classes = [HasFeatureMethodPermission]
+    branch_scope_field = 'branch_id'
+    filterset_fields = ['branch', 'is_active', 'is_published']
+    search_fields = ['invited_email', 'full_name', 'phone_number']
+    ordering_fields = ['id', 'created_at', 'invited_email', 'full_name']
+    ordering = ['id']
+
+    actions = {
+        'resend': lambda self, req, pk: self._resend_invitation(req, pk),
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        scope_ids = _branch_manager_scope_ids(self.request.user)
-        if scope_ids is None:
-            return queryset
-        if not scope_ids:
-            return queryset.none()
-        return queryset.filter(branch_id__in=scope_ids)
+        return self.scope_branch_queryset(queryset)
+
+    def _resend_invitation(self, request, pk):
+        try:
+            invitation = self.get_queryset().get(pk=pk)
+        except TrainerInvitation.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if invitation.accepted_at:
+            return Response(
+                {'detail': 'Invitation has already been accepted.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not invitation.invited_email:
+            return Response(
+                {'detail': 'Invitation does not have an email address.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            invite_url = _send_trainer_invitation_email(
+                invitation,
+                request,
+                force_new_token=True,
+            )
+        except Exception as exc:
+            return Response(
+                {'error': f'Failed to send invitation email: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response({
+            'message': 'Invitation resent successfully',
+            'invitation_sent': True,
+            'invite_url': invite_url,
+        })
 
     def _create(self, request):
         payload = request.data.copy()
@@ -788,53 +902,10 @@ class TrainerInvitationView(TrainerModelActions, ModelCRUDView):
         serializer.is_valid(raise_exception=True)
         invitation = serializer.save()
 
-        # Build invitation URL
-        invite_url = f"{request.scheme}://{request.get_host()}/trainer/register?token={invitation.token}"
-
-        # Resolve gym name from tenant context
-        company_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'Your Gym'
-        invited_by_name = getattr(request.user, 'full_name', None) or getattr(request.user, 'email', '')
-
-        # Send HTML email using the trainer invitation template
         try:
-            from django.core.mail import EmailMultiAlternatives
-            from django.template.loader import render_to_string
-
-            context = {
-                'company_name': company_name,
-                'invited_by_name': invited_by_name,
-                'invitation_url': invite_url,
-                'expires_at': invitation.invitation_expires_at,
-            }
-            html_body = render_to_string('trainer/emails/trainer_invitation_email.html', context)
-            fallback_text = (
-                f"Hi,\n\n"
-                f"{invited_by_name} has invited you to join {company_name} as a Trainer on Fitssort.\n\n"
-                f"Complete your registration here:\n{invite_url}\n\n"
-                f"This link expires on {invitation.invitation_expires_at}."
-            )
-            tenant = getattr(request, 'tenant', None)
-            from_email, connection = resolve_tenant_mail_route(tenant)
-            email = EmailMultiAlternatives(
-                subject=f"You're invited to join {company_name} as a Trainer",
-                body=fallback_text,
-                from_email=from_email,
-                to=[invitation.invited_email],
-                connection=connection,
-            )
-            email.attach_alternative(html_body, 'text/html')
-            try:
-                email.send(fail_silently=False)
-            except Exception:
-                fallback_email = EmailMultiAlternatives(
-                    subject=f"You're invited to join {company_name} as a Trainer",
-                    body=fallback_text,
-                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@gym.local'),
-                    to=[invitation.invited_email],
-                )
-                fallback_email.attach_alternative(html_body, 'text/html')
-                fallback_email.send(fail_silently=False)
+            invite_url = _send_trainer_invitation_email(invitation, request)
         except Exception as e:
+            invite_url = f"{request.scheme}://{request.get_host()}/trainer/register?token={invitation.token}"
             return Response({
                 'error': f'Invitation created but email failed: {str(e)}',
                 'invitation_id': invitation.id,

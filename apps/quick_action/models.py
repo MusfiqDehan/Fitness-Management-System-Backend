@@ -82,6 +82,11 @@ class Contact(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "created_at"], name="idx_contact_status_created"),
+        ]
+
     def __str__(self):
         return f"{self.name} - {self.subject}"
 
@@ -112,6 +117,11 @@ class FitHiveSupport(models.Model):
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "created_at"], name="idx_fithive_status_created"),
+        ]
 
     def __str__(self):
         return f"{self.name} - {self.interested_in}"

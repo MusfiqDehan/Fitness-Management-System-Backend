@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 from apps.membership.models import Member
 
@@ -50,6 +51,9 @@ class AccessDevice(models.Model):
 
 	class Meta:
 		ordering = ["-updated_at"]
+		indexes = [
+			models.Index(fields=["is_active", "updated_at"], name="idx_accessdev_active_updated"),
+		]
 
 	def __str__(self):
 		return f"{self.name} ({self.device_sn})"
@@ -123,7 +127,10 @@ class DeviceUser(models.Model):
 
 	class Meta:
 		unique_together = [("access_device", "device_uid")]
-		indexes = [models.Index(fields=["device_uid"], name="att_du_device_uid_idx")]
+		indexes = [
+			models.Index(fields=["device_uid"], name="att_du_device_uid_idx"),
+			models.Index(fields=["access_device", "status"], name="idx_deviceuser_dev_status"),
+		]
 
 	def __str__(self):
 		return f"{self.device_uid}@{self.access_device_id}"
@@ -146,6 +153,12 @@ class AttendanceIngestEvent(models.Model):
 
 	class Meta:
 		ordering = ["-created_at"]
+		indexes = [
+			models.Index(
+				fields=["access_device", "event_type", "event_time"],
+				name="idx_ingest_dev_type_time",
+			),
+		]
 
 	def __str__(self):
 		return f"{self.event_type}:{self.event_hash[:12]}"

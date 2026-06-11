@@ -11,6 +11,9 @@ from .views import (
     PaymentGatewayToggleAPIView,
     PlatformPricingConfigAPIView,
     PlatformSubscriptionInvoicePdfView,
+    PlatformGatewaySubscriptionView,
+    PlatformManualSubscriptionView,
+    PlatformSubscriptionPaymentDetailView,
     PlatformSubscriptionPaymentsView,
     SubscriptionPaymentCancelView,
     SubscriptionPaymentFailView,
@@ -38,5 +41,12 @@ urlpatterns = [
     path('subscription/cancel/', SubscriptionPaymentCancelView.as_view(), name='subscription-cancel'),
     # Platform admin: subscription payment tracking
     path('subscription/payments/', PlatformSubscriptionPaymentsView.as_view(), name='platform-subscription-payments'),
+    path(
+        'subscription/payments/<int:pk>/',
+        PlatformSubscriptionPaymentDetailView.as_view(),
+        name='platform-subscription-payment-detail',
+    ),
+    path('subscription/payments/manual/', PlatformManualSubscriptionView.as_view(), name='platform-subscription-manual'),
+    path('subscription/payments/gateway/', PlatformGatewaySubscriptionView.as_view(), name='platform-subscription-gateway'),
     path('subscription/payments/<int:pk>/invoice/', PlatformSubscriptionInvoicePdfView.as_view(), name='platform-subscription-invoice-pdf'),
 ]

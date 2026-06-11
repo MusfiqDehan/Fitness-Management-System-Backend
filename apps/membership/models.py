@@ -1,7 +1,7 @@
 from django.db import models
 from django.utils import timezone
 from datetime import date, timedelta
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from utils.base_model import BaseModel
 
 
@@ -27,6 +27,13 @@ class MemberPackage(BaseModel):
 
     class Meta:
         ordering = ['display_order', 'name']
+        indexes = [
+            models.Index(
+                fields=['is_active', 'is_published', 'display_order', 'name'],
+                name='idx_mpkg_active_pub_order',
+                condition=Q(is_deleted=False),
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name} - {self.price}"
@@ -101,6 +108,18 @@ class Member(BaseModel):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(
+                fields=['branch', 'is_deleted', 'is_active', 'end_date'],
+                name='idx_member_branch_active_end',
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=['branch', 'is_deleted', 'created_at'],
+                name='idx_member_branch_created',
+                condition=Q(is_deleted=False),
+            ),
+        ]
 
     # ----------------------------
     # PROPERTIES
@@ -181,6 +200,18 @@ class Payment(BaseModel):
 
     class Meta:
         ordering = ['-payment_date']
+        indexes = [
+            models.Index(
+                fields=['member', 'is_deleted', 'payment_date'],
+                name='idx_payment_member_date',
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=['is_deleted', 'payment_date', 'payment_status'],
+                name='idx_payment_date_status',
+                condition=Q(is_deleted=False),
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if self.payment_status == self.STATUS_PAID:
@@ -207,6 +238,17 @@ class Attendance(BaseModel):
 
     class Meta:
         ordering = ['-check_in_time']
+        indexes = [
+            models.Index(
+                fields=['member', 'check_in_time'],
+                name='idx_attendance_member_checkin',
+            ),
+            models.Index(
+                fields=['member'],
+                name='idx_attendance_open_session',
+                condition=Q(check_out_time__isnull=True),
+            ),
+        ]
 
     def __str__(self):
         return f"{self.member.full_name} - {self.check_in_time.strftime('%Y-%m-%d %H:%M')}"
@@ -236,6 +278,20 @@ class GymClass(BaseModel):
     class_type = models.CharField(max_length=20, choices=CLASS_TYPES, default='other')
     level = models.CharField(max_length=20, choices=LEVELS, default='beginner')
     instructor = models.CharField(max_length=150, blank=True, default='')
+    trainer_profile = models.ForeignKey(
+        'trainer.TrainerProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='gym_classes',
+    )
+    trainer_class = models.OneToOneField(
+        'trainer.TrainerClass',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='gym_class',
+    )
     duration_minutes = models.PositiveIntegerField(default=60)
     capacity = models.PositiveIntegerField(default=20)
     description = models.TextField(blank=True, default='')
@@ -262,13 +318,33 @@ class GymSchedule(BaseModel):
         ('thursday', 'Thursday'),
         ('friday', 'Friday'),
     )
+    RECURRENCE_MODES = (
+        ('weekly', 'Weekly'),
+        ('one_off', 'One-off'),
+    )
 
     gym_class = models.ForeignKey(
         GymClass, on_delete=models.CASCADE, related_name='schedules', null=True, blank=True
     )
+    trainer_profile = models.ForeignKey(
+        'trainer.TrainerProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='gym_schedules',
+    )
+    trainer_schedule = models.OneToOneField(
+        'trainer.TrainerSchedule',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='gym_schedule',
+    )
     title = models.CharField(max_length=150)
     class_type = models.CharField(max_length=20, blank=True, default='')
     instructor = models.CharField(max_length=150, blank=True, default='')
+    recurrence_mode = models.CharField(max_length=10, choices=RECURRENCE_MODES, default='weekly')
+    scheduled_date = models.DateField(null=True, blank=True)
     day_of_week = models.CharField(max_length=10, choices=DAYS)
     start_time = models.TimeField()
     end_time = models.TimeField()
@@ -276,6 +352,13 @@ class GymSchedule(BaseModel):
 
     class Meta:
         ordering = ['day_of_week', 'start_time']
+        indexes = [
+            models.Index(
+                fields=['is_deleted', 'day_of_week', 'start_time'],
+                name='idx_gymsched_day_time',
+                condition=Q(is_deleted=False),
+            ),
+        ]
 
     def __str__(self):
         return f"{self.title} ({self.day_of_week} {self.start_time})"

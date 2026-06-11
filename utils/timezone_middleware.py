@@ -18,6 +18,9 @@ import logging
 from django.conf import settings
 from django.db import connection
 from django.utils import timezone
+from django_tenants.utils import get_public_schema_name
+
+from utils.cache_helpers import TIMEZONE_TTL, get_cached_value, timezone_key
 
 logger = logging.getLogger(__name__)
 
@@ -44,28 +47,29 @@ class TimezoneMiddleware:
             timezone.deactivate()
         return response
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _resolve_timezone(self) -> str:
         """Return the best IANA timezone string for the current request."""
         tenant = getattr(connection, "tenant", None)
         if tenant is None:
             return self._platform_default()
 
-        from django_tenants.utils import get_public_schema_name
-
         schema_name = getattr(tenant, "schema_name", None)
         if schema_name == get_public_schema_name():
             return self._platform_default()
 
+        return get_cached_value(
+            timezone_key(schema_name),
+            TIMEZONE_TTL,
+            lambda: self._compute_timezone(tenant),
+        )
+
+    def _compute_timezone(self, tenant) -> str:
         # 1. Tenant's own GymProfile.timezone (highest priority)
         try:
             from apps.dashboard.models import GymProfile
+
             tz_name = (
-                GymProfile.objects
-                .filter(pk=1)
+                GymProfile.objects.filter(pk=1)
                 .values_list("timezone", flat=True)
                 .first()
             )
@@ -86,18 +90,14 @@ class TimezoneMiddleware:
     def _platform_default() -> str:
         """Read PlatformSettings.default_timezone from the public schema."""
         try:
-            from apps.tenancy.models import PlatformSettings
-            from django_tenants.utils import get_public_schema_name, schema_context
+            from django_tenants.utils import schema_context
 
             with schema_context(get_public_schema_name()):
-                tz_name = (
-                    PlatformSettings.objects
-                    .filter(pk=1)
-                    .values_list("default_timezone", flat=True)
-                    .first()
-                )
-                if tz_name:
-                    return tz_name
+                from utils.cache_helpers import get_platform_settings_cached
+
+                settings_row = get_platform_settings_cached()
+                if settings_row and settings_row.get("default_timezone"):
+                    return settings_row["default_timezone"]
         except Exception:
             pass
 

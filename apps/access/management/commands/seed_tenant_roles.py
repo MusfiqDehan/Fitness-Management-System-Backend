@@ -45,6 +45,7 @@ PREDEFINED_TENANT_ROLES = {
             "classes.bookings": "edit",
             "payments": "edit",
             "payments.invoices": "view",
+            "subscriptions": "view",
             "crm.contacts": "edit",
             "crm.inquiries": "edit",
             "reports": "view",
@@ -119,11 +120,12 @@ FULL_ACCESS_FEATURE_KEYS = [
     "instructors",
     "classes", "classes.bookings",
     "payments", "payments.invoices", "payments.gateways",
+    "subscriptions",
     "crm.contacts", "crm.inquiries",
     "cms.banners", "cms.blogs",
     "branches",
     "reports", "reminders",
-    "settings", "permissions", "email_config",
+    "settings", "permissions", "email_config", "public_website",
 ]
 
 

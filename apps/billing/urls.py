@@ -21,6 +21,7 @@ from .views import (
     TenantGatewayConfigView,
     TenantInitiateSubscriptionChangeView,
     TenantSubscriptionInvoiceAdminView,
+    SubscriptionSummaryView,
 )
 
 app_name = 'billing'
@@ -53,5 +54,6 @@ urlpatterns = [
     # Tenant subscription plan change & admin invoice view (no payments feature gate)
     path('subscription/initiate-change/', TenantInitiateSubscriptionChangeView.as_view(), name='subscription-initiate-change'),
     path('subscription/admin-invoices/', TenantSubscriptionInvoiceAdminView.as_view(), name='subscription-admin-invoices'),
+    path('subscription/summary/', SubscriptionSummaryView.as_view(), name='subscription-summary'),
 ]
 

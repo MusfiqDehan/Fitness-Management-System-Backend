@@ -158,5 +158,14 @@ class Blog(models.Model):
             self.slug = slugify(self.title)
         super().save(*args, **kwargs)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "published_date"], name="idx_cmsblog_status_pubdate"),
+            models.Index(
+                fields=["status", "is_show_on_home_page"],
+                name="idx_cmsblog_status_home",
+            ),
+        ]
+
     def __str__(self):
         return self.title
