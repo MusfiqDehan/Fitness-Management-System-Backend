@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from utils.base_model import BaseModel
 
 
@@ -59,6 +60,17 @@ class Notification(BaseModel):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(
+                fields=['recipient', 'created_at'],
+                name='idx_notif_recip_created',
+            ),
+            models.Index(
+                fields=['created_at'],
+                name='idx_notif_broadcast',
+                condition=Q(recipient__isnull=True),
+            ),
+        ]
 
     def __str__(self):
         return f"[{self.notification_type}] {self.title}"
