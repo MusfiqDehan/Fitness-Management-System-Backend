@@ -99,6 +99,12 @@ class Branch(BaseModel):
 
     class Meta:
         ordering = ["display_order", "name"]
+        indexes = [
+            models.Index(
+                fields=["is_active", "display_order", "id"],
+                name="idx_branch_active_order",
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -167,6 +173,11 @@ class BranchShiftRequest(BaseModel):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status", "created_at"], name="idx_shift_status_created"),
+            models.Index(fields=["member", "created_at"], name="idx_shift_member_created"),
+            models.Index(fields=["trainer", "created_at"], name="idx_shift_trainer_created"),
+        ]
 
     def __str__(self):
         who = self.member or self.trainer
