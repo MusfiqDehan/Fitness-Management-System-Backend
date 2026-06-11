@@ -36,7 +36,11 @@ class MyPermissionsViewTests(SimpleTestCase):
 
 		with patch("apps.access.views.connection.schema_name", "tenant_a"), \
 			 patch("apps.access.views.get_user_permission_map", return_value={"crm.contacts": "view", "crm.inquiries": "view"}), \
-			 patch("apps.access.views.TenantFeatureFlag.objects.filter", return_value=fake_qs):
+			 patch("apps.tenancy.services.get_tenant_enabled_feature_keys", return_value={"crm.contacts", "crm.inquiries"}), \
+			 patch("apps.tenancy.services.custom_domain_effectively_enabled", return_value=False), \
+			 patch("apps.access.views.UserRole.objects.filter") as user_roles, \
+			 patch("apps.access.views.get_cached_value", side_effect=lambda _k, _t, factory: factory()):
+			user_roles.return_value.select_related.return_value.values_list.return_value.distinct.return_value = []
 			response = MyPermissionsView.as_view()(request)
 
 		self.assertEqual(response.status_code, 200)
