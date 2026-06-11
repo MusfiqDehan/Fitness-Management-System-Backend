@@ -2,6 +2,8 @@
 Settings and Reminders views for the dashboard app.
 Imported and wired in views.py via explicit __all__ re-exports.
 """
+from datetime import date
+
 from django.db.models import Sum
 from django.db import connection
 from django.utils import timezone as dj_timezone
@@ -13,6 +15,14 @@ from rest_framework.views import APIView
 
 from apps.identity.serializers import CurrentUserSerializer, CurrentUserUpdateSerializer
 from apps.membership.models import Member
+from utils.cache_helpers import (
+    PUBLIC_BRANDING_TTL,
+    STATS_TTL,
+    get_cached_value,
+    invalidate_timezone,
+    public_branding_key,
+    stats_key,
+)
 
 from .models import (
     GymPreferences,
@@ -98,6 +108,7 @@ class GymProfileAPIView(APIView):
             with schema_context(get_public_schema_name()):
                 from apps.tenancy.models import Tenant
                 Tenant.objects.filter(id=current_tenant.id).update(timezone=profile.timezone)
+            invalidate_timezone(current_tenant.schema_name)
 
         return Response(serializer.data)
 
@@ -382,7 +393,9 @@ class ReminderSendAPIView(APIView):
 
     def post(self, request, pk):
         try:
-            reminder = Reminder.objects.get(pk=pk)
+            reminder = Reminder.objects.select_related(
+                "member", "member__member_package"
+            ).get(pk=pk)
         except Reminder.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         reminder.status = "sent"
@@ -399,27 +412,34 @@ class ReminderStatsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from datetime import date
-        first_of_month = date.today().replace(day=1)
+        schema_name = connection.schema_name
 
-        pending = Reminder.objects.filter(status="pending").count()
-        sent_this_month = Reminder.objects.filter(
-            status="sent", sent_at__date__gte=first_of_month
-        ).count()
-        overdue_members = Member.objects.filter(end_date__lt=date.today()).count()
-        overdue_amount = (
-            Reminder.objects.filter(status="pending", reminder_type="payment_due")
-            .aggregate(total=Sum("amount"))["total"] or 0
+        def load():
+            first_of_month = date.today().replace(day=1)
+            pending = Reminder.objects.filter(status="pending").count()
+            sent_this_month = Reminder.objects.filter(
+                status="sent", sent_at__date__gte=first_of_month
+            ).count()
+            overdue_members = Member.objects.filter(end_date__lt=date.today()).count()
+            overdue_amount = (
+                Reminder.objects.filter(status="pending", reminder_type="payment_due")
+                .aggregate(total=Sum("amount"))["total"] or 0
+            )
+            active_templates = ReminderTemplate.objects.filter(is_active=True).count()
+            return {
+                "pending": pending,
+                "sent_this_month": sent_this_month,
+                "overdue_members": overdue_members,
+                "overdue_amount": str(overdue_amount),
+                "active_templates": active_templates,
+            }
+
+        payload = get_cached_value(
+            stats_key(schema_name, "reminder_stats", "all"),
+            STATS_TTL,
+            load,
         )
-        active_templates = ReminderTemplate.objects.filter(is_active=True).count()
-
-        return Response({
-            "pending": pending,
-            "sent_this_month": sent_this_month,
-            "overdue_members": overdue_members,
-            "overdue_amount": str(overdue_amount),
-            "active_templates": active_templates,
-        })
+        return Response(payload)
 
 
 # ---------------------------------------------------------------
@@ -431,5 +451,15 @@ class PublicGymBrandingView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        profile = GymProfile.objects.filter(pk=1).first()
-        return Response(serialize_gym_branding(profile))
+        schema_name = connection.schema_name
+
+        def load():
+            profile = GymProfile.objects.filter(pk=1).first()
+            return serialize_gym_branding(profile)
+
+        payload = get_cached_value(
+            public_branding_key(schema_name),
+            PUBLIC_BRANDING_TTL,
+            load,
+        )
+        return Response(payload)
