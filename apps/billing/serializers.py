@@ -255,7 +255,17 @@ class PaymentSerializer(serializers.ModelSerializer):
     online_transaction_status = serializers.SerializerMethodField()
 
     def get_online_transaction_status(self, obj):
-        tx = obj.online_transactions.filter(is_deleted=False).order_by('-created_at').first()
+        prefetched = getattr(obj, "_prefetched_objects_cache", {}).get(
+            "online_transactions"
+        )
+        if prefetched is not None:
+            tx = prefetched[0] if prefetched else None
+        else:
+            tx = (
+                obj.online_transactions.filter(is_deleted=False)
+                .order_by("-created_at")
+                .first()
+            )
         return tx.status if tx else None
 
     class Meta:
