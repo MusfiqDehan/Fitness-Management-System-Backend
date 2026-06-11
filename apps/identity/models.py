@@ -76,6 +76,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["role", "is_active"], name="idx_user_role_active"),
+        ]
+
     def __str__(self):
         # Display email/phone with role
         return f"{self.email or self.phone} ({self.role})"
