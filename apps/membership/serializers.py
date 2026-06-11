@@ -329,6 +329,8 @@ class MemberMinimalSerializer(serializers.ModelSerializer):
 class GymClassSerializer(serializers.ModelSerializer):
     class_type_display = serializers.CharField(source='get_class_type_display', read_only=True)
     level_display = serializers.CharField(source='get_level_display', read_only=True)
+    trainer_name = serializers.CharField(source='trainer_profile.user.full_name', read_only=True, default=None)
+    trainer_profile_id = serializers.IntegerField(source='trainer_profile_id', read_only=True)
     image_url = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
@@ -336,10 +338,19 @@ class GymClassSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'name', 'class_type', 'class_type_display',
             'level', 'level_display', 'instructor',
-            'duration_minutes', 'capacity', 'description', 'image_url',
-            'is_active', 'created_at', 'updated_at',
+            'trainer_profile', 'trainer_profile_id', 'trainer_name',
+            'trainer_class', 'duration_minutes', 'capacity', 'description', 'image_url',
+            'is_active', 'is_published', 'created_at', 'updated_at',
         )
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'trainer_class', 'trainer_profile_id', 'trainer_name']
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if self.instance is None and not attrs.get('trainer_profile'):
+            raise serializers.ValidationError({'trainer_profile': 'Trainer assignment is required.'})
+        if self.instance is not None and 'trainer_profile' in attrs and attrs['trainer_profile'] is None:
+            raise serializers.ValidationError({'trainer_profile': 'Trainer assignment cannot be removed.'})
+        return attrs
 
     def validate_image_url(self, value):
         normalized = (value or '').strip()
@@ -363,13 +374,42 @@ class GymClassSerializer(serializers.ModelSerializer):
 # ----------------------------
 class GymScheduleSerializer(serializers.ModelSerializer):
     day_of_week_display = serializers.CharField(source='get_day_of_week_display', read_only=True)
+    trainer_name = serializers.CharField(source='trainer_profile.user.full_name', read_only=True, default=None)
+    recurrence_mode_display = serializers.CharField(source='get_recurrence_mode_display', read_only=True)
 
     class Meta:
         model = GymSchedule
         fields = (
-            'id', 'gym_class', 'title', 'class_type', 'instructor',
+            'id', 'gym_class', 'trainer_profile', 'trainer_schedule', 'title', 'class_type', 'instructor',
+            'recurrence_mode', 'recurrence_mode_display', 'scheduled_date',
             'day_of_week', 'day_of_week_display',
             'start_time', 'end_time', 'capacity',
-            'is_active', 'created_at', 'updated_at',
+            'is_active', 'is_published', 'created_at', 'updated_at',
         )
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'trainer_schedule', 'trainer_name', 'recurrence_mode_display']
+
+
+class UnifiedClassSerializer(GymClassSerializer):
+    source = serializers.SerializerMethodField()
+
+    class Meta(GymClassSerializer.Meta):
+        fields = GymClassSerializer.Meta.fields + ('source',)
+
+    def get_source(self, obj):
+        return 'admin' if obj.trainer_profile_id else 'trainer'
+
+
+class UnifiedScheduleSerializer(GymScheduleSerializer):
+    trainer_class_name = serializers.SerializerMethodField()
+    source = serializers.SerializerMethodField()
+
+    class Meta(GymScheduleSerializer.Meta):
+        fields = GymScheduleSerializer.Meta.fields + ('trainer_class_name', 'source')
+
+    def get_trainer_class_name(self, obj):
+        if obj.gym_class and obj.gym_class.trainer_class_id:
+            return obj.gym_class.trainer_class.name
+        return obj.title
+
+    def get_source(self, obj):
+        return 'weekly' if obj.recurrence_mode == 'weekly' else 'one_off'
