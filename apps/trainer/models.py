@@ -182,8 +182,22 @@ class TrainerSchedule(BaseModel):
         on_delete=models.CASCADE,
         related_name='schedules'
     )
-    
-    scheduled_date = models.DateField()
+    day_of_week = models.CharField(
+        max_length=10,
+        choices=(
+            ('saturday', 'Saturday'),
+            ('sunday', 'Sunday'),
+            ('monday', 'Monday'),
+            ('tuesday', 'Tuesday'),
+            ('wednesday', 'Wednesday'),
+            ('thursday', 'Thursday'),
+            ('friday', 'Friday'),
+        ),
+        null=True,
+        blank=True,
+    )
+
+    scheduled_date = models.DateField(null=True, blank=True)
     start_time = models.TimeField()
     end_time = models.TimeField()
     location = models.CharField(max_length=255, blank=True, default='')
@@ -210,7 +224,8 @@ class TrainerSchedule(BaseModel):
     def save(self, *args, **kwargs):
         if self.trainer_class:
             self.trainer = self.trainer_class.trainer
-        self.is_full = self.current_participants >= self.trainer_class.max_participants
+        if self.trainer_class:
+            self.is_full = self.current_participants >= self.trainer_class.max_participants
         super().save(*args, **kwargs)
 
 
