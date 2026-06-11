@@ -10,4 +10,5 @@ class TenancyConfig(AppConfig):
     def ready(self):
         # Register signal handlers (auto-sync TenantFeatureFlag on plan change).
         from . import signals  # noqa: F401
+        import utils.cache_signals  # noqa: F401
 
