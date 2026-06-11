@@ -25,7 +25,12 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.crm.email_delivery import resolve_tenant_mail_route
+from utils.cache_helpers import (
+    TENANT_OVERVIEW_TTL,
+    get_cached_value,
+    invalidate_user_permissions,
+    tenant_overview_key,
+)
 from apps.identity.models import User
 from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage, PlatformSettings
 from .permissions import IsPlatformFeaturePermission
@@ -43,6 +48,7 @@ from .serializers import (
 	full_domain_for_subdomain,
 )
 from .services import normalize_plan_slug
+from utils.query_optimization import build_tenant_admins_map
 
 
 logger = logging.getLogger(__name__)
@@ -984,6 +990,7 @@ class PasswordSetupAPIView(APIView):
 							if invite_branch_id and user_role.branch_id != invite_branch_id:
 								user_role.branch_id = invite_branch_id
 								user_role.save(update_fields=["branch"])
+							invalidate_user_permissions(connection.schema_name, user.id)
 						except Role.DoesNotExist:
 							pass  # Role deleted since invite was sent; user can still log in
 
@@ -1210,17 +1217,18 @@ class TenantAdminOverviewAPIView(APIView):
 	]
 
 	def get(self, request):
-		with schema_context(get_public_schema_name()):
-			tenants = Tenant.objects.all()
-			total = tenants.count()
-			active = tenants.filter(is_enabled=True).count()
-			suspended = tenants.filter(status="suspended").count()
-			trial = tenants.filter(status="trial").count()
-			users = _count_tenant_admin_users()
-			pending_invites = Invitation.objects.filter(used_at__isnull=True, expires_at__gt=timezone.now()).count()
-
-		return Response(
-			{
+		def load():
+			with schema_context(get_public_schema_name()):
+				tenants = Tenant.objects.all()
+				total = tenants.count()
+				active = tenants.filter(is_enabled=True).count()
+				suspended = tenants.filter(status="suspended").count()
+				trial = tenants.filter(status="trial").count()
+				users = _count_tenant_admin_users()
+				pending_invites = Invitation.objects.filter(
+					used_at__isnull=True, expires_at__gt=timezone.now()
+				).count()
+			return {
 				"total_tenants": total,
 				"active_tenants": active,
 				"suspended_tenants": suspended,
@@ -1228,7 +1236,9 @@ class TenantAdminOverviewAPIView(APIView):
 				"tenant_admin_accounts": users,
 				"pending_invitations": pending_invites,
 			}
-		)
+
+		payload = get_cached_value(tenant_overview_key(), TENANT_OVERVIEW_TTL, load)
+		return Response(payload)
 
 
 class TenantAdminListAPIView(generics.ListAPIView):
@@ -1241,6 +1251,17 @@ class TenantAdminListAPIView(generics.ListAPIView):
 		with schema_context(get_public_schema_name()):
 			tenant_ids = list(Tenant.objects.order_by("name").values_list("id", flat=True))
 		return Tenant.objects.filter(id__in=tenant_ids).prefetch_related("domains").order_by("name")
+
+	def list(self, request, *args, **kwargs):
+		queryset = self.filter_queryset(self.get_queryset())
+		page = self.paginate_queryset(queryset)
+		tenants = page if page is not None else queryset
+		context = self.get_serializer_context()
+		context["tenant_admins_map"] = build_tenant_admins_map(tenants)
+		serializer = self.get_serializer(tenants, many=True, context=context)
+		if page is not None:
+			return self.get_paginated_response(serializer.data)
+		return Response(serializer.data)
 
 
 class TenantAdminDetailAPIView(generics.RetrieveUpdateAPIView):
