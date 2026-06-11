@@ -6,6 +6,8 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from rest_framework import serializers
 
+from utils.query_optimization import prefetched_relation_count
+
 from .constants import PLATFORM_MODULES
 from .models import (
     Feature,
@@ -42,7 +44,7 @@ class PlatformRoleSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "is_system", "created_at", "updated_at"]
 
     def get_user_count(self, obj):
-        return obj.user_assignments.count()
+        return prefetched_relation_count(obj, "user_assignments")
 
 
 class PlatformRolePermissionsBulkSerializer(serializers.Serializer):
