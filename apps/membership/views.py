@@ -30,6 +30,7 @@ import io
 import os
 
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
+from .services.class_catalog import ClassCatalogService, MandatoryTrainerRequired, ClassCatalogServiceError
 from apps.billing.serializers import PaymentSerializer
 from .serializers import (
     MemberSerializer,
@@ -40,6 +41,8 @@ from .serializers import (
     AttendanceSerializer,
     GymClassSerializer,
     GymScheduleSerializer,
+    UnifiedClassSerializer,
+    UnifiedScheduleSerializer,
 )
 from utils.base_view import ModelCRUDView
 from utils.list_mixins import BranchScopedListMixin, SearchFilterSortPaginationMixin
@@ -1439,17 +1442,87 @@ class PaymentAnalyticsAPIView(APIView):
 class GymClassView(ModelCRUDView):
     """CRUD for gym-level class catalog. GET/POST /membership/gym-classes/ etc."""
     feature_key = 'classes'
-    queryset = GymClass.objects.filter(is_deleted=False).order_by('name')
+    queryset = GymClass.objects.filter(is_deleted=False).select_related(
+        'trainer_profile__user', 'trainer_class'
+    ).order_by('name')
     serializer_class = GymClassSerializer
     permission_classes = [HasFeatureMethodPermission]
+
+    def _catalog_service(self, request):
+        return ClassCatalogService(user=request.user)
+
+    def _create(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            instance = self._catalog_service(request).create_gym_class_from_admin(serializer.validated_data)
+        except MandatoryTrainerRequired as exc:
+            return Response({'trainer_profile': [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        except ClassCatalogServiceError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+
+    def _update(self, pk, request, partial):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        try:
+            updated = self._catalog_service(request).update_gym_class_from_admin(instance, serializer.validated_data)
+        except MandatoryTrainerRequired as exc:
+            return Response({'trainer_profile': [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        except ClassCatalogServiceError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(self.get_serializer(updated).data)
 
 
 class GymScheduleView(ModelCRUDView):
     """CRUD for weekly gym schedule. GET/POST /membership/gym-schedules/ etc."""
     feature_key = 'classes'
-    queryset = GymSchedule.objects.filter(is_deleted=False).order_by('day_of_week', 'start_time')
+    queryset = GymSchedule.objects.filter(is_deleted=False).select_related(
+        'gym_class', 'trainer_profile__user', 'trainer_schedule'
+    ).order_by('day_of_week', 'start_time')
     serializer_class = GymScheduleSerializer
     permission_classes = [HasFeatureMethodPermission]
+
+    def _catalog_service(self, request):
+        return ClassCatalogService(user=request.user)
+
+    def _create(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            instance = self._catalog_service(request).create_gym_schedule_from_admin(serializer.validated_data)
+        except MandatoryTrainerRequired as exc:
+            return Response({'trainer_profile': [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        except ClassCatalogServiceError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+
+
+class UnifiedClassListAPIView(APIView):
+    """GET /membership/unified-classes/ — merged tenant class catalog."""
+    feature_key = 'classes'
+    permission_classes = [IsAuthenticated, HasFeatureMethodPermission]
+
+    def get(self, request):
+        classes = GymClass.objects.filter(is_deleted=False).select_related(
+            'trainer_profile__user', 'trainer_class'
+        ).order_by('name')
+        serializer = UnifiedClassSerializer(classes, many=True)
+        return Response(serializer.data)
+
+
+class UnifiedScheduleListAPIView(APIView):
+    """GET /membership/unified-schedules/ — merged tenant schedule timetable."""
+    feature_key = 'classes'
+    permission_classes = [IsAuthenticated, HasFeatureMethodPermission]
+
+    def get(self, request):
+        schedules = GymSchedule.objects.filter(is_deleted=False).select_related(
+            'gym_class__trainer_class', 'trainer_profile__user', 'trainer_schedule'
+        ).order_by('day_of_week', 'start_time')
+        serializer = UnifiedScheduleSerializer(schedules, many=True)
+        return Response(serializer.data)
 
 
 # =============================================================================
@@ -1461,8 +1534,12 @@ class PublicGymClassListAPIView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        classes = GymClass.objects.filter(is_active=True, is_deleted=False).order_by('name')
-        serializer = GymClassSerializer(classes, many=True)
+        classes = GymClass.objects.filter(
+            is_active=True,
+            is_deleted=False,
+            is_published=True,
+        ).select_related('trainer_profile__user', 'trainer_class').order_by('name')
+        serializer = UnifiedClassSerializer(classes, many=True)
         return Response(serializer.data)
 
 
@@ -1471,6 +1548,10 @@ class PublicGymScheduleListAPIView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        schedules = GymSchedule.objects.filter(is_deleted=False).order_by('day_of_week', 'start_time')
-        serializer = GymScheduleSerializer(schedules, many=True)
+        schedules = GymSchedule.objects.filter(
+            is_deleted=False,
+            is_published=True,
+            is_active=True,
+        ).select_related('gym_class__trainer_class', 'trainer_profile__user').order_by('day_of_week', 'start_time')
+        serializer = UnifiedScheduleSerializer(schedules, many=True)
         return Response(serializer.data)
