@@ -14,6 +14,8 @@ from .views import (
     AttendanceView,
     GymClassView,
     GymScheduleView,
+    UnifiedClassListAPIView,
+    UnifiedScheduleListAPIView,
     PublicMemberRegistrationAPIView,
     PublicPackageListAPIView,
     PublicPackageRetrieveAPIView,
@@ -56,6 +58,8 @@ urlpatterns = [
     path('gym-classes/<int:pk>/', GymClassView.as_view(), name='gymclass-detail'),
     path('gym-schedules/', GymScheduleView.as_view(), name='gymschedule-list'),
     path('gym-schedules/<int:pk>/', GymScheduleView.as_view(), name='gymschedule-detail'),
+    path('unified-classes/', UnifiedClassListAPIView.as_view(), name='unified-class-list'),
+    path('unified-schedules/', UnifiedScheduleListAPIView.as_view(), name='unified-schedule-list'),
 
     # ========== PUBLIC (Landing Page) ==========
     path('public/register/', PublicMemberRegistrationAPIView.as_view(), name='public-register'),
