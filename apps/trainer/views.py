@@ -17,6 +17,7 @@ from utils.tenancy_helpers import get_branch_manager_scope_ids as _branch_manage
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.access.utils import user_can
 from apps.crm.email_delivery import resolve_tenant_mail_route
+from apps.membership.services.class_catalog import ClassCatalogService, ClassCatalogServiceError
 from .models import (
     TrainerProfile, TrainerDocument, TrainerClass,
     TrainerSchedule, ScheduleBooking, TrainerRating, TrainerInvitation,
@@ -339,18 +340,23 @@ class TrainerClassView(SearchFilterSortPaginationMixin, TrainerModelActions, Mod
             queryset = queryset.filter(trainer__user=self.request.user)
         return queryset
 
+    def _catalog_service(self, request):
+        return ClassCatalogService(user=request.user)
+
     def _create(self, request):
         if _is_trainer_user(request.user):
             profile = _get_trainer_profile_for_user(request.user)
             if profile is None:
                 return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
-            data = request.data.copy()
-            data['trainer'] = profile.id
-            serializer = self.get_serializer(data=data)
+            serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
-            instance = serializer.save()
-            if getattr(instance, 'trainer', None) and hasattr(instance.trainer, 'recalc_stats'):
-                instance.trainer.recalc_stats()
+            try:
+                instance = self._catalog_service(request).create_trainer_class(
+                    profile,
+                    serializer.validated_data,
+                )
+            except ClassCatalogServiceError as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
             return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -364,9 +370,14 @@ class TrainerClassView(SearchFilterSortPaginationMixin, TrainerModelActions, Mod
         old_trainer = getattr(instance, 'trainer', None)
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        updated = serializer.save()
+        if _is_trainer_user(request.user):
+            try:
+                updated = self._catalog_service(request).update_trainer_class(instance, serializer.validated_data)
+            except ClassCatalogServiceError as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        else:
+            updated = serializer.save()
 
-        # Recalculate old/new trainer stats in case trainer ownership changed.
         if old_trainer and hasattr(old_trainer, 'recalc_stats'):
             old_trainer.recalc_stats()
         if getattr(updated, 'trainer', None) and hasattr(updated.trainer, 'recalc_stats'):
@@ -440,22 +451,24 @@ class TrainerScheduleView(SearchFilterSortPaginationMixin, TrainerModelActions, 
             queryset = queryset.filter(trainer__user=self.request.user)
         return queryset
 
+    def _catalog_service(self, request):
+        return ClassCatalogService(user=request.user)
+
     def _create(self, request):
         if _is_trainer_user(request.user):
             profile = _get_trainer_profile_for_user(request.user)
             if profile is None:
                 return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
 
-            trainer_class_id = request.data.get('trainer_class')
-            trainer_class = TrainerClass.objects.filter(pk=trainer_class_id, trainer=profile, is_deleted=False).first()
-            if trainer_class is None:
-                return Response({'error': 'Class not found or not owned by this trainer'}, status=status.HTTP_400_BAD_REQUEST)
-
-            data = request.data.copy()
-            data['trainer'] = profile.id
-            serializer = self.get_serializer(data=data)
+            serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
-            instance = serializer.save()
+            try:
+                instance = self._catalog_service(request).create_trainer_schedule(
+                    profile,
+                    serializer.validated_data,
+                )
+            except ClassCatalogServiceError as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
             return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
         return super()._create(request)
 
