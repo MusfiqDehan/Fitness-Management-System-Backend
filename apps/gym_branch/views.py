@@ -9,6 +9,17 @@ from rest_framework.views import APIView
 from apps.access.permissions import HasFeatureMethodPermission
 from utils.limits import total_capacity_exceeded
 from utils.base_view import ModelCRUDView
+from utils.cache_helpers import (
+    PUBLIC_BRANCH_TTL,
+    PUBLIC_BRANDING_TTL,
+    get_cached_value,
+    public_branches_key,
+    public_branding_key,
+)
+from utils.query_optimization import (
+    optimized_branch_queryset,
+    optimized_branch_shift_request_queryset,
+)
 
 from .models import Branch, BranchShiftRequest
 from .serializers import (
@@ -27,6 +38,9 @@ class BranchView(ModelCRUDView):
     queryset = Branch.objects.all().order_by("display_order", "id")
     serializer_class = BranchSerializer
     permission_classes = [HasFeatureMethodPermission]
+
+    def get_queryset(self):
+        return optimized_branch_queryset(super().get_queryset())
 
     def _create(self, request):
         tenant = getattr(connection, "tenant", None)
@@ -47,13 +61,19 @@ class PublicBranchListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        queryset = Branch.objects.filter(is_active=True).order_by(
-            "display_order", "id"
-        )
-        if request.query_params.get("homepage") in ("1", "true", "True"):
-            queryset = queryset.filter(show_on_homepage=True)
-        serializer = BranchSerializer(queryset, many=True)
-        return Response(serializer.data)
+        schema_name = connection.schema_name
+        homepage = request.query_params.get("homepage") in ("1", "true", "True")
+        cache_key = public_branches_key(schema_name, minimal=False, homepage=homepage)
+
+        def load():
+            queryset = optimized_branch_queryset(
+                Branch.objects.filter(is_active=True).order_by("display_order", "id")
+            )
+            if homepage:
+                queryset = queryset.filter(show_on_homepage=True)
+            return BranchSerializer(queryset, many=True).data
+
+        return Response(get_cached_value(cache_key, PUBLIC_BRANCH_TTL, load))
 
 
 class PublicBranchMinimalListView(APIView):
@@ -62,11 +82,16 @@ class PublicBranchMinimalListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        queryset = Branch.objects.filter(is_active=True).order_by(
-            "display_order", "id"
-        )
-        serializer = BranchMinimalSerializer(queryset, many=True)
-        return Response(serializer.data)
+        schema_name = connection.schema_name
+        cache_key = public_branches_key(schema_name, minimal=True)
+
+        def load():
+            queryset = Branch.objects.filter(is_active=True).order_by(
+                "display_order", "id"
+            )
+            return BranchMinimalSerializer(queryset, many=True).data
+
+        return Response(get_cached_value(cache_key, PUBLIC_BRANCH_TTL, load))
 
 
 class BranchManagerOptionsView(APIView):
@@ -139,7 +164,9 @@ class BranchShiftRequestView(BranchShiftRequestActions, ModelCRUDView):
     """Tenant-side management of branch shift requests (list / approve / reject)."""
 
     feature_key = FEATURE_KEY
-    queryset = BranchShiftRequest.objects.all().order_by("-created_at")
+    queryset = optimized_branch_shift_request_queryset(
+        BranchShiftRequest.objects.all()
+    ).order_by("-created_at")
     serializer_class = BranchShiftRequestSerializer
     permission_classes = [HasFeatureMethodPermission]
 
@@ -159,7 +186,9 @@ class MyBranchShiftRequestView(APIView):
     def get(self, request):
         member_id = request.query_params.get("member")
         trainer_id = request.query_params.get("trainer")
-        queryset = BranchShiftRequest.objects.all().order_by("-created_at")
+        queryset = optimized_branch_shift_request_queryset(
+            BranchShiftRequest.objects.all()
+        ).order_by("-created_at")
         if member_id:
             queryset = queryset.filter(member_id=member_id)
         elif trainer_id:
