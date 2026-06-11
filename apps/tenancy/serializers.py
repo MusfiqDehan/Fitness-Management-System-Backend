@@ -241,6 +241,10 @@ class TenantListSerializer(serializers.ModelSerializer):
         return list(obj.domains.values_list("domain", flat=True))
 
     def get_admins(self, obj):
+        admins_map = self.context.get("tenant_admins_map")
+        if admins_map is not None:
+            return admins_map.get(obj.id, [])
+
         if obj.schema_name == get_public_schema_name():
             return []
 
