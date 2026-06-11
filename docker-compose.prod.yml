@@ -56,6 +56,22 @@ services:
       - "traefik.http.routers.backend.service=backend"
       - "traefik.http.services.backend.loadbalancer.server.port=8021"
 
+      # ── Plain-HTTP ADMS router for legacy devices that do not support HTTPS.
+      #    Restrict HTTP exposure to device endpoints only; all app/browser
+      #    traffic remains on the existing HTTPS routers above.
+      - "traefik.http.routers.backend-adms-http.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
+      - "traefik.http.routers.backend-adms-http.entrypoints=web"
+      - "traefik.http.routers.backend-adms-http.priority=200"
+      - "traefik.http.routers.backend-adms-http.service=backend"
+
+      # ── Standard HTTP router for browser/API traffic. Redirect to HTTPS while
+      #    leaving the higher-priority ADMS HTTP router above untouched.
+      - "traefik.http.routers.backend-http.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`))"
+      - "traefik.http.routers.backend-http.entrypoints=web"
+      - "traefik.http.routers.backend-http.priority=10"
+      - "traefik.http.routers.backend-http.middlewares=redirect-to-https@file"
+      - "traefik.http.routers.backend-http.service=backend"
+
       # ── Backend router for tenant-owned CUSTOM domains (any host that is not
       #    fitssort.com / *.fitssort.com), API / admin / media / static / ADMS paths.
       #    On-demand Let's Encrypt cert per SNI via the customdomains resolver.
@@ -66,6 +82,21 @@ services:
       - "traefik.http.routers.backend-custom.priority=100"
       - "traefik.http.routers.backend-custom.middlewares=security-headers@file,compress@file"
       - "traefik.http.routers.backend-custom.service=backend"
+
+      # ── Plain-HTTP ADMS router for tenant-owned CUSTOM domains. Needed for
+      #    devices that only support domain + HTTP, not HTTPS.
+      - "traefik.http.routers.backend-custom-adms-http.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
+      - "traefik.http.routers.backend-custom-adms-http.entrypoints=web"
+      - "traefik.http.routers.backend-custom-adms-http.priority=200"
+      - "traefik.http.routers.backend-custom-adms-http.service=backend"
+
+      # ── Standard HTTP router for custom-domain browser/API traffic. Redirect
+      #    to HTTPS while keeping ADMS HTTP on the dedicated router above.
+      - "traefik.http.routers.backend-custom-http.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`))"
+      - "traefik.http.routers.backend-custom-http.entrypoints=web"
+      - "traefik.http.routers.backend-custom-http.priority=10"
+      - "traefik.http.routers.backend-custom-http.middlewares=redirect-to-https@file"
+      - "traefik.http.routers.backend-custom-http.service=backend"
     command: ["daphne", "-b", "0.0.0.0", "-p", "8021", "config.asgi:application"]
     restart: unless-stopped
 
