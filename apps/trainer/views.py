@@ -13,6 +13,7 @@ import secrets
 from utils.base_view import ModelCRUDView
 from utils.list_mixins import BranchScopedListMixin, SearchFilterSortPaginationMixin
 from utils.limits import branch_capacity_exceeded, total_capacity_exceeded
+from utils.query_optimization import build_pending_trainer_invitation_map
 from utils.tenancy_helpers import get_branch_manager_scope_ids as _branch_manager_scope_ids
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.access.utils import user_can
@@ -103,7 +104,7 @@ class TrainerProfileView(BranchScopedListMixin, TrainerModelActions, ModelCRUDVi
     """CRUD for TrainerProfile + actions."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
-    queryset = TrainerProfile.objects.select_related('user').all()
+    queryset = TrainerProfile.objects.select_related('user', 'branch').all()
     serializer_class = TrainerProfileSerializer
     permission_classes = [IsTrainerOrFeaturePermission]
     branch_scope_field = 'branch_id'
@@ -117,6 +118,22 @@ class TrainerProfileView(BranchScopedListMixin, TrainerModelActions, ModelCRUDVi
         'activate': lambda self, req, pk: self._toggle_trainer_active(req, pk, True),
         'deactivate': lambda self, req, pk: self._toggle_trainer_active(req, pk, False),
     }
+
+    def _list(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        items = page if page is not None else queryset
+        emails = [
+            getattr(getattr(profile, "user", None), "email", None)
+            for profile in items
+        ]
+        context = self.get_serializer_context()
+        context["pending_invitation_map"] = build_pending_trainer_invitation_map(emails)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True, context=context)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True, context=context)
+        return Response(serializer.data)
 
     def _toggle_trainer_active(self, request, pk, value):
         try:
@@ -183,7 +200,9 @@ class TrainerProfileMeView(APIView):
 
     def get(self, request):
         try:
-            profile = TrainerProfile.objects.get(user=request.user, is_deleted=False)
+            profile = TrainerProfile.objects.select_related('user', 'branch').get(
+                user=request.user, is_deleted=False
+            )
         except TrainerProfile.DoesNotExist:
             return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
         serializer = TrainerProfileSerializer(profile)
@@ -225,7 +244,7 @@ class TrainerPublicProfileView(APIView):
 
     def get(self, request, username):
         try:
-            profile = TrainerProfile.objects.get(
+            profile = TrainerProfile.objects.select_related('user').get(
                 username=username,
                 is_published=True,
                 is_deleted=False,
@@ -330,7 +349,7 @@ class TrainerClassView(SearchFilterSortPaginationMixin, TrainerModelActions, Mod
     """CRUD for TrainerClass."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
-    queryset = TrainerClass.objects.select_related('trainer__user').all()
+    queryset = TrainerClass.objects.select_related('trainer__user', 'gym_class').all()
     serializer_class = TrainerClassSerializer
     permission_classes = [IsTrainerOrFeaturePermission]
 
@@ -440,7 +459,7 @@ class TrainerScheduleView(SearchFilterSortPaginationMixin, TrainerModelActions, 
     feature_key = 'instructors'
     feature_keys = ['trainer']
     queryset = TrainerSchedule.objects.select_related(
-        'trainer_class', 'trainer__user'
+        'trainer_class', 'trainer__user', 'gym_schedule'
     ).all()
     serializer_class = TrainerScheduleSerializer
     permission_classes = [IsTrainerOrFeaturePermission]
@@ -581,7 +600,11 @@ class BookingCheckInView(APIView):
 
     def patch(self, request, pk):
         try:
-            booking = ScheduleBooking.objects.get(pk=pk, is_deleted=False)
+            booking = ScheduleBooking.objects.select_related(
+                'schedule__trainer_class',
+                'schedule__trainer__user',
+                'member',
+            ).get(pk=pk, is_deleted=False)
         except ScheduleBooking.DoesNotExist:
             return Response({'error': 'Booking not found'}, status=status.HTTP_404_NOT_FOUND)
         
@@ -600,7 +623,11 @@ class BookingCancelView(APIView):
 
     def delete(self, request, pk):
         try:
-            booking = ScheduleBooking.objects.get(pk=pk, is_deleted=False)
+            booking = ScheduleBooking.objects.select_related(
+                'schedule__trainer_class',
+                'schedule__trainer__user',
+                'member',
+            ).get(pk=pk, is_deleted=False)
         except ScheduleBooking.DoesNotExist:
             return Response({'error': 'Booking not found'}, status=status.HTTP_404_NOT_FOUND)
         
@@ -777,7 +804,7 @@ class TrainerInvitationView(BranchScopedListMixin, TrainerModelActions, ModelCRU
     """CRUD for TrainerInvitation."""
     feature_key = 'instructors'
     feature_keys = ['trainer']
-    queryset = TrainerInvitation.objects.select_related('invited_by').all()
+    queryset = TrainerInvitation.objects.select_related('invited_by', 'branch').all()
     serializer_class = TrainerInvitationSerializer
     permission_classes = [HasFeatureMethodPermission]
     branch_scope_field = 'branch_id'
