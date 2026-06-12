@@ -31,6 +31,7 @@ from utils.cache_helpers import (
     invalidate_user_permissions,
     tenant_overview_key,
 )
+from apps.crm.email_delivery import resolve_tenant_mail_route
 from apps.identity.models import User
 from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage, PlatformSettings
 from .permissions import IsPlatformFeaturePermission
