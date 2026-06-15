@@ -152,8 +152,9 @@ TENANT_REGISTRY: list[RegistryItem] = [
     {
         "group": "Classes",
         "children": [
-            {"key": "classes",     "name": "Schedule",    "route": "/schedule",    "icon": "CalendarDays"},
             {"key": "instructors", "name": "Instructors", "route": "/instructors", "icon": "UserCog"},
+            {"key": "classes",          "name": "Class Manager",    "route": "/classes",   "icon": "Server"},
+            {"key": "classes",     "name": "Schedule",    "route": "/schedule",    "icon": "CalendarDays"},
         ],
     },
     {
@@ -161,7 +162,6 @@ TENANT_REGISTRY: list[RegistryItem] = [
         "children": [
             {"key": "crm.contacts",     "name": "Contact Manager",  "route": "/contacts",  "icon": "Phone"},
             {"key": "crm.inquiries",    "name": "Manage Inquiries", "route": "/inquiries", "icon": "FileText"},
-            {"key": "classes",          "name": "Class Manager",    "route": "/classes",   "icon": "Server"},
             {"key": "classes.bookings", "name": "Booking Manager",  "route": "/bookings",  "icon": "CalendarRange"},
             {"key": "cms.blogs",        "name": "Blog Manager",     "route": "/blogs",     "icon": "Rows3"},
             {"key": "branches",         "name": "Branch Manager",   "route": "/branches",  "icon": "Building2"},
@@ -177,6 +177,7 @@ TENANT_REGISTRY: list[RegistryItem] = [
             {"key": "attendance.iclock",       "name": "iClock Ingestion",   "route": None,           "icon": "Cpu"},
             {"key": "email_config", "name": "Email Config", "route": None, "icon": "Mail"},
             {"key": "public_website", "name": "Landing Page Setup", "route": None, "icon": "Monitor"},
+            {"key": "custom_domain", "name": "Custom Domain", "route": None, "icon": "Globe"},
             {"key": "permissions",   "name": "Rules & Permission", "route": "/permissions", "icon": "ShieldCheck"},
             {"key": "settings",      "name": "Settings",           "route": "/settings",    "icon": "Settings"},
         ],
