@@ -119,3 +119,13 @@ class FeatureRegistryConsistencyTests(SimpleTestCase):
             {"view", "edit", "full"},
             "Platform manager must have at least view access to platform.email_settings",
         )
+
+    def test_classes_group_navigation_order(self):
+        classes_group = next(group for group in TENANT_REGISTRY if group["group"] == "Classes")
+        names = [child["name"] for child in classes_group["children"]]
+        self.assertEqual(names, ["Instructors", "Class Manager", "Schedule"])
+
+    def test_class_manager_not_in_growth_group(self):
+        growth_group = next(group for group in TENANT_REGISTRY if group["group"] == "Growth & Engagement")
+        names = [child["name"] for child in growth_group["children"]]
+        self.assertNotIn("Class Manager", names)
