@@ -467,6 +467,9 @@ class FingerprintUnlinkedListAPIView(ListAPIView):
 	feature_key = "attendance.fingerprints"
 	permission_classes = [HasFeatureMethodPermission]
 	serializer_class = DeviceUserSerializer
+	pagination_class = StandardPagination
+	filter_backends = [SearchFilter]
+	search_fields = ["device_uid", "name", "access_device__name"]
 
 	def get_queryset(self):
 		queryset = DeviceUser.objects.filter(status=DeviceUser.STATUS_UNLINKED).select_related("member", "access_device")
