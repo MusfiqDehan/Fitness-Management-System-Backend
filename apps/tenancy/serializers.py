@@ -334,7 +334,17 @@ class PlatformGymProfileSerializer(serializers.ModelSerializer):
 class PlatformGymPreferencesSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlatformGymPreferences
-        fields = ["id", "language", "currency", "date_format", "week_start", "theme", "updated_at"]
+        fields = [
+            "id",
+            "language",
+            "currency",
+            "date_format",
+            "week_start",
+            "theme",
+            "topbar_show_date",
+            "topbar_show_description",
+            "updated_at",
+        ]
         read_only_fields = ["id", "updated_at"]
 
 
