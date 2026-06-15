@@ -109,6 +109,12 @@ class Member(BaseModel):
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['full_name', 'phone_number', 'date_of_birth'],
+                name='uniq_member_name_phone_dob',
+            ),
+        ]
         indexes = [
             models.Index(
                 fields=['branch', 'is_deleted', 'is_active', 'end_date'],
