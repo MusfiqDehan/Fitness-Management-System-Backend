@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 from datetime import timedelta
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
 from django_tenants.utils import schema_context
@@ -652,3 +653,249 @@ class MemberRelationshipFieldTests(APITestCase):
 		with schema_context(self.tenant.schema_name):
 			member = Member.objects.get(pk=member_id)
 			self.assertEqual(member.relationship_with_member, 'Parent')
+
+
+class MemberImportDuplicatePhoneTests(APITestCase):
+	@classmethod
+	def setUpTestData(cls):
+		with schema_context('public'):
+			cls.public = Tenant.objects.create(
+				schema_name='public',
+				name='Public',
+				slug='public',
+				code='PUBIMP01',
+				owner_email='root@import.test',
+				billing_email='root@import.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain='testserver',
+				tenant=cls.public,
+				defaults={'is_primary': True},
+			)
+			cls.tenant = Tenant.objects.create(
+				schema_name='member_import_test',
+				name='Member Import Tenant',
+				slug='member-import',
+				code='MEMIMP01',
+				owner_email='admin@import.test',
+				billing_email='admin@import.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.create(domain='import.testserver', tenant=cls.tenant, is_primary=True)
+
+		with schema_context(cls.tenant.schema_name):
+			cls.admin = User.objects.create_superuser(
+				email='admin@import.test',
+				password='StrongPass123!',
+				tenant=cls.tenant,
+			)
+
+	def test_import_creates_separate_members_for_duplicate_phone_numbers(self):
+		csv_body = (
+			'email,full_name,phone_number,date_of_birth\n'
+			'parent@example.com,Parent One,1711992111,2010-01-01\n'
+			'child@example.com,Child Two,1711992111,2012-06-15\n'
+		)
+		uploaded = SimpleUploadedFile(
+			'members.csv',
+			csv_body.encode('utf-8'),
+			content_type='text/csv',
+		)
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			'/api/v1/membership/members/import/',
+			{'file': uploaded},
+			format='multipart',
+			HTTP_HOST='import.testserver',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data['total_rows'], 2)
+		self.assertEqual(response.data['created_count'], 2)
+		self.assertEqual(response.data['updated_count'], 0)
+
+		with schema_context(self.tenant.schema_name):
+			members = Member.objects.filter(phone_number='1711992111').order_by('id')
+			self.assertEqual(members.count(), 2)
+			self.assertEqual(list(members.values_list('full_name', flat=True)), ['Parent One', 'Child Two'])
+
+	def test_import_updates_existing_member_for_same_name_phone_dob(self):
+		csv_body = (
+			'email,full_name,phone_number,date_of_birth\n'
+			'old@example.com,Same Person,1711992111,2010-01-01\n'
+		)
+		uploaded = SimpleUploadedFile(
+			'members.csv',
+			csv_body.encode('utf-8'),
+			content_type='text/csv',
+		)
+		self.client.force_authenticate(user=self.admin)
+
+		first_response = self.client.post(
+			'/api/v1/membership/members/import/',
+			{'file': uploaded},
+			format='multipart',
+			HTTP_HOST='import.testserver',
+		)
+		self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(first_response.data['created_count'], 1)
+
+		second_csv = (
+			'email,full_name,phone_number,date_of_birth\n'
+			'new@example.com,Same Person,1711992111,2010-01-01\n'
+		)
+		second_upload = SimpleUploadedFile(
+			'members.csv',
+			second_csv.encode('utf-8'),
+			content_type='text/csv',
+		)
+		second_response = self.client.post(
+			'/api/v1/membership/members/import/',
+			{'file': second_upload},
+			format='multipart',
+			HTTP_HOST='import.testserver',
+		)
+
+		self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(second_response.data['created_count'], 0)
+		self.assertEqual(second_response.data['updated_count'], 1)
+
+		with schema_context(self.tenant.schema_name):
+			members = Member.objects.filter(phone_number='1711992111')
+			self.assertEqual(members.count(), 1)
+			self.assertEqual(members.first().email, 'new@example.com')
+
+	def test_import_restores_soft_deleted_members_as_created(self):
+		with schema_context(self.tenant.schema_name):
+			member = Member.objects.create(
+				full_name='Restore Me',
+				phone_number='1711992999',
+				date_of_birth='2010-01-01',
+				email='old@example.com',
+			)
+			member.delete()
+			self.assertEqual(Member.objects.count(), 0)
+			self.assertEqual(Member.all_objects.filter(is_deleted=True).count(), 1)
+
+		csv_body = (
+			'email,full_name,phone_number,date_of_birth\n'
+			'new@example.com,Restore Me,1711992999,2010-01-01\n'
+		)
+		uploaded = SimpleUploadedFile(
+			'members.csv',
+			csv_body.encode('utf-8'),
+			content_type='text/csv',
+		)
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			'/api/v1/membership/members/import/',
+			{'file': uploaded},
+			format='multipart',
+			HTTP_HOST='import.testserver',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data['created_count'], 1)
+		self.assertEqual(response.data['updated_count'], 0)
+
+		with schema_context(self.tenant.schema_name):
+			self.assertEqual(Member.objects.count(), 1)
+			restored = Member.objects.get(phone_number='1711992999')
+			self.assertFalse(restored.is_deleted)
+			self.assertEqual(restored.email, 'new@example.com')
+
+
+class MemberAnalyticsAPIViewTests(APITestCase):
+	@classmethod
+	def setUpTestData(cls):
+		with schema_context('public'):
+			cls.public = Tenant.objects.create(
+				schema_name='public',
+				name='Public',
+				slug='public',
+				code='PUBAN01',
+				owner_email='root@analytics.test',
+				billing_email='root@analytics.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain='testserver',
+				tenant=cls.public,
+				defaults={'is_primary': True},
+			)
+			cls.tenant = Tenant.objects.create(
+				schema_name='member_analytics_test',
+				name='Member Analytics Tenant',
+				slug='member-analytics',
+				code='MEMAN01',
+				owner_email='admin@analytics.test',
+				billing_email='admin@analytics.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.create(domain='analytics.testserver', tenant=cls.tenant, is_primary=True)
+
+		with schema_context(cls.tenant.schema_name):
+			cls.admin = User.objects.create_superuser(
+				email='admin@analytics.test',
+				password='StrongPass123!',
+				tenant=cls.tenant,
+			)
+			cls.premium = MemberPackage.objects.create(
+				name='Premium',
+				package_type='monthly',
+				duration_in_days=30,
+				price='100.00',
+			)
+			cls.starter = MemberPackage.objects.create(
+				name='Starter',
+				package_type='monthly',
+				duration_in_days=30,
+				price='50.00',
+			)
+			today = timezone.now().date()
+			Member.objects.create(
+				full_name='Active Male',
+				phone_number='17110000001',
+				gender='male',
+				member_package=cls.premium,
+				is_active=True,
+				start_date=today,
+				end_date=today + timedelta(days=30),
+			)
+			Member.objects.create(
+				full_name='Expired Female',
+				phone_number='17110000002',
+				gender='female',
+				member_package=cls.starter,
+				is_active=False,
+				start_date=today - timedelta(days=60),
+				end_date=today - timedelta(days=1),
+			)
+
+	def test_analytics_returns_dynamic_chart_fields(self):
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.get(
+			'/api/v1/membership/members/analytics/?period=monthly',
+			HTTP_HOST='analytics.testserver',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data['total'], 2)
+		self.assertEqual(response.data['active'], 1)
+		self.assertEqual(response.data['expired'], 1)
+		self.assertEqual(response.data['gender_dist']['male'], 1)
+		self.assertEqual(response.data['gender_dist']['female'], 1)
+		self.assertIn('member_trend', response.data)
+		self.assertEqual(len(response.data['member_trend']), 12)
+		self.assertIn('package_breakdown', response.data)
+		self.assertEqual(response.data['retention_rate'], 50.0)
+
+		breakdown = {row['label']: row for row in response.data['package_breakdown']}
+		self.assertEqual(breakdown['Premium']['active'], 1)
+		self.assertEqual(breakdown['Premium']['expired'], 0)
+		self.assertEqual(breakdown['Starter']['expired'], 1)
