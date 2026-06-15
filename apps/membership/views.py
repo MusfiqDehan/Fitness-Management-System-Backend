@@ -19,7 +19,7 @@ from django.template.loader import render_to_string
 from django.conf import settings
 from django_filters.rest_framework import DjangoFilterBackend
 from django_tenants.utils import schema_context
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from urllib.parse import urlparse
 import logging
@@ -62,7 +62,6 @@ from apps.billing.services import get_gateway
 
 logger = logging.getLogger(__name__)
 
-
 _MEMBER_IMPORT_ALLOWED_EXTENSIONS = {'.csv', '.xls', '.xlsx', '.xlx'}
 
 
@@ -85,6 +84,26 @@ def _coerce_bool(value):
     if normalized in {'0', 'false', 'no', 'n', 'inactive'}:
         return False
     return None
+
+
+def _coerce_date(value):
+    text = _coerce_str(value)
+    if not text:
+        return None
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y'):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _find_existing_import_member(*, full_name, phone_number, date_of_birth):
+    return Member.all_objects.filter(
+        full_name=full_name,
+        phone_number=phone_number,
+        date_of_birth=date_of_birth,
+    ).first()
 
 
 def _as_row_dict(headers, values):
@@ -589,12 +608,10 @@ class MemberImportAPIView(APIView):
                 skipped_count += 1
                 continue
 
-            existing = Member.all_objects.filter(phone_number=phone_number).first()
-
             payload = {
                 'phone_number': phone_number,
                 'full_name': _coerce_str(_row_pick(row, ['full_name', 'name', 'member_name']))
-                or (existing.full_name if existing else phone_number),
+                or phone_number,
             }
 
             optional_text_fields = {
@@ -619,7 +636,7 @@ class MemberImportAPIView(APIView):
                     continue
                 payload[field] = _coerce_str(value)
 
-            membership_type = payload.get('membership_type') or (existing.membership_type if existing else 'monthly')
+            membership_type = payload.get('membership_type') or 'monthly'
             membership_type = _coerce_str(membership_type).lower()
             if membership_type not in {'package', 'monthly'}:
                 errors.append({'row': row_number, 'error': "membership_type must be 'package' or 'monthly'."})
@@ -630,8 +647,6 @@ class MemberImportAPIView(APIView):
             package_raw = _row_pick(row, ['member_package_id', 'package_id', 'package', 'member_package'])
             package_id = _resolve_package_id(package_raw, package_name_map)
             if membership_type == 'package':
-                if package_id is None and existing and existing.member_package_id:
-                    package_id = existing.member_package_id
                 if package_id is None:
                     errors.append({'row': row_number, 'error': 'Package membership requires member_package_id or package name.'})
                     skipped_count += 1
@@ -644,8 +659,6 @@ class MemberImportAPIView(APIView):
             branch_id = _resolve_branch_id(branch_raw, branch_name_map)
             if branch_id is None and scope_ids is not None:
                 branch_id = scope_ids[0]
-            if branch_id is None and existing and existing.branch_id:
-                branch_id = existing.branch_id
 
             if scope_ids is not None:
                 if branch_id is None:
@@ -658,52 +671,74 @@ class MemberImportAPIView(APIView):
             if branch_id is not None:
                 payload['branch'] = branch_id
 
+            full_name = payload['full_name']
+            dob_raw = payload.get('date_of_birth')
+            parsed_dob = _coerce_date(dob_raw) if dob_raw else None
+            if dob_raw and parsed_dob is None:
+                errors.append({'row': row_number, 'error': 'Invalid date_of_birth format.'})
+                skipped_count += 1
+                continue
+            if parsed_dob is not None:
+                payload['date_of_birth'] = parsed_dob.isoformat()
+
             is_active_raw = _row_pick(row, ['is_active', 'active', 'status'])
             is_active = _coerce_bool(is_active_raw) if is_active_raw is not None else None
             if is_active is not None:
                 payload['is_active'] = is_active
 
-            if existing is None:
-                total_limit_error = total_capacity_exceeded(
-                    Member.objects,
-                    'max_users',
-                    limit_type='members',
-                )
-                if total_limit_error is not None:
-                    errors.append({'row': row_number, 'error': total_limit_error.get('detail', 'Member plan limit exceeded.')})
-                    skipped_count += 1
-                    continue
+            total_limit_error = total_capacity_exceeded(
+                Member.objects,
+                'max_users',
+                limit_type='members',
+            )
+            if total_limit_error is not None:
+                errors.append({'row': row_number, 'error': total_limit_error.get('detail', 'Member plan limit exceeded.')})
+                skipped_count += 1
+                continue
 
-                branch_limit_error = branch_capacity_exceeded(
-                    Member.objects,
-                    branch_id,
-                    'max_members_per_branch',
-                    limit_type='members_per_branch',
-                )
-                if branch_limit_error is not None:
-                    errors.append({'row': row_number, 'error': branch_limit_error.get('detail', 'Branch member limit exceeded.')})
-                    skipped_count += 1
-                    continue
+            branch_limit_error = branch_capacity_exceeded(
+                Member.objects,
+                branch_id,
+                'max_members_per_branch',
+                limit_type='members_per_branch',
+            )
+            if branch_limit_error is not None:
+                errors.append({'row': row_number, 'error': branch_limit_error.get('detail', 'Branch member limit exceeded.')})
+                skipped_count += 1
+                continue
+
+            existing = _find_existing_import_member(
+                full_name=full_name,
+                phone_number=phone_number,
+                date_of_birth=parsed_dob,
+            )
 
             try:
                 with transaction.atomic():
-                    if existing is None:
-                        serializer = MemberSerializer(data=payload)
+                    if existing:
+                        was_deleted = existing.is_deleted
+                        serializer = MemberSerializer(
+                            existing,
+                            data=payload,
+                            partial=True,
+                            context={'member_import': True},
+                        )
+                        serializer.is_valid(raise_exception=True)
+                        member = serializer.save()
+                        if was_deleted:
+                            member.restore()
+                            created_count += 1
+                        else:
+                            updated_count += 1
                     else:
-                        if existing.is_deleted:
-                            existing.restore()
-                        serializer = MemberSerializer(existing, data=payload, partial=True)
-                    serializer.is_valid(raise_exception=True)
-                    serializer.save()
+                        serializer = MemberSerializer(data=payload, context={'member_import': True})
+                        serializer.is_valid(raise_exception=True)
+                        serializer.save()
+                        created_count += 1
             except Exception as exc:
                 errors.append({'row': row_number, 'error': str(exc)})
                 skipped_count += 1
                 continue
-
-            if existing is None:
-                created_count += 1
-            else:
-                updated_count += 1
 
         total_rows = len(parsed_rows)
         result = {
@@ -954,12 +989,15 @@ class MemberAnalyticsAPIView(APIView):
     permission_classes = [HasFeatureMethodPermission]
 
     def get(self, request):
-        from django.db.models import Count
-        from datetime import timedelta
+        from django.db.models import Count, Q
 
         branch_filter = request.query_params.get("branch")
+        period = request.query_params.get("period", "monthly").lower()
+        date_from = request.query_params.get("from")
+        date_to = request.query_params.get("to")
         schema_name = connection.schema_name
         scope = stats_scope_token(request.user, branch_filter)
+        cache_scope = f"{scope}:p={period}:f={date_from or ''}:t={date_to or ''}"
 
         def load():
             now = timezone.now()
@@ -968,7 +1006,7 @@ class MemberAnalyticsAPIView(APIView):
             month_start = today.replace(day=1)
 
             base_qs = scope_queryset_by_branch_access(
-                Member.objects.all(),
+                Member.objects.filter(is_deleted=False),
                 request.user,
                 branch_field="branch_id",
                 branch_filter_id=request.query_params.get("branch"),
@@ -1004,6 +1042,33 @@ class MemberAnalyticsAPIView(APIView):
                 p["member_package__name"] or "No Package": p["count"] for p in package_dist
             }
 
+            package_breakdown = [
+                {
+                    "label": row["member_package__name"] or "No Package",
+                    "active": row["active"],
+                    "expired": row["expired"],
+                }
+                for row in (
+                    base_qs.values("member_package__name")
+                    .annotate(
+                        active=Count("id", filter=Q(is_active=True, end_date__gte=today)),
+                        expired=Count("id", filter=Q(end_date__lt=today)),
+                    )
+                    .order_by("-active", "-expired")[:5]
+                )
+            ]
+
+            retention_denominator = active + expired
+            retention_rate = (
+                round(active / retention_denominator * 100, 1)
+                if retention_denominator > 0
+                else 0.0
+            )
+
+            member_trend = self._build_member_trend(
+                base_qs, period, today, date_from, date_to
+            )
+
             return {
                 "total": total,
                 "active": active,
@@ -1013,14 +1078,66 @@ class MemberAnalyticsAPIView(APIView):
                 "new_last_month": new_last_month,
                 "gender_dist": gender_dist,
                 "package_dist": package_dist_dict,
+                "package_breakdown": package_breakdown,
+                "retention_rate": retention_rate,
+                "member_trend": member_trend,
+                "period": period,
             }
 
         payload = get_cached_value(
-            stats_key(schema_name, "member_analytics", scope),
+            stats_key(schema_name, "member_analytics", cache_scope),
             STATS_TTL,
             load,
         )
         return Response(payload)
+
+    def _build_member_trend(self, base_qs, period, today, date_from=None, date_to=None):
+        import calendar
+        from datetime import datetime as dt_datetime
+
+        results = []
+        if period == "today":
+            for hour in [6, 9, 12, 15, 18, 21]:
+                label = f"{hour}{'a' if hour < 12 else 'p'}"
+                count = base_qs.filter(
+                    created_at__date=today,
+                    created_at__hour__gte=hour,
+                    created_at__hour__lt=hour + 3,
+                ).count()
+                results.append({"label": label, "value": count})
+        elif period == "weekly":
+            for i in range(7):
+                day = today - timedelta(days=6 - i)
+                count = base_qs.filter(created_at__date=day).count()
+                results.append({"label": day.strftime("%a"), "value": count})
+        elif period == "custom" and date_from and date_to:
+            start = dt_datetime.strptime(date_from, "%Y-%m-%d").date()
+            end = dt_datetime.strptime(date_to, "%Y-%m-%d").date()
+            if start > end:
+                start, end = end, start
+            span = (end - start).days + 1
+            segments = 4
+            seg_len = max(1, span // segments)
+            for i in range(segments):
+                seg_start = start + timedelta(days=i * seg_len)
+                if i == segments - 1:
+                    seg_end = end
+                else:
+                    seg_end = min(start + timedelta(days=(i + 1) * seg_len - 1), end)
+                count = base_qs.filter(
+                    created_at__date__gte=seg_start,
+                    created_at__date__lte=seg_end,
+                ).count()
+                results.append({"label": f"W{i + 1}", "value": count})
+        else:
+            year = today.year
+            for month in range(1, 13):
+                count = base_qs.filter(
+                    created_at__year=year,
+                    created_at__month=month,
+                ).count()
+                results.append({"label": calendar.month_abbr[month], "value": count})
+        return results
 
 
 # =============================================================================
