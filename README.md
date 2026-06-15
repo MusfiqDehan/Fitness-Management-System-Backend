@@ -105,19 +105,61 @@ python manage.py collectstatic
 
 ## Run in Production
 
-The production compose file runs the API, PostgreSQL, Redis, Celery worker, and Celery beat scheduler. The backend is designed to sit behind Traefik and exposes its ASGI service on port `8021` inside the Docker network.
+The production compose file runs PgBouncer, PostgreSQL, Redis, the ASGI backend (Hypercorn with 2 workers), Celery worker, and Celery beat. The backend sits behind Traefik on port `8021` inside the Docker network.
+
+**Startup order:** Traefik → backend stack → frontend stack.
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Before starting production containers, make sure the external Docker network referenced by the compose files exists, especially `traefik_proxy`.
+Before starting, ensure the external `traefik_proxy` network exists.
+
+### Memory budget (Contabo VPS 10 — 8 GB RAM)
+
+| Service | Limit |
+|---------|-------|
+| PostgreSQL | 2560 MB |
+| Backend (ASGI) | 1536 MB |
+| Celery worker | 1024 MB (concurrency 2) |
+| Redis | 512 MB |
+| PgBouncer | 128 MB |
+| Celery beat | 256 MB |
+
+### Database connections
+
+- Application traffic uses **PgBouncer** (`pgbouncer:6432`, session mode) — set `DATABASE_URL` in `.env.prod`.
+- Migrations use **DIRECT_DATABASE_URL** (`db:5432`) — the entrypoint applies it when `RUN_MIGRATIONS=1`:
+
+  ```bash
+  docker compose -f docker-compose.prod.yml run --rm \
+    -e RUN_MIGRATIONS=1 \
+    backend python manage.py migrate_schemas --noinput
+  ```
+
+- When `USE_PGBOUNCER=1`, Django `CONN_MAX_AGE` is forced to `0`.
+
+### Health checks
+
+- Liveness: `GET /api/v1/health/tenant/`
+- Readiness: `GET /api/v1/health/ready/` (PostgreSQL + Redis, returns 503 on failure)
+
+### ADMS biometric devices
+
+Devices use **HTTP only** on port 80 (not HTTPS). Configure firmware with:
+
+```
+http://{tenant}.fitssort.com/iclock/cdata
+```
+
+See [traefik/README.md](../traefik/README.md) for routing details.
 
 ## Notes
 
-- The backend uses `daphne` as the ASGI server.
-- The app is multi-tenant, so tenant and domain settings must be configured before deployment.
+- Production ASGI uses Hypercorn with 2 workers (`scripts/run-asgi-prod.sh`).
+- The app is multi-tenant — tenant and domain settings must be configured before deployment.
 - Static and media volumes are mounted separately in production.
+- Backups: see [docs/production-backup-restore.md](docs/production-backup-restore.md).
 
 
 ## Paymnent Integration Testing
