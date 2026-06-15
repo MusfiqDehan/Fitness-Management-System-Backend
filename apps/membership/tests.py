@@ -564,3 +564,91 @@ class MemberInvitationResendTests(APITestCase):
 
 		self.assertTrue(pending_data['invitation_pending'])
 		self.assertFalse(registered_data['invitation_pending'])
+
+
+class MemberRelationshipFieldTests(APITestCase):
+	def setUp(self):
+		with schema_context('public'):
+			self.public = Tenant.objects.create(
+				schema_name='public',
+				name='Public',
+				slug='public',
+				code='PUBMEM05',
+				owner_email='root5@membership.test',
+				billing_email='root5@membership.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain='testserver',
+				tenant=self.public,
+				defaults={'is_primary': True},
+			)
+
+			self.tenant = Tenant.objects.create(
+				schema_name='membership_relationship_test',
+				name='Membership Relationship Tenant',
+				slug='membership-relationship',
+				code='MEMREL001',
+				owner_email='admin@relationship.test',
+				billing_email='admin@relationship.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.create(domain='relationship.testserver', tenant=self.tenant, is_primary=True)
+
+		with schema_context(self.tenant.schema_name):
+			self.admin = User.objects.create_superuser(
+				email='admin@relationship.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+			)
+			self.package = MemberPackage.objects.create(
+				name='Starter',
+				package_type='monthly',
+				duration_in_days=30,
+				price='1200.00',
+			)
+
+	def test_relationship_with_member_create_read_update_round_trip(self):
+		create_payload = {
+			'full_name': 'Emergency Contact Member',
+			'phone_number': '01710030001',
+			'email': 'emergency@example.com',
+			'membership_type': 'package',
+			'member_package_id': self.package.id,
+			'emergency_contact_name': 'Jane Doe',
+			'emergency_contact_phone': '01710030002',
+			'relationship_with_member': 'Spouse',
+		}
+		self.client.force_authenticate(user=self.admin)
+		create_response = self.client.post(
+			'/api/v1/membership/members/',
+			create_payload,
+			format='json',
+			HTTP_HOST='relationship.testserver',
+		)
+
+		self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(create_response.data['relationship_with_member'], 'Spouse')
+
+		member_id = create_response.data['id']
+		get_response = self.client.get(
+			f'/api/v1/membership/members/{member_id}/',
+			HTTP_HOST='relationship.testserver',
+		)
+		self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(get_response.data['relationship_with_member'], 'Spouse')
+
+		patch_response = self.client.patch(
+			f'/api/v1/membership/members/{member_id}/',
+			{'relationship_with_member': 'Parent'},
+			format='json',
+			HTTP_HOST='relationship.testserver',
+		)
+		self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(patch_response.data['relationship_with_member'], 'Parent')
+
+		with schema_context(self.tenant.schema_name):
+			member = Member.objects.get(pk=member_id)
+			self.assertEqual(member.relationship_with_member, 'Parent')
