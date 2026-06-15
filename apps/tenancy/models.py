@@ -930,6 +930,8 @@ class PlatformGymPreferences(models.Model):
     date_format = models.CharField(max_length=20, choices=DATE_FORMAT_CHOICES, default="dmy")
     week_start = models.CharField(max_length=10, choices=WEEK_START_CHOICES, default="sat")
     theme = models.CharField(max_length=20, choices=THEME_CHOICES, default="light")
+    topbar_show_date = models.BooleanField(default=False)
+    topbar_show_description = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
