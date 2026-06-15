@@ -238,8 +238,9 @@ class MemberSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         membership_type = attrs.get('membership_type', getattr(self.instance, 'membership_type', None))
         email = attrs.get('email', getattr(self.instance, 'email', None))
+        is_member_import = bool(self.context.get('member_import'))
 
-        if not email:
+        if not email and not is_member_import:
             raise serializers.ValidationError({'email': 'This field is required.'})
 
         if membership_type == 'monthly':
