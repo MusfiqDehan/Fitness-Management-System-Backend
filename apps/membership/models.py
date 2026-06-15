@@ -52,7 +52,7 @@ class Member(BaseModel):
     )
 
     full_name = models.CharField(max_length=150)
-    phone_number = models.CharField(max_length=20, unique=True)
+    phone_number = models.CharField(max_length=20)
     email = models.EmailField(blank=True, null=True)
     gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True)
     date_of_birth = models.DateField(null=True, blank=True)
@@ -89,6 +89,7 @@ class Member(BaseModel):
 
     emergency_contact_name = models.CharField(max_length=150, blank=True, default="")
     emergency_contact_phone = models.CharField(max_length=20, blank=True, default="")
+    relationship_with_member = models.CharField(max_length=100, blank=True, default="")
     notes = models.TextField(blank=True, default="")
 
     # Payment tracking
@@ -266,6 +267,8 @@ class GymClass(BaseModel):
         ('cardio', 'Cardio'),
         ('pilates', 'Pilates'),
         ('zumba', 'Zumba'),
+        ('karate', 'Karate'),
+        ('swimming', 'Swimming'),
         ('other', 'Other'),
     )
     LEVELS = (
