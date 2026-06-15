@@ -1,10 +1,37 @@
 #!/bin/sh
 set -e
 
+# Database connectivity:
+# - Normal app traffic: DATABASE_URL → PgBouncer (USE_PGBOUNCER=1 in .env.prod)
+# - Bootstrap/migrations: DIRECT_DATABASE_URL → PostgreSQL (db:5432)
+#
+# Production (SKIP_DB_BOOTSTRAP=1) runs migrations manually:
+#   docker compose -f docker-compose.prod.yml run --rm \
+#     -e RUN_MIGRATIONS=1 backend python manage.py migrate_schemas --noinput
+
+apply_direct_database_url() {
+    if [ -n "${DIRECT_DATABASE_URL:-}" ]; then
+        echo "Using DIRECT_DATABASE_URL for bootstrap/migrations (bypassing PgBouncer)."
+        export DATABASE_URL="${DIRECT_DATABASE_URL}"
+        export USE_PGBOUNCER=0
+        export DB_CONN_MAX_AGE=0
+    elif [ "${USE_PGBOUNCER:-0}" = "1" ]; then
+        echo "Warning: USE_PGBOUNCER=1 but DIRECT_DATABASE_URL is unset; migrations may fail through PgBouncer." >&2
+    fi
+}
+
 if [ "${SKIP_DB_BOOTSTRAP:-0}" = "1" ]; then
-    echo "Skipping DB bootstrap/migrations for this container (SKIP_DB_BOOTSTRAP=1)."
+    if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
+        apply_direct_database_url
+    else
+        echo "Skipping DB bootstrap/migrations (SKIP_DB_BOOTSTRAP=1)."
+        echo "To migrate production, run:"
+        echo "  docker compose -f docker-compose.prod.yml run --rm -e RUN_MIGRATIONS=1 backend python manage.py migrate_schemas --noinput"
+    fi
     exec "$@"
 fi
+
+apply_direct_database_url
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
