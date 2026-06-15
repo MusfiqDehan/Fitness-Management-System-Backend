@@ -251,6 +251,9 @@ try:
 except ValueError:
     DB_CONN_MAX_AGE = 0
 
+if os.environ.get('USE_PGBOUNCER', '').strip().lower() in ('1', 'true', 'yes', 'on'):
+    DB_CONN_MAX_AGE = 0
+
 _database_url = os.environ.get('DATABASE_URL', '')
 if _database_url:
     _db_cfg = dj_database_url.parse(
@@ -276,6 +279,8 @@ if _database_url:
             in_docker_host,
             os.environ.get('DOCKER_DB_HOST', ''),
             os.environ.get('POSTGRES_HOST', ''),
+            'pgbouncer',
+            'gym-pgbouncer',
             'gym-db-local',
             'db',
             'postgres',
