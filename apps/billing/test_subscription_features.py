@@ -137,6 +137,14 @@ class FeatureRegistrySubscriptionsTests(FeatureRegistryConsistencyTests):
         self.assertIn("subscriptions", FULL_ACCESS_FEATURE_KEYS)
         self.assertIn("subscriptions", iter_tenant_leaf_keys())
 
+    def test_subscriptions_in_platform_package_seed(self):
+        from apps.tenancy.management.commands.seed_platform_packages import CORE_FEATURES, PACKAGES
+
+        core_keys = {key for key, _, _ in CORE_FEATURES}
+        self.assertIn("subscriptions", core_keys)
+        for slug in ("starter", "growth", "enterprise"):
+            self.assertIn("subscriptions", PACKAGES[slug]["features"])
+
 
 class MemberRenewalServiceTests(APITestCase):
     def setUp(self):
