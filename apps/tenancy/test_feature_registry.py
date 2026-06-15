@@ -129,3 +129,13 @@ class FeatureRegistryConsistencyTests(SimpleTestCase):
         growth_group = next(group for group in TENANT_REGISTRY if group["group"] == "Growth & Engagement")
         names = [child["name"] for child in growth_group["children"]]
         self.assertNotIn("Class Manager", names)
+
+    def test_dashboard_group_navigation_order(self):
+        dashboard_group = next(group for group in TENANT_REGISTRY if group["group"] == "Dashboard")
+        names = [child["name"] for child in dashboard_group["children"]]
+        self.assertEqual(names, ["Overview", "Attendance", "Reports", "Branch Manager"])
+
+    def test_branch_manager_not_in_growth_group(self):
+        growth_group = next(group for group in TENANT_REGISTRY if group["group"] == "Growth & Engagement")
+        names = [child["name"] for child in growth_group["children"]]
+        self.assertNotIn("Branch Manager", names)
