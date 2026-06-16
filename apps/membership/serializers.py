@@ -332,7 +332,7 @@ class GymClassSerializer(serializers.ModelSerializer):
     class_type_display = serializers.CharField(source='get_class_type_display', read_only=True)
     level_display = serializers.CharField(source='get_level_display', read_only=True)
     trainer_name = serializers.CharField(source='trainer_profile.user.full_name', read_only=True, default=None)
-    trainer_profile_id = serializers.IntegerField(source='trainer_profile_id', read_only=True)
+    trainer_profile_id = serializers.IntegerField(read_only=True)
     image_url = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
@@ -383,6 +383,7 @@ class GymScheduleSerializer(serializers.ModelSerializer):
         model = GymSchedule
         fields = (
             'id', 'gym_class', 'trainer_profile', 'trainer_schedule', 'title', 'class_type', 'instructor',
+            'trainer_name',
             'recurrence_mode', 'recurrence_mode_display', 'scheduled_date',
             'day_of_week', 'day_of_week_display',
             'start_time', 'end_time', 'capacity',

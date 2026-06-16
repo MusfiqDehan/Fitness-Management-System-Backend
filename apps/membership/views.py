@@ -23,6 +23,9 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from urllib.parse import urlparse
 import logging
+import json
+import time
+from pathlib import Path
 import uuid
 import secrets
 import csv
@@ -1583,19 +1586,109 @@ class GymClassView(ModelCRUDView):
     serializer_class = GymClassSerializer
     permission_classes = [HasFeatureMethodPermission]
 
+    # region agent log
+    @staticmethod
+    def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+        payload = {
+            'sessionId': '43cf3d',
+            'hypothesisId': hypothesis_id,
+            'location': location,
+            'message': message,
+            'data': data,
+            'timestamp': int(time.time() * 1000),
+        }
+        for log_path in (
+            Path(settings.BASE_DIR).parent / '.cursor' / 'debug-43cf3d.log',
+            Path(settings.BASE_DIR) / '.cursor' / 'debug-43cf3d.log',
+        ):
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with log_path.open('a', encoding='utf-8') as handle:
+                    handle.write(json.dumps(payload) + '\n')
+                break
+            except OSError:
+                continue
+    # endregion
+
     def _catalog_service(self, request):
         return ClassCatalogService(user=request.user)
 
+    def _list(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        # region agent log
+        self._agent_debug_log(
+            'B',
+            'membership/views.py:GymClassView._list',
+            'gym class list requested',
+            {
+                'total_count': queryset.count(),
+                'trainer_synced_count': queryset.filter(trainer_class__isnull=False).count(),
+            },
+        )
+        # endregion
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            # region agent log
+            self._agent_debug_log(
+                'A',
+                'membership/views.py:GymClassView._list',
+                'gym class serializer bound for paginated list',
+                {'serialized_count': len(page)},
+            )
+            # endregion
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        # region agent log
+        self._agent_debug_log(
+            'A',
+            'membership/views.py:GymClassView._list',
+            'gym class serializer bound for full list',
+            {'serialized_count': queryset.count()},
+        )
+        # endregion
+        return Response(serializer.data)
+
     def _create(self, request):
+        # region agent log
+        self._agent_debug_log(
+            'B',
+            'membership/views.py:GymClassView._create',
+            'gym class create requested',
+            {'has_trainer_profile': 'trainer_profile' in request.data},
+        )
+        # endregion
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        validated = serializer.validated_data
+        trainer_ref = validated.get('trainer_profile')
+        # region agent log
+        self._agent_debug_log(
+            'L',
+            'membership/views.py:GymClassView._create',
+            'validated trainer_profile ref type',
+            {
+                'trainer_profile_type': type(trainer_ref).__name__ if trainer_ref is not None else None,
+                'trainer_profile_pk': getattr(trainer_ref, 'pk', trainer_ref),
+            },
+        )
+        # endregion
         try:
-            instance = self._catalog_service(request).create_gym_class_from_admin(serializer.validated_data)
+            instance = self._catalog_service(request).create_gym_class_from_admin(validated)
         except MandatoryTrainerRequired as exc:
             return Response({'trainer_profile': [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
         except ClassCatalogServiceError as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+        response_data = self.get_serializer(instance).data
+        # region agent log
+        self._agent_debug_log(
+            'A',
+            'membership/views.py:GymClassView._create',
+            'gym class created and serialized',
+            {'gym_class_id': instance.id, 'trainer_class_id': instance.trainer_class_id},
+        )
+        # endregion
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
     def _update(self, pk, request, partial):
         instance = self.get_object()
@@ -1618,6 +1711,59 @@ class GymScheduleView(ModelCRUDView):
     ).order_by('day_of_week', 'start_time')
     serializer_class = GymScheduleSerializer
     permission_classes = [HasFeatureMethodPermission]
+
+    # region agent log
+    @staticmethod
+    def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+        payload = {
+            'sessionId': '43cf3d',
+            'hypothesisId': hypothesis_id,
+            'location': location,
+            'message': message,
+            'data': data,
+            'timestamp': int(time.time() * 1000),
+        }
+        for log_path in (
+            Path(settings.BASE_DIR).parent / '.cursor' / 'debug-43cf3d.log',
+            Path(settings.BASE_DIR) / '.cursor' / 'debug-43cf3d.log',
+        ):
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with log_path.open('a', encoding='utf-8') as handle:
+                    handle.write(json.dumps(payload) + '\n')
+                break
+            except OSError:
+                continue
+    # endregion
+
+    def _list(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        # region agent log
+        self._agent_debug_log(
+            'H',
+            'membership/views.py:GymScheduleView._list',
+            'gym schedule list requested',
+            {
+                'total_count': queryset.count(),
+                'trainer_synced_count': queryset.filter(trainer_schedule__isnull=False).count(),
+                'one_off_count': queryset.filter(recurrence_mode='one_off').count(),
+            },
+        )
+        # endregion
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        # region agent log
+        self._agent_debug_log(
+            'H',
+            'membership/views.py:GymScheduleView._list',
+            'gym schedule list serialized',
+            {'serialized_count': queryset.count()},
+        )
+        # endregion
+        return Response(serializer.data)
 
     def _catalog_service(self, request):
         return ClassCatalogService(user=request.user)
