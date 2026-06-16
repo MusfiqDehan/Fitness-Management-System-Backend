@@ -22,16 +22,21 @@ class PermissionDenied(ClassCatalogServiceError):
     """Raised when a user attempts an unauthorized class/schedule mutation."""
 
 
+def _resolve_pk(value: Any) -> Any:
+    return getattr(value, 'pk', value)
+
+
 class ClassCatalogService:
     def __init__(self, *, user=None):
         self.user = user
 
     @transaction.atomic
     def create_gym_class_from_admin(self, data: dict[str, Any]) -> GymClass:
-        trainer_profile_id = data.get('trainer_profile') or data.get('trainer_profile_id')
-        if not trainer_profile_id:
+        trainer_profile_ref = data.get('trainer_profile') or data.get('trainer_profile_id')
+        if not trainer_profile_ref:
             raise MandatoryTrainerRequired('Trainer assignment is required.')
 
+        trainer_profile_id = _resolve_pk(trainer_profile_ref)
         trainer_profile = TrainerProfile.objects.filter(pk=trainer_profile_id, is_deleted=False).first()
         if trainer_profile is None:
             raise MandatoryTrainerRequired('Selected trainer was not found.')
@@ -57,9 +62,10 @@ class ClassCatalogService:
     @transaction.atomic
     def update_gym_class_from_admin(self, gym_class: GymClass, data: dict[str, Any]) -> GymClass:
         if 'trainer_profile' in data or 'trainer_profile_id' in data:
-            trainer_profile_id = data.get('trainer_profile') or data.get('trainer_profile_id')
-            if not trainer_profile_id:
+            trainer_profile_ref = data.get('trainer_profile') or data.get('trainer_profile_id')
+            if not trainer_profile_ref:
                 raise MandatoryTrainerRequired('Trainer assignment cannot be removed.')
+            trainer_profile_id = _resolve_pk(trainer_profile_ref)
             trainer_profile = TrainerProfile.objects.filter(pk=trainer_profile_id, is_deleted=False).first()
             if trainer_profile is None:
                 raise MandatoryTrainerRequired('Selected trainer was not found.')
@@ -115,16 +121,19 @@ class ClassCatalogService:
     @transaction.atomic
     def create_gym_schedule_from_admin(self, data: dict[str, Any]) -> GymSchedule:
         gym_class = None
-        gym_class_id = data.get('gym_class')
-        if gym_class_id:
-            gym_class = GymClass.objects.filter(pk=gym_class_id, is_deleted=False).first()
+        gym_class_ref = data.get('gym_class')
+        if gym_class_ref:
+            gym_class = GymClass.objects.filter(pk=_resolve_pk(gym_class_ref), is_deleted=False).first()
 
         trainer_profile = None
         if gym_class and gym_class.trainer_profile:
             trainer_profile = gym_class.trainer_profile
-        trainer_profile_id = data.get('trainer_profile') or data.get('trainer_profile_id')
-        if trainer_profile_id:
-            trainer_profile = TrainerProfile.objects.filter(pk=trainer_profile_id, is_deleted=False).first()
+        trainer_profile_ref = data.get('trainer_profile') or data.get('trainer_profile_id')
+        if trainer_profile_ref:
+            trainer_profile = TrainerProfile.objects.filter(
+                pk=_resolve_pk(trainer_profile_ref),
+                is_deleted=False,
+            ).first()
 
         if trainer_profile is None:
             raise MandatoryTrainerRequired('Trainer assignment is required for schedules.')
@@ -151,8 +160,10 @@ class ClassCatalogService:
     @transaction.atomic
     def create_trainer_schedule(self, trainer_profile: TrainerProfile, data: dict[str, Any]) -> TrainerSchedule:
         self._assert_trainer_owner(trainer_profile)
+        trainer_class_ref = data['trainer_class']
+        trainer_class_id = getattr(trainer_class_ref, 'pk', trainer_class_ref)
         trainer_class = TrainerClass.objects.filter(
-            pk=data['trainer_class'],
+            pk=trainer_class_id,
             trainer=trainer_profile,
             is_deleted=False,
         ).first()
