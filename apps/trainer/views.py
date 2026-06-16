@@ -44,6 +44,34 @@ def _get_trainer_profile_for_user(user):
     return TrainerProfile.objects.filter(user=user, is_deleted=False).first()
 
 
+def _trainer_foreign_id_forbidden_response(request, profile):
+    trainer_id = request.data.get('trainer')
+    if trainer_id is not None and str(trainer_id).strip() != '' and int(trainer_id) != profile.id:
+        return Response(
+            {'detail': 'Trainers may only manage classes and schedules for themselves.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+def _trainer_create_data(request, profile):
+    forbidden = _trainer_foreign_id_forbidden_response(request, profile)
+    if forbidden is not None:
+        return forbidden, None
+    data = request.data.copy()
+    data['trainer'] = profile.id
+    return None, data
+
+
+def _trainer_update_data(request, profile):
+    forbidden = _trainer_foreign_id_forbidden_response(request, profile)
+    if forbidden is not None:
+        return forbidden, None
+    data = request.data.copy()
+    data.pop('trainer', None)
+    return None, data
+
+
 class IsTrainerOrFeaturePermission(BasePermission):
     """Allow trainer-role users; otherwise enforce tenant feature permission checks."""
 
@@ -367,7 +395,10 @@ class TrainerClassView(SearchFilterSortPaginationMixin, TrainerModelActions, Mod
             profile = _get_trainer_profile_for_user(request.user)
             if profile is None:
                 return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
-            serializer = self.get_serializer(data=request.data)
+            forbidden, data = _trainer_create_data(request, profile)
+            if forbidden is not None:
+                return forbidden
+            serializer = self.get_serializer(data=data)
             serializer.is_valid(raise_exception=True)
             try:
                 instance = self._catalog_service(request).create_trainer_class(
@@ -387,7 +418,16 @@ class TrainerClassView(SearchFilterSortPaginationMixin, TrainerModelActions, Mod
     def _update(self, pk, request, partial):
         instance = self.get_object()
         old_trainer = getattr(instance, 'trainer', None)
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if _is_trainer_user(request.user):
+            profile = _get_trainer_profile_for_user(request.user)
+            if profile is None:
+                return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
+            forbidden, data = _trainer_update_data(request, profile)
+            if forbidden is not None:
+                return forbidden
+            serializer = self.get_serializer(instance, data=data, partial=partial)
+        else:
+            serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         if _is_trainer_user(request.user):
             try:
@@ -478,8 +518,10 @@ class TrainerScheduleView(SearchFilterSortPaginationMixin, TrainerModelActions, 
             profile = _get_trainer_profile_for_user(request.user)
             if profile is None:
                 return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
-
-            serializer = self.get_serializer(data=request.data)
+            forbidden, data = _trainer_create_data(request, profile)
+            if forbidden is not None:
+                return forbidden
+            serializer = self.get_serializer(data=data)
             serializer.is_valid(raise_exception=True)
             try:
                 instance = self._catalog_service(request).create_trainer_schedule(
@@ -490,6 +532,21 @@ class TrainerScheduleView(SearchFilterSortPaginationMixin, TrainerModelActions, 
                 return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
             return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
         return super()._create(request)
+
+    def _update(self, pk, request, partial):
+        if _is_trainer_user(request.user):
+            profile = _get_trainer_profile_for_user(request.user)
+            if profile is None:
+                return Response({'error': 'Trainer profile not found'}, status=status.HTTP_404_NOT_FOUND)
+            forbidden, data = _trainer_update_data(request, profile)
+            if forbidden is not None:
+                return forbidden
+            instance = self.get_object()
+            serializer = self.get_serializer(instance, data=data, partial=partial)
+            serializer.is_valid(raise_exception=True)
+            instance = serializer.save()
+            return Response(self.get_serializer(instance).data)
+        return super()._update(pk, request, partial)
 
     def _list(self, request):
         queryset = self.filter_queryset(self.get_queryset())
