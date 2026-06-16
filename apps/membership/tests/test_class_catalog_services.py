@@ -103,6 +103,17 @@ class UnifiedClassCatalogServiceTests(TestCase):
             self.assertEqual(trainer_class.name, 'Sunrise Flow')
             self.assertEqual(trainer_class.trainer_id, self.trainer_profile.id)
 
+    def test_admin_create_accepts_trainer_profile_instance(self):
+        """DRF validated_data passes model instances, not raw PKs."""
+        with schema_context(self.tenant.schema_name):
+            gym_class = self.admin_service.create_gym_class_from_admin({
+                'name': 'Instance Flow',
+                'class_type': 'yoga',
+                'level': 'beginner',
+                'trainer_profile': self.trainer_profile,
+            })
+            self.assertEqual(gym_class.trainer_profile_id, self.trainer_profile.id)
+
     def test_admin_update_reassigns_trainer(self):
         with schema_context(self.tenant.schema_name):
             gym_class = self.admin_service.create_gym_class_from_admin({
