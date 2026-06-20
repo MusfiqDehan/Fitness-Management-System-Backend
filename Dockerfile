@@ -28,7 +28,7 @@ RUN apt-get update \
 COPY . .
 
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /app/scripts/run-asgi-prod.sh /app/scripts/backup-postgres.sh /app/scripts/production-alert.sh
+RUN chmod +x /entrypoint.sh /app/scripts/run-asgi-prod.sh /app/scripts/migrate-prod.sh /app/scripts/backup-postgres.sh /app/scripts/production-alert.sh
 
 EXPOSE 8021
 
