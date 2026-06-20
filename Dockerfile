@@ -28,9 +28,9 @@ RUN apt-get update \
 COPY . .
 
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /app/scripts/run-asgi-prod.sh /app/scripts/migrate-prod.sh /app/scripts/backup-postgres.sh /app/scripts/production-alert.sh
+RUN chmod +x /entrypoint.sh /app/scripts/run-asgi-prod.sh /app/scripts/run-asgi-api-prod.sh /app/scripts/run-asgi-adms-prod.sh /app/scripts/run-asgi-ws-prod.sh /app/scripts/migrate-prod.sh /app/scripts/backup-postgres.sh /app/scripts/production-alert.sh
 
-EXPOSE 8021
+EXPOSE 8021 8022 8023
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["daphne", "-b", "0.0.0.0", "-p", "8021", "config.asgi:application"]
