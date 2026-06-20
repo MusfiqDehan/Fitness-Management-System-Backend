@@ -45,6 +45,8 @@ services:
       - REDIS_PORT=6379
       - REDIS_CACHE_URL=redis://redis:6379/2
       - ASGI_WORKERS=4
+      - API_WORKERS=4
+      - API_THREADS=2
     expose:
       - "8021"
     depends_on:
@@ -59,7 +61,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" -H \"X-Forwarded-Proto: https\" http://127.0.0.1:8021/api/v1/health/ready/ > /dev/null",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" http://127.0.0.1:8021/api/v1/health/live/ > /dev/null",
         ]
       interval: 30s
       timeout: 10s
@@ -90,7 +92,7 @@ services:
       - "traefik.http.routers.backend-custom-api.service=backend"
 
       - "traefik.http.services.backend.loadbalancer.server.port=8021"
-    command: ["/bin/sh", "/app/scripts/run-asgi-api-prod.sh"]
+    command: ["/bin/sh", "/app/scripts/run-api-prod.sh"]
 
   backend_ws:
     <<: *backend-image
@@ -140,13 +142,25 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_CACHE_URL=redis://redis:6379/2
-      - ADMS_ASGI_WORKERS=2
+      - ADMS_ASGI_WORKERS=4
+      - ADMS_WORKERS=4
+      - ADMS_THREADS=4
     expose:
       - "8022"
     depends_on:
       backend:
         condition: service_healthy
     mem_limit: 384m
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" http://127.0.0.1:8022/api/v1/health/live/ > /dev/null",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik_proxy"
@@ -166,7 +180,7 @@ services:
       - "traefik.http.routers.backend-custom-adms.service=backend-adms"
 
       - "traefik.http.services.backend-adms.loadbalancer.server.port=8022"
-    command: ["/bin/sh", "/app/scripts/run-asgi-adms-prod.sh"]
+    command: ["/bin/sh", "/app/scripts/run-adms-prod.sh"]
 
   celery_worker:
     build:
@@ -325,6 +339,23 @@ services:
     mem_limit: 512m
     logging: *default-logging
     restart: unless-stopped
+
+  # Restarts backend containers when their Docker healthcheck fails.
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    container_name: gym-autoheal
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: all
+      AUTOHEAL_INTERVAL: 15
+      AUTOHEAL_START_PERIOD: 120
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - app_network
+    mem_limit: 64m
+    logging: *default-logging
 
   # Optional: run backups on the host cron instead of a sidecar.
   # Example (host crontab, daily 02:30 UTC):

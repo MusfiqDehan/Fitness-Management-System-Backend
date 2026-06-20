@@ -12,7 +12,7 @@ from django.urls import path, include, re_path
 from django.views.static import serve
 from django.conf import settings
 from django.conf.urls.static import static
-from config.health import readiness_health, tenant_health
+from config.health import liveness_health, readiness_health, tenant_health
 
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -34,6 +34,7 @@ urlpatterns = [
 
     # Tenant routing health check
     path('api/v1/health/tenant/', tenant_health, name='tenant-health'),
+    path('api/v1/health/live/', liveness_health, name='liveness-health'),
     path('api/v1/health/ready/', readiness_health, name='readiness-health'),
 
     # Public control-plane authentication

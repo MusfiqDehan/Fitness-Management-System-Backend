@@ -46,6 +46,11 @@ def _run_with_timeout(fn, timeout_seconds: float) -> dict:
             raise TimeoutError(f"{fn.__name__} timed out after {timeout_seconds}s") from exc
 
 
+def liveness_health(request):
+    """Fast probe for container orchestration — no dependency checks."""
+    return JsonResponse({"ok": True, "host": request.get_host()})
+
+
 def readiness_health(request):
     timeout_seconds = float(getattr(settings, "READINESS_CHECK_TIMEOUT", 2))
     checks = {
