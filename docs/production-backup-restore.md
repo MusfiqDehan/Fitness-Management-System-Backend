@@ -35,10 +35,17 @@ Retention: 7 daily + 4 weekly copies (configured in the script).
    pg_restore -h localhost -p 5432 -U gym_user -d gym_db --clean --if-exists /var/backups/gym-postgres/daily/gym_YYYYMMDD_HHMMSS.dump
    ```
 
-3. Run migrations if needed (entrypoint switches to `DIRECT_DATABASE_URL` automatically):
+3. Run migrations if needed (direct PostgreSQL, not PgBouncer):
 
    ```bash
-   docker compose -f docker-compose.prod.yml run --rm \
+   ./scripts/migrate-prod.sh
+   ```
+
+   Or manually (must rebuild backend image first so entrypoint is current):
+
+   ```bash
+   docker compose -f docker-compose.prod.yml build backend
+   docker compose -f docker-compose.prod.yml run --rm --no-deps \
      -e RUN_MIGRATIONS=1 \
      backend python manage.py migrate_schemas --noinput
    ```
