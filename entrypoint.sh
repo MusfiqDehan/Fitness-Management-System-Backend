@@ -15,18 +15,31 @@ apply_direct_database_url() {
         export DATABASE_URL="${DIRECT_DATABASE_URL}"
         export USE_PGBOUNCER=0
         export DB_CONN_MAX_AGE=0
-    elif [ "${USE_PGBOUNCER:-0}" = "1" ]; then
-        echo "Warning: USE_PGBOUNCER=1 but DIRECT_DATABASE_URL is unset; migrations may fail through PgBouncer." >&2
+        return 0
     fi
+
+    echo "ERROR: DIRECT_DATABASE_URL is not set. Migrations must connect to PostgreSQL directly (db:5432), not PgBouncer." >&2
+    echo "Add DIRECT_DATABASE_URL to .env.prod, e.g. postgresql://user:pass%40word@db:5432/gym_db" >&2
+    exit 1
+}
+
+# True when this container is invoked for schema migrations.
+is_migration_invocation() {
+    if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
+        return 0
+    fi
+    case " $* " in
+        *" migrate_schemas "*|*" migrate "*) return 0 ;;
+    esac
+    return 1
 }
 
 if [ "${SKIP_DB_BOOTSTRAP:-0}" = "1" ]; then
-    if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
+    if is_migration_invocation "$@"; then
         apply_direct_database_url
     else
         echo "Skipping DB bootstrap/migrations (SKIP_DB_BOOTSTRAP=1)."
-        echo "To migrate production, run:"
-        echo "  docker compose -f docker-compose.prod.yml run --rm -e RUN_MIGRATIONS=1 backend python manage.py migrate_schemas --noinput"
+        echo "To migrate production, run: ./scripts/migrate-prod.sh"
     fi
     exec "$@"
 fi
