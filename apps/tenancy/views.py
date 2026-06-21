@@ -31,7 +31,7 @@ from utils.cache_helpers import (
     invalidate_user_permissions,
     tenant_overview_key,
 )
-from apps.crm.email_delivery import resolve_tenant_mail_route
+from apps.crm.email_delivery import resolve_operational_mail_route, resolve_platform_mail_route
 from apps.identity.models import User
 from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage, PlatformSettings
 from .permissions import IsPlatformFeaturePermission
@@ -106,7 +106,17 @@ def _json_safe(value):
 	return value
 
 
-def _issue_email(*, tenant, to_email, purpose, subject, template_name, context, fallback_text):
+def _issue_email(
+	*,
+	tenant,
+	to_email,
+	purpose,
+	subject,
+	template_name,
+	context,
+	fallback_text,
+	mail_route="operational",
+):
 	safe_context = _json_safe(context or {})
 	html_body = render_to_string(template_name, context)
 	mail_log = EmailQueue.objects.create(
@@ -119,7 +129,10 @@ def _issue_email(*, tenant, to_email, purpose, subject, template_name, context, 
 		context=safe_context,
 	)
 
-	from_email, connection = resolve_tenant_mail_route(tenant)
+	if mail_route == "platform":
+		from_email, connection, _ = resolve_platform_mail_route()
+	else:
+		from_email, connection = resolve_operational_mail_route(tenant)
 	email = EmailMultiAlternatives(
 		subject=subject,
 		body=fallback_text,
@@ -132,28 +145,46 @@ def _issue_email(*, tenant, to_email, purpose, subject, template_name, context, 
 	try:
 		email.send(fail_silently=False)
 	except Exception as first_exc:
-		# Fall back to global settings connection if tenant route fails at send time.
-		fallback_from = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
+		fallback_from, fallback_connection, _ = resolve_platform_mail_route()
+		if not fallback_from:
+			fallback_from = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
 		fallback_email = EmailMultiAlternatives(
 			subject=subject,
 			body=fallback_text,
 			from_email=fallback_from,
 			to=[to_email],
+			connection=fallback_connection,
 		)
 		fallback_email.attach_alternative(html_body, "text/html")
 		try:
 			fallback_email.send(fail_silently=False)
 		except Exception as exc:
-			mail_log.status = EmailQueue.STATUS_FAILED
-			mail_log.attempts += 1
-			mail_log.last_error = f"primary={first_exc}; fallback={exc}"
-			mail_log.save(update_fields=["status", "attempts", "last_error"])
-			return
+			env_fallback = EmailMultiAlternatives(
+				subject=subject,
+				body=fallback_text,
+				from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local"),
+				to=[to_email],
+			)
+			env_fallback.attach_alternative(html_body, "text/html")
+			try:
+				env_fallback.send(fail_silently=False)
+			except Exception as env_exc:
+				mail_log.status = EmailQueue.STATUS_FAILED
+				mail_log.attempts += 1
+				mail_log.last_error = f"primary={first_exc}; platform={exc}; env={env_exc}"
+				mail_log.save(update_fields=["status", "attempts", "last_error"])
+				return
 
 		mail_log.status = EmailQueue.STATUS_SENT
 		mail_log.sent_at = timezone.now()
 		mail_log.attempts += 1
 		mail_log.save(update_fields=["status", "sent_at", "attempts"])
+		return
+
+	mail_log.status = EmailQueue.STATUS_SENT
+	mail_log.sent_at = timezone.now()
+	mail_log.attempts += 1
+	mail_log.save(update_fields=["status", "sent_at", "attempts"])
 
 
 def _derive_schema_name(subdomain):
@@ -632,6 +663,7 @@ class TenantSelfRegistrationAPIView(APIView):
 				"expires_at": invitation.expires_at,
 			},
 			fallback_text=f"Verify your registration by visiting {setup_url}",
+			mail_route="platform",
 		)
 
 		return Response(
@@ -718,6 +750,7 @@ class SuperadminInvitationAPIView(APIView):
 						"expires_at": invitation.expires_at,
 					},
 					fallback_text=f"Accept your invitation by visiting {setup_url}",
+					mail_route="platform",
 				)
 
 				_record_audit(
@@ -780,6 +813,7 @@ class SuperadminInvitationAPIView(APIView):
 					"expires_at": invitation.expires_at,
 				},
 				fallback_text=f"Accept your invitation by visiting {setup_url}",
+				mail_route="platform",
 			)
 
 			_record_audit(
