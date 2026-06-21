@@ -18,8 +18,15 @@ apply_direct_database_url() {
         return 0
     fi
 
+    if [ "${USE_PGBOUNCER:-0}" != "1" ] && [ -n "${DATABASE_URL:-}" ]; then
+        echo "PgBouncer disabled; using DATABASE_URL directly for bootstrap/migrations."
+        export USE_PGBOUNCER=0
+        export DB_CONN_MAX_AGE=0
+        return 0
+    fi
+
     echo "ERROR: DIRECT_DATABASE_URL is not set. Migrations must connect to PostgreSQL directly (db:5432), not PgBouncer." >&2
-    echo "Add DIRECT_DATABASE_URL to .env.prod, e.g. postgresql://user:pass%40word@db:5432/gym_db" >&2
+    echo "Add DIRECT_DATABASE_URL to .env.local or .env.prod, e.g. postgresql://user:pass%40word@db:5432/gym_db" >&2
     exit 1
 }
 
