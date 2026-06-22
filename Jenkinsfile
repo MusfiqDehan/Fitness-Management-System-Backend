@@ -116,23 +116,10 @@ pipeline {
                             ${VPS_USER}@${VPS_HOST} '
                             set -euo pipefail
 
-                            echo "==> Pulling latest production code..."
+                            echo "==> Zero-downtime backend deployment..."
                             cd "${VPS_BACKEND_PATH}"
-                            git fetch origin production
-                            git reset --hard origin/production
-
-                            echo "==> Rebuilding and restarting backend services..."
-                            docker compose -f docker-compose.prod.yml up \\
-                                --build \\
-                                --detach \\
-                                --remove-orphans \\
-                                --wait \\
-                                --wait-timeout 120
-
-                            echo "==> Pruning unused Docker objects..."
-                            docker image prune -f
-
-                            echo "==> Backend deployment complete."
+                            chmod +x scripts/deploy-zero-downtime.sh
+                            ./scripts/deploy-zero-downtime.sh
                         '
                     """
                 }

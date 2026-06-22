@@ -11,7 +11,7 @@ x-backend-image: &backend-image
   build:
     context: .
     dockerfile: Dockerfile
-  image: gym-backend:latest
+  image: gym-backend:${IMAGE_TAG:-latest}
   env_file: .env.prod
   environment:
     - DJANGO_SETTINGS_MODULE=config.settings
@@ -34,7 +34,7 @@ x-backend-image: &backend-image
 services:
   backend:
     <<: *backend-image
-    container_name: gym-backend
+    stop_grace_period: 35s
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
       - SKIP_DB_BOOTSTRAP=1
@@ -92,17 +92,31 @@ services:
       - "traefik.http.routers.backend-custom-api.service=backend"
 
       - "traefik.http.services.backend.loadbalancer.server.port=8021"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.path=/api/v1/health/ready/"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.hostname=fitssort.com"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.interval=10s"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.timeout=3s"
     command: ["/bin/sh", "/app/scripts/run-api-prod.sh"]
 
   backend_ws:
     <<: *backend-image
-    container_name: gym-backend-ws
+    stop_grace_period: 35s
     expose:
       - "8023"
     depends_on:
       backend:
         condition: service_healthy
     mem_limit: 384m
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" http://127.0.0.1:8023/api/v1/health/live/ > /dev/null",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik_proxy"
@@ -128,11 +142,15 @@ services:
       - "traefik.http.routers.backend-custom-ws.service=backend-ws"
 
       - "traefik.http.services.backend-ws.loadbalancer.server.port=8023"
+      - "traefik.http.services.backend-ws.loadbalancer.healthcheck.path=/api/v1/health/ready/"
+      - "traefik.http.services.backend-ws.loadbalancer.healthcheck.hostname=fitssort.com"
+      - "traefik.http.services.backend-ws.loadbalancer.healthcheck.interval=10s"
+      - "traefik.http.services.backend-ws.loadbalancer.healthcheck.timeout=3s"
     command: ["/bin/sh", "/app/scripts/run-asgi-ws-prod.sh"]
 
   backend_adms:
     <<: *backend-image
-    container_name: gym-backend-adms
+    stop_grace_period: 35s
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
       - SKIP_DB_BOOTSTRAP=1
@@ -180,14 +198,18 @@ services:
       - "traefik.http.routers.backend-custom-adms.service=backend-adms"
 
       - "traefik.http.services.backend-adms.loadbalancer.server.port=8022"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.path=/api/v1/health/ready/"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.hostname=fitssort.com"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.interval=10s"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.timeout=3s"
     command: ["/bin/sh", "/app/scripts/run-adms-prod.sh"]
 
   celery_worker:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: gym-celery-worker
-    image: gym-backend:latest
+    stop_grace_period: 35s
+    image: gym-backend:${IMAGE_TAG:-latest}
     env_file: .env.prod
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
@@ -234,7 +256,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: gym-celery-beat
-    image: gym-backend:latest
+    image: gym-backend:${IMAGE_TAG:-latest}
     env_file: .env.prod
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
