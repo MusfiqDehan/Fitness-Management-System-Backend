@@ -92,10 +92,10 @@ services:
       - "traefik.http.routers.backend-custom-api.service=backend"
 
       - "traefik.http.services.backend.loadbalancer.server.port=8021"
-      - "traefik.http.services.backend.loadbalancer.healthcheck.path=/api/v1/health/ready/"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.path=/api/v1/health/live/"
       - "traefik.http.services.backend.loadbalancer.healthcheck.hostname=fitssort.com"
-      - "traefik.http.services.backend.loadbalancer.healthcheck.interval=10s"
-      - "traefik.http.services.backend.loadbalancer.healthcheck.timeout=3s"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.interval=15s"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.timeout=5s"
     command: ["/bin/sh", "/app/scripts/run-api-prod.sh"]
 
   backend_ws:
@@ -142,10 +142,6 @@ services:
       - "traefik.http.routers.backend-custom-ws.service=backend-ws"
 
       - "traefik.http.services.backend-ws.loadbalancer.server.port=8023"
-      - "traefik.http.services.backend-ws.loadbalancer.healthcheck.path=/api/v1/health/ready/"
-      - "traefik.http.services.backend-ws.loadbalancer.healthcheck.hostname=fitssort.com"
-      - "traefik.http.services.backend-ws.loadbalancer.healthcheck.interval=10s"
-      - "traefik.http.services.backend-ws.loadbalancer.healthcheck.timeout=3s"
     command: ["/bin/sh", "/app/scripts/run-asgi-ws-prod.sh"]
 
   backend_adms:
@@ -198,10 +194,10 @@ services:
       - "traefik.http.routers.backend-custom-adms.service=backend-adms"
 
       - "traefik.http.services.backend-adms.loadbalancer.server.port=8022"
-      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.path=/api/v1/health/ready/"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.path=/api/v1/health/live/"
       - "traefik.http.services.backend-adms.loadbalancer.healthcheck.hostname=fitssort.com"
-      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.interval=10s"
-      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.timeout=3s"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.interval=15s"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.timeout=5s"
     command: ["/bin/sh", "/app/scripts/run-adms-prod.sh"]
 
   celery_worker:
