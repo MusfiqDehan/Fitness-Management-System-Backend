@@ -202,6 +202,8 @@ class MemberSerializer(serializers.ModelSerializer):
     age = serializers.SerializerMethodField()
     age_years = serializers.SerializerMethodField()
     invitation_pending = serializers.SerializerMethodField()
+    invitation_sent_at = serializers.DateTimeField(read_only=True)
+    invitation_expires_at = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = Member
@@ -216,9 +218,16 @@ class MemberSerializer(serializers.ModelSerializer):
             'payment_method', 'payment_status', 'photo',
             'branch', 'branch_name',
             'is_active', 'is_published', 'invitation_pending',
+            'invitation_sent_at', 'invitation_expires_at',
             'created_at', 'updated_at',
         )
-        read_only_fields = ['created_at', 'updated_at', 'remaining_days']
+        read_only_fields = [
+            'created_at',
+            'updated_at',
+            'remaining_days',
+            'invitation_sent_at',
+            'invitation_expires_at',
+        ]
 
     def get_duration(self, obj):
         return _format_elapsed_ymd(obj.start_date)
@@ -235,6 +244,14 @@ class MemberSerializer(serializers.ModelSerializer):
     def get_invitation_pending(self, obj):
         return bool(obj.invitation_token)
 
+    @staticmethod
+    def _default_end_date(*, membership_type, member_package, start_date):
+        return Member.default_end_date(
+            membership_type=membership_type,
+            member_package=member_package,
+            start_date=start_date,
+        )
+
     def validate(self, attrs):
         membership_type = attrs.get('membership_type', getattr(self.instance, 'membership_type', None))
         email = attrs.get('email', getattr(self.instance, 'email', None))
@@ -246,7 +263,23 @@ class MemberSerializer(serializers.ModelSerializer):
         if membership_type == 'monthly':
             attrs['member_package'] = None
 
+        start_date = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        end_date = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError({'end_date': 'End date must be on or after start date.'})
+
         return attrs
+
+    def create(self, validated_data):
+        if validated_data.get('end_date') is None:
+            default_end = self._default_end_date(
+                membership_type=validated_data.get('membership_type', 'monthly'),
+                member_package=validated_data.get('member_package'),
+                start_date=validated_data.get('start_date'),
+            )
+            if default_end is not None:
+                validated_data['end_date'] = default_end
+        return super().create(validated_data)
 
 
 class MemberPublicSerializer(serializers.ModelSerializer):
