@@ -149,6 +149,11 @@ class AccessCheckAPIView(APIView):
 			entry_method="card" if card_id else "fingerprint",
 			device_id=device_id or (access_device.device_sn if access_device else None),
 		)
+		try:
+			from apps.membership.services.class_attendance import ClassAttendanceService
+			ClassAttendanceService.try_match_member_check_in(member, timezone.now())
+		except Exception:
+			pass
 		publish_attendance_event(
 			"attendance-updated",
 			{
