@@ -19,7 +19,7 @@ from django.template.loader import render_to_string
 from django.conf import settings
 from django_filters.rest_framework import DjangoFilterBackend
 from django_tenants.utils import schema_context
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from urllib.parse import urlparse
 import logging
@@ -35,6 +35,7 @@ import os
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
 from .services.class_catalog import ClassCatalogService, MandatoryTrainerRequired, ClassCatalogServiceError
 from apps.billing.serializers import PaymentSerializer
+from .filters import MemberFilter
 from .serializers import (
     MemberSerializer,
     MemberPublicSerializer,
@@ -374,6 +375,7 @@ class MemberActions:
         'deactivate': lambda self, req, pk: self._toggle_flag(Member, pk, 'is_active', False),
         'restore':    lambda self, req, pk: self._restore(pk),
         'resend_invitation': lambda self, req, pk: self._resend_invitation(req, pk),
+        'cancel_invitation': lambda self, req, pk: self._cancel_invitation(req, pk),
     }
 
     def _scope_members_queryset(self, include_deleted=False):
@@ -446,6 +448,31 @@ class MemberActions:
             'invite_url': invite_url,
         })
 
+    def _cancel_invitation(self, request, pk):
+        try:
+            member = self._scope_members_queryset().get(pk=pk)
+        except Member.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not member.invitation_token:
+            return Response(
+                {'detail': 'Member has no pending invitation.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        member.invitation_token = None
+        member.invitation_sent_at = None
+        member.invitation_expires_at = None
+        member.save(
+            update_fields=[
+                'invitation_token',
+                'invitation_sent_at',
+                'invitation_expires_at',
+                'updated_at',
+            ],
+        )
+        return Response({'message': 'Invitation cancelled', 'invitation_pending': False})
+
 
 class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
     """Handles all Member operations and actions."""
@@ -454,7 +481,7 @@ class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
     serializer_class = MemberSerializer
     permission_classes = [HasFeatureMethodPermission]
     branch_scope_field = 'branch_id'
-    filterset_fields = ['is_active', 'membership_type', 'payment_status', 'branch', 'member_package']
+    filterset_class = MemberFilter
     search_fields = [
         'full_name',
         'phone_number',
@@ -1018,6 +1045,9 @@ class MemberAnalyticsAPIView(APIView):
             total = base_qs.count()
             active = base_qs.filter(is_active=True, end_date__gte=today).count()
             expired = base_qs.filter(end_date__lt=today).count()
+            pending_invitations = base_qs.filter(
+                invitation_token__isnull=False,
+            ).exclude(invitation_token='').count()
             expiring_soon = base_qs.filter(
                 end_date__gte=today, end_date__lte=in_7_days
             ).count()
@@ -1076,6 +1106,7 @@ class MemberAnalyticsAPIView(APIView):
                 "total": total,
                 "active": active,
                 "expired": expired,
+                "pending_invitations": pending_invitations,
                 "expiring_soon": expiring_soon,
                 "new_this_month": new_this_month,
                 "new_last_month": new_last_month,
@@ -1220,12 +1251,25 @@ class InviteMemberAPIView(APIView):
 
         try:
             with transaction.atomic():
+                member_package = (
+                    MemberPackage.objects.filter(pk=member_package_id).first()
+                    if member_package_id
+                    else None
+                )
+                start_date = date.today()
+                end_date = Member.default_end_date(
+                    membership_type='package' if member_package_id else 'monthly',
+                    member_package=member_package,
+                    start_date=start_date,
+                )
                 member = Member.objects.create(
                     full_name=full_name or email.split('@')[0],
                     phone_number=phone_number,
                     email=email,
                     member_package_id=member_package_id,
                     branch_id=branch_id,
+                    start_date=start_date,
+                    end_date=end_date,
                     is_active=False,
                 )
                 invite_url = _send_member_invitation_email(
