@@ -865,7 +865,12 @@ class TrainerInvitationView(BranchScopedListMixin, TrainerModelActions, ModelCRU
     serializer_class = TrainerInvitationSerializer
     permission_classes = [HasFeatureMethodPermission]
     branch_scope_field = 'branch_id'
-    filterset_fields = ['branch', 'is_active', 'is_published']
+    filterset_fields = {
+        'branch': ['exact'],
+        'is_active': ['exact'],
+        'is_published': ['exact'],
+        'accepted_at': ['isnull'],
+    }
     search_fields = ['invited_email', 'full_name', 'phone_number']
     ordering_fields = ['id', 'created_at', 'invited_email', 'full_name']
     ordering = ['id']
