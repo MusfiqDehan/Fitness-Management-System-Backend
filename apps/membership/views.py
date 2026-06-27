@@ -1657,6 +1657,13 @@ class GymClassView(ModelCRUDView):
     def _catalog_service(self, request):
         return ClassCatalogService(user=request.user)
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        gym_class_id = self.request.query_params.get('gym_class')
+        if gym_class_id:
+            queryset = queryset.filter(gym_class_id=gym_class_id)
+        return queryset
+
     def _list(self, request):
         queryset = self.filter_queryset(self.get_queryset())
         # region agent log
