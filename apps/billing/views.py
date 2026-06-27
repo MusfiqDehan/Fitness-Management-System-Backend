@@ -2270,6 +2270,47 @@ class TenantSubscriptionInvoiceAdminView(APIView):
             return Response(TenantSubscriptionInvoiceSerializer(invoices, many=True).data)
 
 
+class TenantSubscriptionInvoiceAdminPdfView(APIView):
+    """GET /api/v1/billing/subscription/admin-invoices/<pk>/invoice/
+
+    Tenant admin PDF for SaaS subscription invoices (Settings > Billing panel).
+    Accessible without the tenant ``payments`` feature gate.
+    """
+
+    permission_classes = [IsAuthenticated]
+    renderer_classes = [PDFRenderer, JSONRenderer]
+
+    def get(self, request, pk):
+        if not _is_tenant_admin_user(request.user):
+            return Response(
+                {"detail": "Only tenant administrators can download subscription invoices."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        tenant = getattr(request, "tenant", None)
+        if tenant is None:
+            return Response({"detail": "Tenant context not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.tenancy.models import TenantSubscriptionInvoice
+
+        public_schema = get_public_schema_name()
+        with schema_context(public_schema):
+            invoice = get_object_or_404(
+                TenantSubscriptionInvoice.objects.select_related("tenant"),
+                pk=pk,
+                tenant=tenant,
+            )
+            generated_by = getattr(request.user, "full_name", "") or getattr(request.user, "email", "System")
+            pdf_bytes = _render_subscription_invoice_pdf(invoice, generated_by)
+            invoice_ref = f"SUB-{invoice.id:06d}"
+
+        filename = f"subscription-invoice-{invoice_ref}.pdf"
+        disposition = "attachment" if request.query_params.get("download") == "1" else "inline"
+        response = HttpResponse(pdf_bytes, content_type="application/pdf")
+        response["Content-Disposition"] = f'{disposition}; filename="{filename}"'
+        return response
+
+
 class SubscriptionSummaryView(APIView):
     """GET /api/v1/billing/subscription/summary/ — tenant admin subscription overview."""
 
