@@ -147,21 +147,21 @@ class Member(BaseModel):
             return max(delta.days, 0)
         return 0
 
+    @staticmethod
+    def default_end_date(*, membership_type, member_package, start_date):
+        if not start_date:
+            return None
+        if membership_type == 'package' and member_package:
+            return start_date + timedelta(days=member_package.duration_in_days)
+        if membership_type == 'monthly':
+            return start_date + timedelta(days=30)
+        return None
+
     # ----------------------------
     # SAVE LOGIC
     # ----------------------------
 
     def save(self, *args, **kwargs):
-        # Set end_date
-        if self.membership_type == 'package' and self.member_package:
-            self.end_date = self.start_date + timedelta(days=self.member_package.duration_in_days)
-        elif self.membership_type == 'monthly':
-            self.end_date = self.start_date + timedelta(days=30)
-
-        # Auto deactivate expired
-        if self.end_date:
-            self.is_active = self.end_date >= timezone.now().date()
-
         super().save(*args, **kwargs)
 
     def __str__(self):
