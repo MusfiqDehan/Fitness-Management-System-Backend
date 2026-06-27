@@ -1,0 +1,22 @@
+<p>Hi {{ member_name }},</p>
+<p>You have been enrolled in <strong>{{ class_name }}</strong> at <strong>{{ gym_name }}</strong>.</p>
+<p>
+  <strong>Instructor:</strong> {{ instructor }}<br />
+  <strong>Type:</strong> {{ class_type }}<br />
+  <strong>Level:</strong> {{ class_level }}<br />
+  <strong>Duration:</strong> {{ duration_minutes }} minutes
+</p>
+{% if description %}
+<p>{{ description }}</p>
+{% endif %}
+{% if schedules %}
+<p><strong>Class schedules</strong></p>
+<ul>
+  {% for schedule in schedules %}
+  <li>{{ schedule.title }} — {{ schedule.when }}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No schedules are published for this class yet.</p>
+{% endif %}
+<p>Thank you,<br>{{ gym_name }}</p>
