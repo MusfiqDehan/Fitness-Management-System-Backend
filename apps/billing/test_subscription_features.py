@@ -599,3 +599,61 @@ class PlatformSubscriptionPaymentCrudTests(PlatformBillingTestBase):
             HTTP_HOST="testserver",
         )
         self.assertEqual(res2.status_code, status.HTTP_204_NO_CONTENT)
+
+
+class TenantSubscriptionAdminInvoiceTests(PlatformBillingTestBase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        with schema_context(cls.tenant.schema_name):
+            cls.tenant_admin = User.objects.create_user(
+                email="admin@platbill.test",
+                password="StrongPass123!",
+                tenant=cls.tenant,
+                role="admin",
+            )
+
+    @patch("apps.billing.views._render_subscription_invoice_pdf", return_value=b"%PDF")
+    def test_tenant_admin_can_view_subscription_invoice_pdf(self, _pdf):
+        invoice = self._create_invoice()
+        self.client.force_authenticate(user=self.tenant_admin)
+        res = self.client.get(
+            f"/api/v1/billing/subscription/admin-invoices/{invoice.id}/invoice/",
+            HTTP_HOST="platbill.testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertIn("inline", res["Content-Disposition"])
+
+    @patch("apps.billing.views._render_subscription_invoice_pdf", return_value=b"%PDF")
+    def test_tenant_admin_can_download_subscription_invoice_pdf(self, _pdf):
+        invoice = self._create_invoice()
+        self.client.force_authenticate(user=self.tenant_admin)
+        res = self.client.get(
+            f"/api/v1/billing/subscription/admin-invoices/{invoice.id}/invoice/?download=1",
+            HTTP_HOST="platbill.testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertIn("attachment", res["Content-Disposition"])
+
+    @patch("apps.billing.views._render_subscription_invoice_pdf", return_value=b"%PDF")
+    def test_tenant_admin_cannot_download_other_tenant_invoice(self, _pdf):
+        with schema_context("public"):
+            other = Tenant.objects.create(
+                schema_name="platbill_other",
+                name="Other Tenant",
+                slug="platbill-other",
+                code="PLATB002",
+                owner_email="other@platbill.test",
+                billing_email="other@platbill.test",
+                status="active",
+            )
+            Domain.objects.create(domain="other.testserver", tenant=other, is_primary=True)
+        invoice = self._create_invoice(tenant=other)
+        self.client.force_authenticate(user=self.tenant_admin)
+        res = self.client.get(
+            f"/api/v1/billing/subscription/admin-invoices/{invoice.id}/invoice/",
+            HTTP_HOST="platbill.testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
