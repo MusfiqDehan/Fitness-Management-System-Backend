@@ -1,6 +1,6 @@
 from decimal import Decimal, InvalidOperation
 
-from django.db import connection
+from django.db import connection, models
 from django_tenants.utils import get_public_schema_name, schema_context
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
@@ -9,7 +9,7 @@ import calendar
 
 from apps.dashboard.models import GymPreferences
 from utils.currency import convert_currency
-from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
+from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule, ClassEnrollment
 from datetime import date
 
 
@@ -449,3 +449,124 @@ class UnifiedScheduleSerializer(GymScheduleSerializer):
 
     def get_source(self, obj):
         return 'weekly' if obj.recurrence_mode == 'weekly' else 'one_off'
+
+
+class GymClassDetailSerializer(GymClassSerializer):
+    active_enrollments = serializers.IntegerField(read_only=True, required=False)
+    schedule_count = serializers.IntegerField(read_only=True, required=False)
+    capacity_remaining = serializers.IntegerField(read_only=True, required=False)
+
+    class Meta(GymClassSerializer.Meta):
+        fields = GymClassSerializer.Meta.fields + (
+            'active_enrollments',
+            'schedule_count',
+            'capacity_remaining',
+        )
+
+
+class ClassEnrollmentMemberSerializer(serializers.ModelSerializer):
+    member_id = serializers.IntegerField(source='member.id', read_only=True)
+    member_name = serializers.CharField(source='member.full_name', read_only=True)
+    member_email = serializers.CharField(source='member.email', read_only=True)
+    member_phone = serializers.CharField(source='member.phone_number', read_only=True)
+    sessions_booked = serializers.SerializerMethodField()
+    last_punctuality = serializers.SerializerMethodField()
+    last_punctuality_source = serializers.SerializerMethodField()
+    last_punctuality_override = serializers.SerializerMethodField()
+    last_booking_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassEnrollment
+        fields = (
+            'id', 'member_id', 'member_name', 'member_email', 'member_phone',
+            'enrolled_at', 'status', 'source', 'sessions_booked',
+            'last_punctuality', 'last_punctuality_source', 'last_punctuality_override',
+            'last_booking_id',
+        )
+
+    def get_sessions_booked(self, obj):
+        from apps.trainer.models import ScheduleBooking
+        trainer_class_id = obj.gym_class.trainer_class_id
+        if not trainer_class_id:
+            return 0
+        return ScheduleBooking.objects.filter(
+            member=obj.member,
+            schedule__trainer_class_id=trainer_class_id,
+            is_deleted=False,
+        ).exclude(status='cancelled').count()
+
+    def _latest_booking(self, obj):
+        from apps.trainer.models import ScheduleBooking
+
+        trainer_class_id = obj.gym_class.trainer_class_id
+        if not trainer_class_id:
+            return None
+        return (
+            ScheduleBooking.objects.filter(
+                member=obj.member,
+                schedule__trainer_class_id=trainer_class_id,
+                is_deleted=False,
+            )
+            .exclude(status='cancelled')
+            .select_related('schedule')
+            .order_by('-schedule__scheduled_date', '-schedule__start_time')
+            .first()
+        )
+
+    def get_last_punctuality(self, obj):
+        from apps.membership.services.class_attendance import ClassAttendanceService
+
+        booking = self._latest_booking(obj)
+        if not booking:
+            return None
+        return ClassAttendanceService.compute_punctuality(booking).get('punctuality')
+
+    def get_last_punctuality_source(self, obj):
+        from apps.membership.services.class_attendance import ClassAttendanceService
+
+        booking = self._latest_booking(obj)
+        if not booking:
+            return None
+        return ClassAttendanceService.compute_punctuality(booking).get('punctuality_source')
+
+    def get_last_booking_id(self, obj):
+        booking = self._latest_booking(obj)
+        return booking.id if booking else None
+
+    def get_last_punctuality_override(self, obj):
+        booking = self._latest_booking(obj)
+        return booking.punctuality_override if booking else None
+
+
+class MemberClassEnrollmentSerializer(serializers.ModelSerializer):
+    class_id = serializers.IntegerField(source='gym_class.id', read_only=True)
+    class_name = serializers.CharField(source='gym_class.name', read_only=True)
+    class_type = serializers.CharField(source='gym_class.class_type', read_only=True)
+    class_type_display = serializers.CharField(source='gym_class.get_class_type_display', read_only=True)
+    image_url = serializers.CharField(source='gym_class.image_url', read_only=True)
+    instructor = serializers.CharField(source='gym_class.instructor', read_only=True)
+    trainer_name = serializers.CharField(source='gym_class.trainer_profile.user.full_name', read_only=True, default='')
+    upcoming_sessions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassEnrollment
+        fields = (
+            'id', 'class_id', 'class_name', 'class_type', 'class_type_display',
+            'image_url', 'instructor', 'trainer_name', 'enrolled_at', 'source',
+            'upcoming_sessions',
+        )
+
+    def get_upcoming_sessions(self, obj):
+        from apps.trainer.models import TrainerSchedule
+        from django.utils import timezone
+        trainer_class_id = obj.gym_class.trainer_class_id
+        if not trainer_class_id:
+            return 0
+        today = timezone.now().date()
+        return TrainerSchedule.objects.filter(
+            trainer_class_id=trainer_class_id,
+            is_deleted=False,
+            is_cancelled=False,
+        ).filter(
+            models.Q(scheduled_date__gte=today) | models.Q(scheduled_date__isnull=True)
+        ).count()
