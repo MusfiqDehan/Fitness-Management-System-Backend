@@ -452,6 +452,36 @@ class BranchScopedListHelpersTests(APITestCase):
 		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 		self.assertEqual(response.data["invoice_no"], f"INV-{response.data['id']:06d}")
 
+	def test_membership_payment_create_syncs_member_package(self):
+		with schema_context(self.tenant.schema_name):
+			new_package = MemberPackage.objects.create(
+				name='Elite',
+				package_type='3_month',
+				duration_in_days=90,
+				price='3500.00',
+			)
+		payload = {
+			'member': self.member_a.id,
+			'payment_type': 'package',
+			'amount': '3500.00',
+			'payment_method': 'cash',
+			'payment_status': 'due',
+			'member_package_id': new_package.id,
+		}
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			'/api/v1/membership/payments/',
+			payload,
+			format='json',
+			HTTP_HOST='scope.testserver',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		with schema_context(self.tenant.schema_name):
+			self.member_a.refresh_from_db()
+			self.assertEqual(self.member_a.member_package_id, new_package.id)
+		self.assertEqual(response.data['member_package_id'], new_package.id)
+
 	def test_payment_view_get_queryset_applies_date_range_filters(self):
 		request = self.factory.get(
 			reverse('membership:payment-list'),
@@ -503,6 +533,18 @@ class MemberInvitationResendTests(APITestCase):
 				is_trial=False,
 			)
 			Domain.objects.create(domain='invite.testserver', tenant=self.tenant, is_primary=True)
+			members_feature, _ = Feature.objects.get_or_create(
+				key='members',
+				defaults={'name': 'Members', 'description': 'Member management access'},
+			)
+			TenantFeatureFlag.objects.get_or_create(
+				tenant=self.tenant,
+				feature=members_feature,
+				defaults={
+					'is_enabled': True,
+					'source': TenantFeatureFlag.SOURCE_OVERRIDE,
+				},
+			)
 
 		with schema_context(self.tenant.schema_name):
 			self.admin = User.objects.create_superuser(
@@ -565,6 +607,113 @@ class MemberInvitationResendTests(APITestCase):
 
 		self.assertTrue(pending_data['invitation_pending'])
 		self.assertFalse(registered_data['invitation_pending'])
+
+	def test_cancel_invitation_clears_token(self):
+		response = self._patch_member_action(self.pending_member.id, 'cancel_invitation')
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertFalse(response.data['invitation_pending'])
+
+		with schema_context(self.tenant.schema_name):
+			self.pending_member.refresh_from_db()
+			self.assertIsNone(self.pending_member.invitation_token)
+			self.assertIsNone(self.pending_member.invitation_sent_at)
+			self.assertIsNone(self.pending_member.invitation_expires_at)
+
+	def test_cancel_invitation_rejects_registered_member(self):
+		response = self._patch_member_action(self.registered_member.id, 'cancel_invitation')
+
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertIn('no pending invitation', response.data['detail'].lower())
+
+
+class MemberPendingInvitationFilterTests(APITestCase):
+	def setUp(self):
+		with schema_context('public'):
+			self.public = Tenant.objects.create(
+				schema_name='public',
+				name='Public',
+				slug='public',
+				code='PUBMEM07',
+				owner_email='root7@membership.test',
+				billing_email='root7@membership.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain='testserver',
+				tenant=self.public,
+				defaults={'is_primary': True},
+			)
+			self.tenant = Tenant.objects.create(
+				schema_name='membership_pending_filter',
+				name='Membership Pending Filter Tenant',
+				slug='membership-pending-filter',
+				code='MEMPND001',
+				owner_email='admin@pending.test',
+				billing_email='admin@pending.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.create(domain='pending.testserver', tenant=self.tenant, is_primary=True)
+			members_feature, _ = Feature.objects.get_or_create(
+				key='members',
+				defaults={'name': 'Members', 'description': 'Member management access'},
+			)
+			TenantFeatureFlag.objects.get_or_create(
+				tenant=self.tenant,
+				feature=members_feature,
+				defaults={
+					'is_enabled': True,
+					'source': TenantFeatureFlag.SOURCE_OVERRIDE,
+				},
+			)
+
+		with schema_context(self.tenant.schema_name):
+			self.admin = User.objects.create_superuser(
+				email='admin@pending.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+			)
+			self.pending_member = Member.objects.create(
+				full_name='Pending Member',
+				phone_number='01710030001',
+				email='pending-filter@example.com',
+				membership_type='monthly',
+				invitation_token='pending-filter-token',
+				invitation_sent_at=timezone.now(),
+				invitation_expires_at=timezone.now() + timedelta(days=7),
+				is_active=False,
+			)
+			self.registered_member = Member.objects.create(
+				full_name='Registered Member',
+				phone_number='01710030002',
+				email='registered-filter@example.com',
+				membership_type='monthly',
+				is_active=True,
+			)
+
+	def test_list_filter_invitation_pending_true(self):
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.get(
+			'/api/v1/membership/members/?invitation_pending=true',
+			HTTP_HOST='pending.testserver',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		results = response.data.get('results', response.data)
+		self.assertEqual(len(results), 1)
+		self.assertEqual(results[0]['id'], self.pending_member.id)
+
+	def test_analytics_includes_pending_invitations(self):
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.get(
+			'/api/v1/membership/members/analytics/',
+			HTTP_HOST='pending.testserver',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data['pending_invitations'], 1)
 
 
 class MemberRelationshipFieldTests(APITestCase):
@@ -653,6 +802,187 @@ class MemberRelationshipFieldTests(APITestCase):
 		with schema_context(self.tenant.schema_name):
 			member = Member.objects.get(pk=member_id)
 			self.assertEqual(member.relationship_with_member, 'Parent')
+
+
+class MemberManualUpdateTests(APITestCase):
+	def setUp(self):
+		with schema_context('public'):
+			self.public = Tenant.objects.create(
+				schema_name='public',
+				name='Public',
+				slug='public',
+				code='PUBMEM06',
+				owner_email='root6@membership.test',
+				billing_email='root6@membership.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.get_or_create(
+				domain='testserver',
+				tenant=self.public,
+				defaults={'is_primary': True},
+			)
+
+			self.tenant = Tenant.objects.create(
+				schema_name='membership_manual_update_test',
+				name='Membership Manual Update Tenant',
+				slug='membership-manual-update',
+				code='MEMMAN001',
+				owner_email='admin@manual.test',
+				billing_email='admin@manual.test',
+				status='active',
+				is_trial=False,
+			)
+			Domain.objects.create(domain='manual.testserver', tenant=self.tenant, is_primary=True)
+			members_feature, _ = Feature.objects.get_or_create(
+				key='members',
+				defaults={'name': 'Members', 'description': 'Member management access'},
+			)
+			TenantFeatureFlag.objects.get_or_create(
+				tenant=self.tenant,
+				feature=members_feature,
+				defaults={
+					'is_enabled': True,
+					'source': TenantFeatureFlag.SOURCE_OVERRIDE,
+				},
+			)
+
+		with schema_context(self.tenant.schema_name):
+			self.admin = User.objects.create_superuser(
+				email='admin@manual.test',
+				password='StrongPass123!',
+				tenant=self.tenant,
+			)
+			self.package_a = MemberPackage.objects.create(
+				name='Starter',
+				package_type='monthly',
+				duration_in_days=30,
+				price='1200.00',
+			)
+			self.package_b = MemberPackage.objects.create(
+				name='Pro',
+				package_type='3_month',
+				duration_in_days=90,
+				price='3000.00',
+			)
+			today = timezone.now().date()
+			self.expired_member = Member.objects.create(
+				full_name='Expired Member',
+				phone_number='01710040001',
+				email='expired@example.com',
+				membership_type='package',
+				member_package=self.package_a,
+				start_date=today - timedelta(days=60),
+				end_date=today - timedelta(days=10),
+				is_active=False,
+			)
+			self.active_member = Member.objects.create(
+				full_name='Active Member',
+				phone_number='01710040002',
+				email='active@example.com',
+				membership_type='package',
+				member_package=self.package_a,
+				start_date=today - timedelta(days=5),
+				end_date=today + timedelta(days=25),
+				is_active=True,
+			)
+
+		self.client.force_authenticate(user=self.admin)
+		self.host = 'manual.testserver'
+		self.factory = APIRequestFactory()
+
+	def _patch_member_action(self, member_id, action):
+		path = reverse('membership:member-detail', kwargs={'pk': member_id})
+		request = self.factory.patch(f'{path}?action={action}')
+		request.tenant = self.tenant
+		force_authenticate(request, user=self.admin)
+		with schema_context(self.tenant.schema_name):
+			return MemberView.as_view()(request, pk=member_id)
+
+	def test_update_expired_member_persists_is_active_true(self):
+		response = self.client.patch(
+			f'/api/v1/membership/members/{self.expired_member.id}/',
+			{'is_active': True},
+			format='json',
+			HTTP_HOST=self.host,
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertTrue(response.data['is_active'])
+		with schema_context(self.tenant.schema_name):
+			member = Member.objects.get(pk=self.expired_member.id)
+			self.assertTrue(member.is_active)
+
+	def test_update_member_does_not_recalculate_end_date_when_package_changes(self):
+		original_end_date = self.active_member.end_date
+		response = self.client.patch(
+			f'/api/v1/membership/members/{self.active_member.id}/',
+			{'member_package_id': self.package_b.id},
+			format='json',
+			HTTP_HOST=self.host,
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		with schema_context(self.tenant.schema_name):
+			member = Member.objects.get(pk=self.active_member.id)
+			self.assertEqual(member.end_date, original_end_date)
+			self.assertEqual(member.member_package_id, self.package_b.id)
+
+	def test_update_member_persists_explicit_end_date(self):
+		new_end_date = timezone.now().date() + timedelta(days=120)
+		response = self.client.patch(
+			f'/api/v1/membership/members/{self.active_member.id}/',
+			{'end_date': new_end_date.isoformat()},
+			format='json',
+			HTTP_HOST=self.host,
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data['end_date'], new_end_date.isoformat())
+		with schema_context(self.tenant.schema_name):
+			member = Member.objects.get(pk=self.active_member.id)
+			self.assertEqual(member.end_date, new_end_date)
+
+	def test_activate_expired_member_persists_is_active(self):
+		response = self._patch_member_action(self.expired_member.id, 'activate')
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertTrue(response.data['is_active'])
+		with schema_context(self.tenant.schema_name):
+			member = Member.objects.get(pk=self.expired_member.id)
+			self.assertTrue(member.is_active)
+
+	def test_deactivate_active_member_persists_is_active(self):
+		response = self._patch_member_action(self.active_member.id, 'deactivate')
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertFalse(response.data['is_active'])
+		with schema_context(self.tenant.schema_name):
+			member = Member.objects.get(pk=self.active_member.id)
+			self.assertFalse(member.is_active)
+
+	def test_create_member_defaults_end_date_from_package_when_omitted(self):
+		start_date = timezone.now().date()
+		response = self.client.post(
+			'/api/v1/membership/members/',
+			{
+				'full_name': 'New Package Member',
+				'phone_number': '01710040003',
+				'email': 'newpackage@example.com',
+				'membership_type': 'package',
+				'member_package_id': self.package_a.id,
+				'start_date': start_date.isoformat(),
+			},
+			format='json',
+			HTTP_HOST=self.host,
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		expected_end = start_date + timedelta(days=self.package_a.duration_in_days)
+		self.assertEqual(response.data['end_date'], expected_end.isoformat())
+		with schema_context(self.tenant.schema_name):
+			member = Member.objects.get(pk=response.data['id'])
+			self.assertEqual(member.end_date, expected_end)
 
 
 class MemberImportDuplicatePhoneTests(APITestCase):
