@@ -21,7 +21,7 @@ from apps.tenancy.models import (
     PlatformPricingConfig,
     PaymentGateway,
 )
-from apps.membership.models import Member, Payment
+from apps.membership.models import Member, MemberPackage, Payment
 from apps.billing.models import TenantPaymentGateway, PaymentTransaction
 from utils.currency import convert_currency
 
@@ -232,10 +232,11 @@ class PackageFeatureBulkSerializer(serializers.Serializer):
 
 class PaymentMemberOptionSerializer(serializers.ModelSerializer):
     package_name = serializers.CharField(source='member_package.name', read_only=True)
+    member_package_id = serializers.IntegerField(source='member_package_id', read_only=True, allow_null=True)
 
     class Meta:
         model = Member
-        fields = ['id', 'full_name', 'phone_number', 'email', 'package_name']
+        fields = ['id', 'full_name', 'phone_number', 'email', 'package_name', 'member_package_id']
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -249,6 +250,13 @@ class PaymentSerializer(serializers.ModelSerializer):
     member_phone = serializers.CharField(source='member.phone_number', read_only=True)
     member_email = serializers.CharField(source='member.email', read_only=True)
     package_name = serializers.CharField(source='member.member_package.name', read_only=True)
+    member_package_id = serializers.IntegerField(source='member.member_package_id', read_only=True, allow_null=True)
+    member_package_id_write = serializers.PrimaryKeyRelatedField(
+        queryset=MemberPackage.objects.all(),
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
     payment_type_display = serializers.CharField(source='get_payment_type_display', read_only=True)
     payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
     payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
@@ -277,6 +285,8 @@ class PaymentSerializer(serializers.ModelSerializer):
             'member_phone',
             'member_email',
             'package_name',
+            'member_package_id',
+            'member_package_id_write',
             'payment_type',
             'payment_type_display',
             'amount',
@@ -303,6 +313,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'member_phone',
             'member_email',
             'package_name',
+            'member_package_id',
             'payment_type_display',
             'payment_method_display',
             'payment_status_display',
@@ -322,8 +333,17 @@ class PaymentSerializer(serializers.ModelSerializer):
             for old_key, new_key in aliases.items():
                 if old_key in mutable and new_key not in mutable:
                     mutable[new_key] = mutable[old_key]
+            if 'member_package_id' in mutable and 'member_package_id_write' not in mutable:
+                mutable['member_package_id_write'] = mutable['member_package_id']
             data = mutable
         return super().to_internal_value(data)
+
+    def _sync_member_package(self, member: Member, package: MemberPackage | None) -> None:
+        if member is None or package is None:
+            return
+        member.member_package = package
+        member.membership_type = 'package'
+        member.save(update_fields=['member_package', 'membership_type', 'updated_at'])
 
     def validate(self, attrs):
         payment_status = attrs.get('payment_status')
@@ -372,17 +392,23 @@ class PaymentSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         notify_channels = validated_data.pop("notify_channels", [])
+        member_package = validated_data.pop("member_package_id_write", None)
         validated_data.pop("invoice_no", None)
         payment = super().create(validated_data)
+        if member_package is not None:
+            self._sync_member_package(payment.member, member_package)
         payment = self._ensure_invoice_no(payment)
         self._post_save(payment, previous_status=None, notify_channels=notify_channels)
         return payment
 
     def update(self, instance, validated_data):
         notify_channels = validated_data.pop("notify_channels", [])
+        member_package = validated_data.pop("member_package_id_write", serializers.empty)
         validated_data.pop("invoice_no", None)
         previous_status = instance.payment_status
         payment = super().update(instance, validated_data)
+        if member_package is not serializers.empty and member_package is not None:
+            self._sync_member_package(payment.member, member_package)
         payment = self._ensure_invoice_no(payment)
         self._post_save(payment, previous_status=previous_status, notify_channels=notify_channels)
         return payment
