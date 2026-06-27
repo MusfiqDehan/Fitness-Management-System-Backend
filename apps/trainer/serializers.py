@@ -246,17 +246,23 @@ class TrainerSchedulePublicSerializer(TrainerScheduleSerializer):
 class ScheduleBookingSerializer(serializers.ModelSerializer):
     member_name = serializers.CharField(source='member.full_name', read_only=True)
     schedule_info = serializers.SerializerMethodField()
+    punctuality = serializers.SerializerMethodField()
+    punctuality_source = serializers.SerializerMethodField()
     
     class Meta:
         model = ScheduleBooking
         fields = [
             'id', 'schedule', 'member', 'member_name', 'booked_at', 'status',
             'check_in_time', 'check_out_time', 'notes', 'schedule_info',
+            'source', 'punctuality', 'punctuality_source',
             'is_active', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['booked_at', 'created_at', 'updated_at']
+        read_only_fields = ['booked_at', 'created_at', 'updated_at', 'source', 'punctuality', 'punctuality_source']
 
     def get_schedule_info(self, obj):
+        gym_class = None
+        if obj.schedule.trainer_class_id:
+            gym_class = getattr(obj.schedule.trainer_class, 'gym_class', None)
         return {
             'class_name': obj.schedule.trainer_class.name,
             'date': obj.schedule.scheduled_date,
@@ -265,7 +271,18 @@ class ScheduleBookingSerializer(serializers.ModelSerializer):
             'location': obj.schedule.location,
             'trainer_id': obj.schedule.trainer_id,
             'trainer_name': obj.schedule.trainer.user.full_name or obj.schedule.trainer.user.email,
+            'gym_class_id': gym_class.id if gym_class else None,
+            'class_type': gym_class.class_type if gym_class else None,
+            'class_image_url': gym_class.image_url if gym_class else '',
         }
+
+    def get_punctuality(self, obj):
+        from apps.membership.services.class_attendance import ClassAttendanceService
+        return ClassAttendanceService.compute_punctuality(obj).get('punctuality')
+
+    def get_punctuality_source(self, obj):
+        from apps.membership.services.class_attendance import ClassAttendanceService
+        return ClassAttendanceService.compute_punctuality(obj).get('punctuality_source')
 
 
 class ScheduleBookingCreateSerializer(serializers.Serializer):
@@ -294,7 +311,8 @@ class ScheduleBookingCreateSerializer(serializers.Serializer):
         booking = ScheduleBooking.objects.create(
             schedule=schedule,
             member=member,
-            status='confirmed'
+            status='confirmed',
+            source='member_booked',
         )
         
         # Update participant count
