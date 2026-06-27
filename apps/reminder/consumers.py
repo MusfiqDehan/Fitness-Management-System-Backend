@@ -1,5 +1,6 @@
 from channels.db import database_sync_to_async
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
+
+from utils.ws_consumers import SafeAsyncJsonWebsocketConsumer
 
 from .utils import (
     broadcast_ws_group,
@@ -8,7 +9,7 @@ from .utils import (
 )
 
 
-class NotificationConsumer(AsyncJsonWebsocketConsumer):
+class NotificationConsumer(SafeAsyncJsonWebsocketConsumer):
     async def connect(self):
         token_value = self._extract_token()
         if not token_value:
@@ -37,7 +38,7 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
 
         await self.accept()
         counts = await database_sync_to_async(get_notification_counts)(user)
-        await self.send_json(
+        await self.safe_send_json(
             {
                 "event": "count_updated",
                 "total": counts["total"],
@@ -50,7 +51,7 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_discard(group, self.channel_name)
 
     async def notification_message(self, event):
-        await self.send_json(event.get("data", {}))
+        await self.safe_send_json(event.get("data", {}))
 
     def _extract_token(self):
         query_string = self.scope.get("query_string", b"").decode()
