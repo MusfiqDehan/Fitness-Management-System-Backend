@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from datetime import date, timedelta
@@ -371,3 +372,64 @@ class GymSchedule(BaseModel):
 
     def __str__(self):
         return f"{self.title} ({self.day_of_week} {self.start_time})"
+
+
+# =============================================================================
+# CLASS ENROLLMENT (member enrolled in a gym class)
+# =============================================================================
+
+class ClassEnrollment(BaseModel):
+    ENROLLMENT_STATUS = (
+        ('active', 'Active'),
+        ('removed', 'Removed'),
+    )
+    ENROLLMENT_SOURCE = (
+        ('admin', 'Admin'),
+        ('self', 'Self'),
+    )
+
+    gym_class = models.ForeignKey(
+        GymClass,
+        on_delete=models.CASCADE,
+        related_name='enrollments',
+    )
+    member = models.ForeignKey(
+        Member,
+        on_delete=models.CASCADE,
+        related_name='class_enrollments',
+    )
+    enrolled_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, choices=ENROLLMENT_STATUS, default='active')
+    source = models.CharField(max_length=20, choices=ENROLLMENT_SOURCE, default='admin')
+    enrolled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='class_enrollments_created',
+    )
+
+    class Meta:
+        ordering = ['-enrolled_at']
+        indexes = [
+            models.Index(
+                fields=['gym_class', 'status'],
+                name='idx_classenroll_class_status',
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=['member', 'status'],
+                name='idx_classenroll_member_status',
+                condition=Q(is_deleted=False),
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['gym_class', 'member'],
+                condition=Q(is_deleted=False),
+                name='uniq_active_class_enrollment',
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.member.full_name} -> {self.gym_class.name}"
