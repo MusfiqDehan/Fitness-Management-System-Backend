@@ -11,6 +11,7 @@ from .views import (
 	TenantAdminListAPIView,
 	TenantAdminDetailAPIView,
 	TenantAdminActivationAPIView,
+	TenantAdminInvitationDetailView,
 	TenantAuditLogListAPIView,
 	TenantMemberInviteAPIView,
 	ChangePasswordView,
@@ -81,6 +82,7 @@ urlpatterns = [
 
 	# Superadmin flows
 	path('admin/invitations/', SuperadminInvitationAPIView.as_view(), name='tenant-admin-invite'),
+	path('admin/invitations/<int:pk>/', TenantAdminInvitationDetailView.as_view(), name='tenant-admin-invitation-detail'),
 	path('admin/overview/', TenantAdminOverviewAPIView.as_view(), name='tenant-admin-overview'),
 	path('admin/tenants/', TenantAdminListAPIView.as_view(), name='tenant-admin-list'),
 	path('admin/tenants/<int:pk>/', TenantAdminDetailAPIView.as_view(), name='tenant-admin-detail'),
