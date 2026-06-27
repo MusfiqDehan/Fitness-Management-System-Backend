@@ -415,6 +415,26 @@ class PlatformInvitationListSerializer(serializers.ModelSerializer):
         ]
 
 
+class TenantAdminInvitationListSerializer(serializers.ModelSerializer):
+    is_expired = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Invitation
+        fields = [
+            "id",
+            "email",
+            "invitee_full_name",
+            "subdomain",
+            "company_name",
+            "invited_by_email",
+            "expires_at",
+            "is_expired",
+            "used_at",
+            "created_at",
+            "tenant_id",
+        ]
+
+
 class PlatformInviteAcceptSerializer(serializers.Serializer):
     token = serializers.CharField(max_length=255)
     full_name = serializers.CharField(max_length=120, required=False, allow_blank=True)
