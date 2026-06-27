@@ -1,7 +1,7 @@
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from utils.ws_consumers import SafeAsyncJsonWebsocketConsumer
 
 
-class AttendanceConsumer(AsyncJsonWebsocketConsumer):
+class AttendanceConsumer(SafeAsyncJsonWebsocketConsumer):
     async def connect(self):
         await self.channel_layer.group_add("attendance_events", self.channel_name)
         await self.accept()
@@ -10,7 +10,7 @@ class AttendanceConsumer(AsyncJsonWebsocketConsumer):
         await self.channel_layer.group_discard("attendance_events", self.channel_name)
 
     async def attendance_event(self, event):
-        await self.send_json(
+        await self.safe_send_json(
             {
                 "event": event.get("event"),
                 "payload": event.get("payload", {}),
