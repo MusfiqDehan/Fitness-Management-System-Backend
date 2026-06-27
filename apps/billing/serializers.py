@@ -232,7 +232,7 @@ class PackageFeatureBulkSerializer(serializers.Serializer):
 
 class PaymentMemberOptionSerializer(serializers.ModelSerializer):
     package_name = serializers.CharField(source='member_package.name', read_only=True)
-    member_package_id = serializers.IntegerField(source='member_package_id', read_only=True, allow_null=True)
+    member_package_id = serializers.IntegerField(read_only=True, allow_null=True)
 
     class Meta:
         model = Member
