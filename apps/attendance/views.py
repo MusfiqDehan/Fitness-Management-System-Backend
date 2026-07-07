@@ -27,9 +27,24 @@ from apps.membership.models import Attendance, Member
 from apps.tenancy.models import AccessDeviceRoute, Tenant
 from utils.pagination import StandardPagination
 from utils.tenancy_helpers import scope_queryset_by_branch_access
-from .models import AccessDevice, AttendanceIngestEvent, DeviceCredential, DeviceUser
+from .models import AccessDevice, AttendanceIngestEvent, DeviceCredential, DeviceUser, FingerprintEnrollmentSession
 
 logger = logging.getLogger(__name__)
+from .device_profiles import list_device_profiles
+from .services.adms_commands import (
+	build_attlog_sync_command,
+	build_push_handshake_body,
+	dequeue_next_command,
+	parse_devicecmd_body,
+	queue_commands,
+	lookup_queued_command,
+)
+from .services.enrollment import (
+	EnrollmentConflict,
+	EnrollmentNotSupported,
+	EnrollmentServiceError,
+	FingerprintEnrollmentService,
+)
 from .services.ingestion import ADMSIngestionService
 from .services.realtime import publish_attendance_event
 from .serializers import (
@@ -39,6 +54,8 @@ from .serializers import (
 	DeviceUserSerializer,
 	FingerprintLinkSerializer,
 	FingerprintUnlinkSerializer,
+	FingerprintEnrollmentStartSerializer,
+	FingerprintEnrollmentSessionSerializer,
 )
 
 
@@ -252,30 +269,7 @@ class DeviceDeactivateAPIView(_DeviceActionBaseAPIView):
 
 
 def _build_attlog_sync_command(device: AccessDevice) -> tuple[str, str]:
-	try:
-		device_tz = ZoneInfo(device.timezone or "Asia/Dhaka")
-	except ZoneInfoNotFoundError:
-		device_tz = ZoneInfo("UTC")
-
-	latest_attlog = (
-		AttendanceIngestEvent.objects.filter(
-			access_device=device,
-			event_type="ATTLOG",
-			event_time__isnull=False,
-		)
-		.order_by("-event_time")
-		.first()
-	)
-
-	if latest_attlog and latest_attlog.event_time:
-		start_time = latest_attlog.event_time.astimezone(device_tz) - timedelta(minutes=1)
-	else:
-		# Avoid full-history backfills on first manual sync. Devices still push new
-		# scans in real time, so a short window is enough for operational retries.
-		start_time = timezone.now().astimezone(device_tz) - timedelta(minutes=5)
-
-	formatted = start_time.strftime("%Y-%m-%d %H:%M:%S")
-	return f"DATA QUERY ATTLOG StartTime={formatted}", formatted
+	return build_attlog_sync_command(device)
 
 
 class DeviceSyncNowAPIView(_DeviceActionBaseAPIView):
@@ -284,22 +278,22 @@ class DeviceSyncNowAPIView(_DeviceActionBaseAPIView):
 		meta = dict(device.meta_json or {})
 		meta["last_sync_requested_at"] = timezone.now().isoformat()
 		attlog_command, attlog_start_time = _build_attlog_sync_command(device)
-		# Queue ADMS commands the device will pick up on its next getrequest poll.
-		# C:<id>:<command> is the ADMS server-push command format.
-		# DATA QUERY USERINFO  — device uploads all enrolled users / fingerprints.
-		# DATA QUERY ATTLOG    — device uploads only recent attendance logs.
-		meta["pending_commands"] = [
-			{"id": 1, "cmd": "DATA QUERY USERINFO"},
-			{"id": 2, "cmd": attlog_command},
-		]
+		queue_commands(
+			device,
+			["DATA QUERY USERINFO", attlog_command],
+		)
+		device.refresh_from_db()
+		meta = dict(device.meta_json or {})
+		meta["last_sync_requested_at"] = timezone.now().isoformat()
 		device.meta_json = meta
 		device.save(update_fields=["meta_json", "updated_at"])
+		pending_count = len((device.meta_json or {}).get("pending_commands", []))
 		return Response({
 			"detail": "Device sync queued. Commands will be sent on next device poll.",
 			"id": device.id,
 			"last_sync_requested_at": meta["last_sync_requested_at"],
 			"attlog_start_time": attlog_start_time,
-			"commands_queued": len(meta["pending_commands"]),
+			"commands_queued": pending_count,
 		})
 
 
@@ -547,6 +541,90 @@ class FingerprintUnlinkAPIView(APIView):
 		return Response({"detail": "Fingerprint unlinked.", "device_user_id": device_user.id})
 
 
+class BiometricDeviceProfileListAPIView(APIView):
+	feature_key = "attendance.devices"
+	permission_classes = [HasFeatureMethodPermission]
+
+	def get(self, request):
+		data = [
+			{
+				"key": profile.key,
+				"label": profile.label,
+				"manufacturer": profile.manufacturer,
+				"supports_remote_enroll": profile.supports_remote_enroll,
+				"max_users": profile.max_users,
+				"max_fingers_per_user": profile.max_fingers_per_user,
+			}
+			for profile in list_device_profiles()
+		]
+		return Response(data)
+
+
+class FingerprintEnrollmentStartAPIView(APIView):
+	feature_key = "attendance.fingerprints"
+	method_permission_map = {"POST": "edit"}
+	permission_classes = [HasFeatureMethodPermission]
+
+	def post(self, request):
+		serializer = FingerprintEnrollmentStartSerializer(data=request.data)
+		serializer.is_valid(raise_exception=True)
+		member = serializer.validated_data["member"]
+		device = serializer.validated_data["device"]
+
+		members_qs = Member.objects.filter(id=member.id)
+		members_qs = scope_queryset_by_branch_access(
+			members_qs,
+			request.user,
+			branch_field="branch_id",
+		)
+		if not members_qs.exists():
+			return Response({"detail": "Member not found or not accessible."}, status=status.HTTP_404_NOT_FOUND)
+
+		try:
+			session = FingerprintEnrollmentService.start_enrollment(
+				member=member,
+				device=device,
+				user=request.user,
+				fingerprint_slot=serializer.validated_data.get("fingerprint_slot", 0),
+			)
+		except EnrollmentNotSupported as exc:
+			return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+		except EnrollmentConflict as exc:
+			return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+		except EnrollmentServiceError as exc:
+			return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+		return Response(
+			FingerprintEnrollmentSessionSerializer(session).data,
+			status=status.HTTP_201_CREATED,
+		)
+
+
+class FingerprintEnrollmentDetailAPIView(APIView):
+	feature_key = "attendance.fingerprints"
+	permission_classes = [HasFeatureMethodPermission]
+
+	def get(self, request, pk):
+		session = get_object_or_404(
+			FingerprintEnrollmentSession.objects.select_related("member", "access_device"),
+			pk=pk,
+		)
+		FingerprintEnrollmentService.expire_if_needed(session)
+		session.refresh_from_db()
+		return Response(FingerprintEnrollmentSessionSerializer(session).data)
+
+
+class FingerprintEnrollmentCancelAPIView(APIView):
+	feature_key = "attendance.fingerprints"
+	method_permission_map = {"POST": "edit"}
+	permission_classes = [HasFeatureMethodPermission]
+
+	def post(self, request, pk):
+		session = get_object_or_404(FingerprintEnrollmentSession, pk=pk)
+		session = FingerprintEnrollmentService.cancel_enrollment(session)
+		return Response(FingerprintEnrollmentSessionSerializer(session).data)
+
+
 class PublicSchemaADMSDispatchMixin:
 	def _device_sn_from_request(self, request) -> str:
 		params = getattr(request, "query_params", request.GET)
@@ -652,12 +730,24 @@ class IclockCdataAPIView(PublicSchemaADMSDispatchMixin, APIView):
 		device.status = AccessDevice.STATUS_ONLINE
 		device.save(update_fields=["last_seen_at", "status", "updated_at"])
 
+		meta = dict(device.meta_json or {})
+		options = (request.query_params.get("options") or "").strip().lower()
+		push_init = options == "all" or not meta.get("push_handshake_completed_at")
+
 		try:
 			tz = ZoneInfo(device.timezone or "Asia/Dhaka")
 		except ZoneInfoNotFoundError:
 			tz = ZoneInfo("UTC")
 		now = timezone.now().astimezone(tz)
 		date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+		if push_init:
+			meta["push_handshake_completed_at"] = timezone.now().isoformat()
+			device.meta_json = meta
+			device.save(update_fields=["meta_json", "updated_at"])
+			body = build_push_handshake_body(device)
+			return PlainTextResponse(body, content_type="text/plain; charset=UTF-8")
+
 		body = (
 			"OK\n"
 			f"Date:{date_str}\n"
@@ -716,20 +806,17 @@ class IclockGetRequestAPIView(PublicSchemaADMSDispatchMixin, APIView):
 			return PlainTextResponse("OK\n", content_type="text/plain; charset=UTF-8")
 
 		meta = dict(device.meta_json or {})
-		pending = list(meta.get("pending_commands", []))
 
 		device.last_seen_at = timezone.now()
 		device.status = AccessDevice.STATUS_ONLINE
 
-		if pending:
-			# Dequeue the next command and send it to the device.
-			next_cmd = pending.pop(0)
-			meta["pending_commands"] = pending
-			meta["last_command_sent"] = next_cmd["cmd"]
-			meta["last_command_sent_at"] = timezone.now().isoformat()
-			device.meta_json = meta
+		next_cmd = dequeue_next_command(device)
+		if next_cmd:
+			if next_cmd.get("session_id") is not None:
+				meta = dict(device.meta_json or {})
+				meta["last_command_session_id"] = next_cmd["session_id"]
+				device.meta_json = meta
 			device.save(update_fields=["last_seen_at", "status", "meta_json", "updated_at"])
-			# ADMS command format: C:<id>:<command>
 			cmd_str = f"C:{next_cmd['id']}:{next_cmd['cmd']}"
 			logger.info("[ADMS] GETREQUEST SN=%s from %s -> dispatching: %s", device_sn, client_ip, cmd_str)
 			return PlainTextResponse(
@@ -739,7 +826,7 @@ class IclockGetRequestAPIView(PublicSchemaADMSDispatchMixin, APIView):
 
 		logger.info("[ADMS] GETREQUEST SN=%s from %s -> OK (no pending commands)", device_sn, client_ip)
 		device.meta_json = meta
-		device.save(update_fields=["last_seen_at", "status", "updated_at"])
+		device.save(update_fields=["last_seen_at", "status", "meta_json", "updated_at"])
 		return PlainTextResponse("OK\n", content_type="text/plain; charset=UTF-8")
 
 
@@ -760,14 +847,34 @@ class IclockDeviceCmdAPIView(PublicSchemaADMSDispatchMixin, APIView):
 		if device:
 			raw = request.body.decode("utf-8", errors="replace") if request.body else ""
 			logger.info("[ADMS] CMD_ACK SN=%s from %s body=%s", device_sn, client_ip, raw[:200] if raw else "(empty)")
+			parsed = parse_devicecmd_body(raw)
 			meta = dict(device.meta_json or {})
 			meta["last_cmd_ack_at"] = timezone.now().isoformat()
 			if raw:
-				meta["last_cmd_ack_body"] = raw[:500]  # cap stored size
+				meta["last_cmd_ack_body"] = raw[:500]
+			if parsed:
+				meta["last_cmd_ack_parsed"] = parsed
 			device.last_seen_at = timezone.now()
 			device.status = AccessDevice.STATUS_ONLINE
 			device.meta_json = meta
 			device.save(update_fields=["last_seen_at", "status", "meta_json", "updated_at"])
+
+			command_id = parsed.get("ID", "")
+			return_code_raw = parsed.get("Return", "0")
+			cmd_echo = parsed.get("CMD", "")
+			try:
+				return_code = int(return_code_raw)
+			except (TypeError, ValueError):
+				return_code = -1
+
+			if command_id:
+				lookup_queued_command(device, command_id)
+				FingerprintEnrollmentService.handle_command_ack(
+					device=device,
+					command_id=command_id,
+					return_code=return_code,
+					cmd_echo=cmd_echo,
+				)
 		return PlainTextResponse("OK\n", content_type="text/plain; charset=UTF-8")
 
 
