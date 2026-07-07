@@ -183,8 +183,8 @@ python manage.py all_tenants_command seed_tenant_roles
 echo "Syncing canonical feature registry into Feature table..."
 python manage.py sync_features
 
-echo "Seeding platform packages and re-syncing tenant feature flags..."
-python manage.py seed_platform_packages --resync-tenants
+# echo "Seeding platform packages and re-syncing tenant feature flags..."
+# python manage.py seed_platform_packages --resync-tenants
 
 echo "Ensuring superadmin account exists..."
 python manage.py create_superadmin
