@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.db import models
-from django.db.models import Q
 
+from apps.attendance.device_profiles import DEFAULT_DEVICE_PROFILE_KEY
 from apps.membership.models import Member
 
 
@@ -26,6 +26,7 @@ class AccessDevice(models.Model):
 
 	name = models.CharField(max_length=120)
 	device_sn = models.CharField(max_length=100, unique=True)
+	device_profile = models.CharField(max_length=64, default=DEFAULT_DEVICE_PROFILE_KEY)
 	mode = models.CharField(max_length=20, choices=MODE_CHOICES, default=MODE_ADMS)
 	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_UNKNOWN)
 	timezone = models.CharField(max_length=64, default="Asia/Dhaka")
@@ -162,3 +163,60 @@ class AttendanceIngestEvent(models.Model):
 
 	def __str__(self):
 		return f"{self.event_type}:{self.event_hash[:12]}"
+
+
+class FingerprintEnrollmentSession(models.Model):
+	STATUS_QUEUED = "queued"
+	STATUS_USERINFO_SENT = "userinfo_sent"
+	STATUS_ENROLL_SENT = "enroll_sent"
+	STATUS_AWAITING_SCAN = "awaiting_scan"
+	STATUS_COMPLETED = "completed"
+	STATUS_FAILED = "failed"
+	STATUS_CANCELLED = "cancelled"
+	STATUS_EXPIRED = "expired"
+	STATUS_CHOICES = (
+		(STATUS_QUEUED, "Queued"),
+		(STATUS_USERINFO_SENT, "Userinfo Sent"),
+		(STATUS_ENROLL_SENT, "Enroll Sent"),
+		(STATUS_AWAITING_SCAN, "Awaiting Scan"),
+		(STATUS_COMPLETED, "Completed"),
+		(STATUS_FAILED, "Failed"),
+		(STATUS_CANCELLED, "Cancelled"),
+		(STATUS_EXPIRED, "Expired"),
+	)
+
+	access_device = models.ForeignKey(
+		AccessDevice,
+		on_delete=models.CASCADE,
+		related_name="enrollment_sessions",
+	)
+	member = models.ForeignKey(
+		Member,
+		on_delete=models.CASCADE,
+		related_name="fingerprint_enrollment_sessions",
+	)
+	device_uid = models.CharField(max_length=64)
+	fingerprint_slot = models.PositiveSmallIntegerField(default=0)
+	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
+	command_trace = models.JSONField(default=list, blank=True)
+	failure_reason = models.TextField(blank=True, default="")
+	expires_at = models.DateTimeField()
+	created_by = models.ForeignKey(
+		settings.AUTH_USER_MODEL,
+		on_delete=models.SET_NULL,
+		null=True,
+		blank=True,
+		related_name="fingerprint_enrollment_sessions_created",
+	)
+	created_at = models.DateTimeField(auto_now_add=True)
+	updated_at = models.DateTimeField(auto_now=True)
+
+	class Meta:
+		ordering = ["-created_at"]
+		indexes = [
+			models.Index(fields=["access_device", "status"], name="idx_enroll_dev_status"),
+			models.Index(fields=["device_uid", "access_device"], name="idx_enroll_uid_dev"),
+		]
+
+	def __str__(self):
+		return f"EnrollSession[{self.id}] {self.device_uid}@{self.access_device_id}"
