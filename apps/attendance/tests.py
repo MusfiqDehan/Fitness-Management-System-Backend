@@ -664,3 +664,163 @@ class FingerprintUnlinkedListPaginationTests(TestCase):
 		self.assertEqual(filtered.status_code, status.HTTP_200_OK)
 		self.assertEqual(filtered.data["count"], 6)
 		self.assertTrue(all(row["access_device_name"] == "Front Gate" for row in filtered.data["results"]))
+
+
+class RemoteFingerprintEnrollmentTests(TestCase):
+	SCHEMA_NAME = "remote_enroll_test"
+
+	@classmethod
+	def setUpTestData(cls):
+		with schema_context("public"):
+			cls.public_tenant, _ = Tenant.objects.get_or_create(
+				schema_name="public",
+				defaults={
+					"name": "Public",
+					"slug": "public",
+					"code": "PUBENR01",
+					"owner_email": "root@remote-enroll.test",
+					"billing_email": "root@remote-enroll.test",
+					"status": "active",
+					"is_trial": False,
+				},
+			)
+			Domain.objects.get_or_create(
+				domain="testserver",
+				tenant=cls.public_tenant,
+				defaults={"is_primary": True},
+			)
+			cls.tenant, _ = Tenant.objects.get_or_create(
+				schema_name=cls.SCHEMA_NAME,
+				defaults={
+					"name": "Remote Enroll Tenant",
+					"slug": "remote-enroll-tenant",
+					"code": "REMENR01",
+					"owner_email": "admin@remote-enroll.test",
+					"billing_email": "admin@remote-enroll.test",
+					"status": "active",
+					"is_trial": False,
+				},
+			)
+			Domain.objects.get_or_create(
+				domain="remote-enroll.testserver",
+				tenant=cls.tenant,
+				defaults={"is_primary": True},
+			)
+			for key in ("attendance.fingerprints", "attendance.devices"):
+				feature, _ = Feature.objects.get_or_create(key=key, defaults={"name": key, "sort_order": 1})
+				TenantFeatureFlag.objects.update_or_create(
+					tenant=cls.tenant,
+					feature=feature,
+					defaults={"is_enabled": True, "source": TenantFeatureFlag.SOURCE_OVERRIDE},
+				)
+
+		with schema_context(cls.tenant.schema_name):
+			cls.admin = User.objects.create_user(
+				email="admin@remote-enroll.test",
+				password="StrongPass123!",
+				tenant=cls.tenant,
+				is_superuser=True,
+				is_staff=True,
+			)
+			cls.device = AccessDevice.objects.create(
+				name="Front Gate",
+				device_sn="ZKT-F18-ENR",
+				device_profile="zkteco_f18",
+				mode=AccessDevice.MODE_ADMS,
+			)
+			cls.member = Member.objects.create(
+				full_name="Jane Member",
+				phone_number="01700000001",
+				is_active=True,
+			)
+
+	def setUp(self):
+		self.factory = APIRequestFactory()
+
+	def test_device_profiles_list(self):
+		from apps.attendance.views import BiometricDeviceProfileListAPIView
+
+		request = self.factory.get("/api/v1/attendance/device-profiles/")
+		force_authenticate(request, user=self.admin)
+		with schema_context(self.tenant.schema_name):
+			response = BiometricDeviceProfileListAPIView.as_view()(request)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		keys = {row["key"] for row in response.data}
+		self.assertIn("zkteco_f18", keys)
+		self.assertIn("zkteco_f18_pro", keys)
+
+	@patch("apps.attendance.services.enrollment.publish_attendance_event")
+	def test_start_enrollment_queues_profile_commands(self, mock_publish):
+		from apps.attendance.views import FingerprintEnrollmentStartAPIView
+		from apps.attendance.models import FingerprintEnrollmentSession
+
+		request = self.factory.post(
+			"/api/v1/attendance/fingerprints/enroll/",
+			{"member_id": self.member.id, "access_device_id": self.device.id},
+			format="json",
+		)
+		force_authenticate(request, user=self.admin)
+		with schema_context(self.tenant.schema_name):
+			response = FingerprintEnrollmentStartAPIView.as_view()(request)
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(response.data["status"], FingerprintEnrollmentSession.STATUS_QUEUED)
+		with schema_context(self.tenant.schema_name):
+			self.device.refresh_from_db()
+			pending = self.device.meta_json.get("pending_commands", [])
+		self.assertEqual(len(pending), 2)
+		self.assertTrue(pending[0]["cmd"].startswith("DATA UPDATE USERINFO"))
+		self.assertTrue(pending[1]["cmd"].startswith("ENROLL_FP"))
+
+	@patch("apps.attendance.services.enrollment.publish_attendance_event")
+	def test_devicecmd_ack_advances_session(self, mock_publish):
+		from apps.attendance.services.enrollment import FingerprintEnrollmentService
+		from apps.attendance.models import FingerprintEnrollmentSession
+
+		with schema_context(self.tenant.schema_name):
+			session = FingerprintEnrollmentService.start_enrollment(
+				member=self.member,
+				device=self.device,
+				user=self.admin,
+			)
+			self.device.refresh_from_db()
+			first_cmd_id = str(self.device.meta_json["pending_commands"][0]["id"])
+			updated = FingerprintEnrollmentService.handle_command_ack(
+				device=self.device,
+				command_id=first_cmd_id,
+				return_code=0,
+				cmd_echo="DATA",
+			)
+			self.assertEqual(updated.status, FingerprintEnrollmentSession.STATUS_USERINFO_SENT)
+
+	@patch("apps.attendance.services.enrollment.publish_attendance_event")
+	def test_fp_ingest_completes_session_and_links_member(self, mock_publish):
+		from apps.attendance.services.enrollment import FingerprintEnrollmentService
+		from apps.attendance.models import FingerprintEnrollmentSession
+
+		with schema_context(self.tenant.schema_name):
+			session = FingerprintEnrollmentService.start_enrollment(
+				member=self.member,
+				device=self.device,
+				user=self.admin,
+			)
+			session.status = FingerprintEnrollmentSession.STATUS_AWAITING_SCAN
+			session.save(update_fields=["status", "updated_at"])
+			completed = FingerprintEnrollmentService.handle_fingerprint_ingested(
+				device=self.device,
+				device_uid=session.device_uid,
+			)
+			self.member.refresh_from_db()
+			self.assertEqual(completed.status, FingerprintEnrollmentSession.STATUS_COMPLETED)
+			self.assertEqual(self.member.fingerprint_id, session.device_uid)
+
+	def test_push_handshake_on_options_all(self):
+		with schema_context(self.tenant.schema_name):
+			view = IclockCdataAPIView.as_view()
+			request = self.factory.get("/iclock/cdata/?SN=ZKT-F18-ENR&options=all")
+			response = view(request)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		body = response.content.decode("utf-8")
+		self.assertIn("GET OPTION FROM:", body)
+		self.assertIn("ServerVer=3.0.1", body)
+		self.assertIn("TransFlag=", body)
