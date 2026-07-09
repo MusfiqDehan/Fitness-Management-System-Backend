@@ -22,6 +22,7 @@ from .views import (
     PublicGymClassListAPIView,
     PublicGymScheduleListAPIView,
 )
+from apps.billing.views import PaymentExportAPIView
 from .class_detail_views import (
     GymClassDetailAPIView,
     GymClassSchedulesAPIView,
@@ -57,6 +58,7 @@ urlpatterns = [
 
     # ========== PAYMENTS ==========
     path('payments/', PaymentView.as_view(), name='payment-list'),
+    path('payments/export/', PaymentExportAPIView.as_view(), name='payment-export'),
     path('payments/<int:pk>/', PaymentView.as_view(), name='payment-detail'),
     path('payments/analytics/', PaymentAnalyticsAPIView.as_view(), name='payment-analytics'),
     path('my-subscription/', MemberMySubscriptionAPIView.as_view(), name='member-my-subscription'),
