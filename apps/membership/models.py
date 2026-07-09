@@ -205,6 +205,15 @@ class Payment(BaseModel):
     invoice_no = models.CharField(max_length=64, blank=True, null=True, unique=True)
     note = models.TextField(blank=True, null=True)
     is_paid = models.BooleanField(default=False)
+    # Sorted unique YYYY-MM strings for months this payment covers.
+    coverage_months = models.JSONField(default=list, blank=True)
+    # Flexible fee breakdown: [{type, name, amount, ref?}].
+    line_items = models.JSONField(default=list, blank=True)
+
+    @property
+    def coverage_month_count(self) -> int:
+        months = self.coverage_months or []
+        return len(months) if isinstance(months, list) else 0
 
     class Meta:
         ordering = ['-payment_date']
