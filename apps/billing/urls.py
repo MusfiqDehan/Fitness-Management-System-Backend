@@ -8,6 +8,7 @@ from .views import (
     PackageListCreateAPIView,
     PaymentAPIView,
     PaymentCancelView,
+    PaymentExportAPIView,
     PaymentFailView,
     PaymentInitiateView,
     PaymentInvoicePdfAPIView,
@@ -35,6 +36,7 @@ urlpatterns = [
     path('packages/<int:pk>/features/', PackageFeaturesAPIView.as_view(), name='package-features'),
     # Payment CRUD
     path('payments/', PaymentAPIView.as_view(), name='payment-list-create'),
+    path('payments/export/', PaymentExportAPIView.as_view(), name='payment-export'),
     path('payments/stats/', PaymentStatsAPIView.as_view(), name='payment-stats'),
     path('payments/members/', PaymentMemberListAPIView.as_view(), name='payment-member-options'),
     path('payments/<int:pk>/invoice/', PaymentInvoicePdfAPIView.as_view(), name='payment-invoice-pdf'),
