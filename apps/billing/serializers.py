@@ -261,6 +261,20 @@ class PaymentSerializer(serializers.ModelSerializer):
     payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
     payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
     online_transaction_status = serializers.SerializerMethodField()
+    coverage_months = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        allow_null=True,
+    )
+    coverage_month_count = serializers.SerializerMethodField()
+    line_items = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_null=True,
+    )
+
+    def get_coverage_month_count(self, obj):
+        return getattr(obj, "coverage_month_count", len(obj.coverage_months or []))
 
     def get_online_transaction_status(self, obj):
         prefetched = getattr(obj, "_prefetched_objects_cache", {}).get(
@@ -299,6 +313,9 @@ class PaymentSerializer(serializers.ModelSerializer):
             'invoice_no',
             'note',
             'notify_channels',
+            'coverage_months',
+            'coverage_month_count',
+            'line_items',
             'is_paid',
             'is_active',
             'is_published',
@@ -318,6 +335,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'payment_method_display',
             'payment_status_display',
             'online_transaction_status',
+            'coverage_month_count',
         ]
 
     def to_internal_value(self, data):
@@ -346,6 +364,12 @@ class PaymentSerializer(serializers.ModelSerializer):
         member.save(update_fields=['member_package', 'membership_type', 'updated_at'])
 
     def validate(self, attrs):
+        from apps.billing.services.coverage_months import (
+            coverage_overlaps_paid,
+            normalize_coverage_months,
+        )
+        from apps.billing.services.line_items import normalize_line_items
+
         payment_status = attrs.get('payment_status')
         is_paid = attrs.get('is_paid')
 
@@ -355,6 +379,49 @@ class PaymentSerializer(serializers.ModelSerializer):
             attrs['payment_status'] = (
                 Payment.STATUS_PAID if is_paid else Payment.STATUS_DUE
             )
+
+        payment_date = attrs.get('payment_date')
+        if payment_date is None and self.instance is not None:
+            payment_date = self.instance.payment_date
+
+        if 'coverage_months' in attrs or self.instance is None:
+            raw_months = attrs.get('coverage_months', serializers.empty)
+            if raw_months is serializers.empty:
+                raw_months = None if self.instance is None else self.instance.coverage_months
+            attrs['coverage_months'] = normalize_coverage_months(
+                raw_months if raw_months is not serializers.empty else None,
+                payment_date=payment_date,
+                required=True,
+            )
+
+        if 'line_items' in attrs:
+            attrs['line_items'] = normalize_line_items(attrs.get('line_items') or [])
+
+        final_status = attrs.get(
+            'payment_status',
+            getattr(self.instance, 'payment_status', None),
+        )
+        if final_status == Payment.STATUS_PAID:
+            member = attrs.get('member') or getattr(self.instance, 'member', None)
+            member_id = getattr(member, 'id', member)
+            months = attrs.get(
+                'coverage_months',
+                getattr(self.instance, 'coverage_months', None) if self.instance else None,
+            ) or []
+            exclude_id = self.instance.pk if self.instance is not None else None
+            if member_id and coverage_overlaps_paid(
+                member_id=int(member_id),
+                coverage_months=list(months),
+                exclude_payment_id=exclude_id,
+            ):
+                raise serializers.ValidationError(
+                    {
+                        'coverage_months': (
+                            'A paid payment for this member already covers one or more '
+                            'of the selected months.'
+                        )
+                    }
+                )
 
         return attrs
 
