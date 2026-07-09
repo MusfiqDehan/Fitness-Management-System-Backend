@@ -154,6 +154,21 @@ class MemberPackageSerializer(PackageCurrencyDisplayMixin, serializers.ModelSeri
         )
         read_only_fields = ['created_at', 'updated_at']
 
+    def validate_add_ons(self, value):
+        from apps.billing.services.package_add_ons import normalize_package_add_ons
+
+        return normalize_package_add_ons(value)
+
+    def to_representation(self, instance):
+        from apps.billing.services.package_add_ons import normalize_package_add_ons
+
+        data = super().to_representation(instance)
+        try:
+            data["add_ons"] = normalize_package_add_ons(data.get("add_ons") or [])
+        except Exception:
+            data["add_ons"] = data.get("add_ons") or []
+        return data
+
     def get_display_currency(self, obj):
         return self._resolve_display_currency()
 
@@ -175,6 +190,16 @@ class MemberPackagePublicSerializer(PackageCurrencyDisplayMixin, serializers.Mod
             'display_currency', 'display_price',
             'description', 'features', 'add_ons', 'display_order', 'is_highlighted',
         )
+
+    def to_representation(self, instance):
+        from apps.billing.services.package_add_ons import normalize_package_add_ons
+
+        data = super().to_representation(instance)
+        try:
+            data["add_ons"] = normalize_package_add_ons(data.get("add_ons") or [])
+        except Exception:
+            data["add_ons"] = data.get("add_ons") or []
+        return data
 
     def get_display_currency(self, obj):
         return self._resolve_display_currency()
