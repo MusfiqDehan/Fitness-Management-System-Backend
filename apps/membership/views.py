@@ -1435,6 +1435,8 @@ class PaymentView(BranchScopedListMixin, ModelCRUDView):
     ordering = ['id']
 
     def get_queryset(self):
+        from apps.billing.services.coverage_months import apply_year_month_and_multi_month_filters
+
         queryset = super().get_queryset()
         from_date = self.request.query_params.get('from_date')
         to_date = self.request.query_params.get('to_date')
@@ -1444,7 +1446,7 @@ class PaymentView(BranchScopedListMixin, ModelCRUDView):
         if to_date:
             queryset = queryset.filter(payment_date__date__lte=to_date)
 
-        return queryset
+        return apply_year_month_and_multi_month_filters(queryset, self.request.query_params)
 
 
 # =============================================================================
@@ -1532,6 +1534,25 @@ class PaymentAnalyticsAPIView(APIView):
         total_partial = qs.filter(payment_status='partial').aggregate(s=Sum('amount'))['s'] or Decimal('0')
         transaction_count = qs.count()
 
+        # Current calendar month paid collection by payment_date (independent of period).
+        month_start = today.replace(day=1)
+        if today.month == 12:
+            next_month_start = today.replace(year=today.year + 1, month=1, day=1)
+        else:
+            next_month_start = today.replace(month=today.month + 1, day=1)
+        current_month_qs = scope_queryset_by_branch_access(
+            Payment.objects.filter(
+                payment_date__date__gte=month_start,
+                payment_date__date__lt=next_month_start,
+                payment_status='paid',
+                is_deleted=False,
+            ),
+            request.user,
+            branch_field='member__branch_id',
+            branch_filter_id=request.query_params.get('branch'),
+        )
+        current_month_collected = current_month_qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+
         # Previous period for trend
         delta = (today - start).days or 1
         prev_start = start - timedelta(days=delta)
@@ -1576,6 +1597,7 @@ class PaymentAnalyticsAPIView(APIView):
             'total_due': float(total_due),
             'total_partial': float(total_partial),
             'transaction_count': transaction_count,
+            'current_month_collected': float(current_month_collected),
             'trend_pct': trend_pct,
             'overdue_count': overdue_count,
             'payment_methods': payment_methods,
