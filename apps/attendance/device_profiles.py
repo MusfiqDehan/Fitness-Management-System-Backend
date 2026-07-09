@@ -59,6 +59,26 @@ DEVICE_PROFILES: dict[str, BiometricDeviceProfile] = {
         push_trans_flag=_DEFAULT_TRANS_FLAG,
         remote_enroll_command_template=_REMOTE_ENROLL_TEMPLATE,
     ),
+    "zkteco_k40": BiometricDeviceProfile(
+        key="zkteco_k40",
+        label="ZKTeco K40",
+        manufacturer="ZKTeco",
+        supports_remote_enroll=True,
+        max_users=3000,
+        max_fingers_per_user=10,
+        push_trans_flag=_DEFAULT_TRANS_FLAG,
+        remote_enroll_command_template=_REMOTE_ENROLL_TEMPLATE,
+    ),
+    "zkteco_k60": BiometricDeviceProfile(
+        key="zkteco_k60",
+        label="ZKTeco K60",
+        manufacturer="ZKTeco",
+        supports_remote_enroll=True,
+        max_users=3000,
+        max_fingers_per_user=10,
+        push_trans_flag=_DEFAULT_TRANS_FLAG,
+        remote_enroll_command_template=_REMOTE_ENROLL_TEMPLATE,
+    ),
 }
 
 DEFAULT_DEVICE_PROFILE_KEY = "zkteco_f18"
