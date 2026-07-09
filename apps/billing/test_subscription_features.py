@@ -201,6 +201,7 @@ class MemberRenewalServiceTests(APITestCase):
                 payment_method="cash",
                 payment_status=Payment.STATUS_PAID,
                 payment_date=timezone.now(),
+                coverage_months=["2026-07"],
             )
 
     def test_apply_paid_payment_extends_end_date(self):
@@ -209,7 +210,16 @@ class MemberRenewalServiceTests(APITestCase):
             apply_paid_payment(self.payment, previous_status=Payment.STATUS_DUE)
             self.member.refresh_from_db()
             self.assertEqual(self.member.payment_status, "paid")
-            self.assertGreater(self.member.end_date, old_end)
+            self.assertEqual(self.member.end_date, old_end + timedelta(days=30))
+
+    def test_apply_paid_payment_scales_by_coverage_month_count(self):
+        with schema_context(self.tenant.schema_name):
+            self.payment.coverage_months = ["2026-07", "2026-08", "2026-09"]
+            self.payment.save(update_fields=["coverage_months"])
+            old_end = self.member.end_date
+            apply_paid_payment(self.payment, previous_status=Payment.STATUS_DUE)
+            self.member.refresh_from_db()
+            self.assertEqual(self.member.end_date, old_end + timedelta(days=90))
 
     def test_apply_paid_payment_skips_when_already_paid(self):
         with schema_context(self.tenant.schema_name):
