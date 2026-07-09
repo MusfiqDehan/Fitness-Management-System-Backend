@@ -206,7 +206,26 @@ def _render_payment_invoice_pdf(payment: Payment, tenant_name: str, generated_by
     payment_item = payment.get_payment_type_display()
     payment_method = payment.get_payment_method_display()
     payment_status = payment.get_payment_status_display()
-    notes = _pdf_clean_text(payment.note or "No additional notes.")
+    from apps.billing.services.coverage_months import format_coverage_months_label
+
+    coverage_label = format_coverage_months_label(getattr(payment, "coverage_months", None) or [])
+    line_items = getattr(payment, "line_items", None) or []
+    if coverage_label:
+        payment_item = f"{payment_item} ({coverage_label})"
+    notes_parts = []
+    if coverage_label:
+        notes_parts.append(f"Covered months: {coverage_label}")
+    if isinstance(line_items, list) and line_items:
+        fee_bits = []
+        for item in line_items:
+            if not isinstance(item, dict):
+                continue
+            fee_bits.append(f"{item.get('name', 'Fee')}: TK. {item.get('amount', '0')}")
+        if fee_bits:
+            notes_parts.append("Fees — " + "; ".join(fee_bits))
+    if payment.note:
+        notes_parts.append(str(payment.note))
+    notes = _pdf_clean_text(" | ".join(notes_parts) if notes_parts else "No additional notes.")
 
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
@@ -596,6 +615,8 @@ class PaymentAPIView(BranchScopedListMixin, ModelCRUDView):
     ordering = ['id']
 
     def get_queryset(self):
+        from apps.billing.services.coverage_months import apply_year_month_and_multi_month_filters
+
         queryset = super().get_queryset()
         from_date = self.request.query_params.get('from_date')
         to_date = self.request.query_params.get('to_date')
@@ -605,7 +626,66 @@ class PaymentAPIView(BranchScopedListMixin, ModelCRUDView):
         if to_date:
             queryset = queryset.filter(payment_date__date__lte=to_date)
 
-        return queryset
+        return apply_year_month_and_multi_month_filters(queryset, self.request.query_params)
+
+
+class PaymentExportAPIView(APIView):
+    """Export filtered member payments as CSV, XLSX, or PDF."""
+
+    feature_key = "payments"
+    permission_classes = [HasFeatureMethodPermission]
+
+    def get(self, request):
+        from apps.billing.services.coverage_months import apply_year_month_and_multi_month_filters
+        from apps.billing.services.payment_export import build_payment_export_response
+
+        queryset = scope_queryset_by_branch_access(
+            optimized_payment_queryset(Payment.objects.all()),
+            request.user,
+            branch_field="member__branch_id",
+            branch_filter_id=request.query_params.get("branch"),
+        )
+        from_date = request.query_params.get("from_date")
+        to_date = request.query_params.get("to_date")
+        if from_date:
+            queryset = queryset.filter(payment_date__date__gte=from_date)
+        if to_date:
+            queryset = queryset.filter(payment_date__date__lte=to_date)
+        queryset = apply_year_month_and_multi_month_filters(queryset, request.query_params)
+
+        payment_status = request.query_params.get("payment_status")
+        if payment_status:
+            queryset = queryset.filter(payment_status=payment_status)
+        search = request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(
+                Q(member__full_name__icontains=search)
+                | Q(member__phone_number__icontains=search)
+                | Q(member__email__icontains=search)
+                | Q(invoice_no__icontains=search)
+                | Q(note__icontains=search)
+            )
+
+        year = request.query_params.get("year")
+        month = request.query_params.get("month")
+        if year and month:
+            filter_label = f"{year}-{int(month):02d}"
+        elif from_date or to_date:
+            filter_label = f"{from_date or '...'} to {to_date or '...'}"
+        else:
+            filter_label = "All matching payments"
+
+        # Use export_format — DRF reserves ?format= for content negotiation (404 Not found).
+        fmt = (
+            request.query_params.get("export_format")
+            or request.query_params.get("file_format")
+            or "csv"
+        )
+        return build_payment_export_response(
+            queryset,
+            fmt=fmt,
+            filter_label=filter_label,
+        )
 
 
 class PaymentMemberListAPIView(APIView):
