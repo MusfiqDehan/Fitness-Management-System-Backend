@@ -1,5 +1,5 @@
 from unittest.mock import MagicMock, patch
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
@@ -376,6 +376,7 @@ class BranchScopedListHelpersTests(APITestCase):
 				payment_method='cash',
 				payment_status='paid',
 				payment_date=timezone.now() - timedelta(days=10),
+				coverage_months=['2025-01'],
 			)
 			self.payment_recent = Payment.objects.create(
 				member=self.member_a,
@@ -384,6 +385,7 @@ class BranchScopedListHelpersTests(APITestCase):
 				payment_method='cash',
 				payment_status='paid',
 				payment_date=timezone.now() - timedelta(days=1),
+				coverage_months=['2025-02'],
 			)
 
 		self.factory = APIRequestFactory()
@@ -501,6 +503,241 @@ class BranchScopedListHelpersTests(APITestCase):
 			queryset = view.get_queryset()
 
 			self.assertEqual(list(queryset.values_list('id', flat=True)), [self.payment_recent.id])
+
+	def test_payment_create_with_multi_month_coverage(self):
+		payload = {
+			"member": self.member_b.id,
+			"payment_type": "package",
+			"amount": "3000.00",
+			"payment_method": "cash",
+			"payment_status": "paid",
+			"coverage_months": ["2026-07", "2026-09", "2026-12"],
+		}
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			"/api/v1/membership/payments/",
+			payload,
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(response.data["coverage_months"], ["2026-07", "2026-09", "2026-12"])
+		self.assertEqual(response.data["coverage_month_count"], 3)
+
+	def test_payment_create_defaults_coverage_from_payment_date(self):
+		payload = {
+			"member": self.member_b.id,
+			"payment_type": "package",
+			"amount": "900.00",
+			"payment_method": "cash",
+			"payment_status": "due",
+			"payment_date": "2026-07-15T10:00:00Z",
+		}
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			"/api/v1/membership/payments/",
+			payload,
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(response.data["coverage_months"], ["2026-07"])
+		self.assertEqual(response.data["coverage_month_count"], 1)
+
+	def test_payment_create_rejects_invalid_coverage_month(self):
+		payload = {
+			"member": self.member_b.id,
+			"payment_type": "package",
+			"amount": "900.00",
+			"payment_method": "cash",
+			"payment_status": "due",
+			"coverage_months": ["2026-13"],
+		}
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			"/api/v1/membership/payments/",
+			payload,
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	def test_payment_paid_overlap_rejected(self):
+		self.client.force_authenticate(user=self.admin)
+		first = self.client.post(
+			"/api/v1/membership/payments/",
+			{
+				"member": self.member_b.id,
+				"payment_type": "package",
+				"amount": "500.00",
+				"payment_method": "cash",
+				"payment_status": "paid",
+				"coverage_months": ["2026-09"],
+			},
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+		second = self.client.post(
+			"/api/v1/membership/payments/",
+			{
+				"member": self.member_b.id,
+				"payment_type": "package",
+				"amount": "500.00",
+				"payment_method": "cash",
+				"payment_status": "paid",
+				"coverage_months": ["2026-09", "2026-10"],
+			},
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
+
+	def test_payment_due_allows_shared_coverage_month(self):
+		self.client.force_authenticate(user=self.admin)
+		first = self.client.post(
+			"/api/v1/membership/payments/",
+			{
+				"member": self.member_b.id,
+				"payment_type": "package",
+				"amount": "500.00",
+				"payment_method": "cash",
+				"payment_status": "paid",
+				"coverage_months": ["2026-11"],
+			},
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+		second = self.client.post(
+			"/api/v1/membership/payments/",
+			{
+				"member": self.member_b.id,
+				"payment_type": "package",
+				"amount": "500.00",
+				"payment_method": "cash",
+				"payment_status": "due",
+				"coverage_months": ["2026-11"],
+			},
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+
+	def test_payment_list_year_month_matches_coverage_or_payment_date(self):
+		with schema_context(self.tenant.schema_name):
+			covered = Payment.objects.create(
+				member=self.member_b,
+				payment_type="package",
+				amount="100.00",
+				payment_method="cash",
+				payment_status="paid",
+				payment_date=timezone.make_aware(datetime(2026, 7, 1, 12, 0, 0)),
+				coverage_months=["2026-09"],
+			)
+		self.client.force_authenticate(user=self.admin)
+		by_coverage = self.client.get(
+			"/api/v1/membership/payments/",
+			{"year": "2026", "month": "9"},
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(by_coverage.status_code, status.HTTP_200_OK)
+		ids = [row["id"] for row in by_coverage.data["results"]]
+		self.assertIn(covered.id, ids)
+
+		by_date = self.client.get(
+			"/api/v1/membership/payments/",
+			{"year": "2026", "month": "7"},
+			HTTP_HOST="scope.testserver",
+		)
+		ids_date = [row["id"] for row in by_date.data["results"]]
+		self.assertIn(covered.id, ids_date)
+
+	def test_payment_list_multi_month_filter(self):
+		with schema_context(self.tenant.schema_name):
+			multi = Payment.objects.create(
+				member=self.member_b,
+				payment_type="package",
+				amount="100.00",
+				payment_method="cash",
+				payment_status="due",
+				payment_date=timezone.now(),
+				coverage_months=["2026-01", "2026-03"],
+			)
+			Payment.objects.create(
+				member=self.member_b,
+				payment_type="package",
+				amount="50.00",
+				payment_method="cash",
+				payment_status="due",
+				payment_date=timezone.now(),
+				coverage_months=["2026-04"],
+			)
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.get(
+			"/api/v1/membership/payments/",
+			{"multi_month": "true"},
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		ids = [row["id"] for row in response.data["results"]]
+		self.assertIn(multi.id, ids)
+		self.assertTrue(all(row["coverage_month_count"] > 1 for row in response.data["results"]))
+
+	def test_payment_create_with_line_items(self):
+		payload = {
+			"member": self.member_b.id,
+			"payment_type": "package",
+			"amount": "2400.00",
+			"payment_method": "cash",
+			"payment_status": "due",
+			"coverage_months": ["2026-08"],
+			"line_items": [
+				{"type": "package", "name": "Starter", "amount": "2000.00"},
+				{"type": "addon", "name": "PT", "amount": "500.00"},
+				{"type": "custom", "name": "Discount adj", "amount": "0.00"},
+			],
+		}
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			"/api/v1/membership/payments/",
+			payload,
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(response.data["amount"], "2400.00")
+		self.assertEqual(len(response.data["line_items"]), 3)
+
+	def test_payment_export_csv_includes_total(self):
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.get(
+			"/api/v1/membership/payments/export/",
+			{"export_format": "csv", "year": "2025", "month": "2"},
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		body = response.content.decode("utf-8")
+		self.assertIn("TOTAL", body)
+		self.assertIn("700.00", body)
+
+	def test_package_add_ons_accept_priced_objects(self):
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			"/api/v1/membership/packages/",
+			{
+				"name": "Pro Plus",
+				"package_type": "monthly",
+				"duration_in_days": 30,
+				"price": "1500.00",
+				"add_ons": [{"name": "Locker", "amount": "200.00"}],
+			},
+			format="json",
+			HTTP_HOST="scope.testserver",
+		)
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(response.data["add_ons"][0]["name"], "Locker")
+		self.assertEqual(response.data["add_ons"][0]["amount"], "200.00")
 
 
 class MemberInvitationResendTests(APITestCase):
