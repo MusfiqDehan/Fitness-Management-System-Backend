@@ -36,12 +36,13 @@ class BiometricDeviceProfile:
 
 _DEFAULT_TRANS_FLAG = "111111111111"
 _REMOTE_ENROLL_TEMPLATE = "ENROLL_FP PIN={pin}\tFID={fid}"
+_STELLAR_STUB_TEMPLATE = "STELLAR_ENROLL_UNSUPPORTED PIN={pin}\tFID={fid}"
 
 
 DEVICE_PROFILES: dict[str, BiometricDeviceProfile] = {
-    "zkteco_f18": BiometricDeviceProfile(
-        key="zkteco_f18",
-        label="ZKTeco F18",
+    "zkteco": BiometricDeviceProfile(
+        key="zkteco",
+        label="ZKTeco",
         manufacturer="ZKTeco",
         supports_remote_enroll=True,
         max_users=3000,
@@ -49,39 +50,27 @@ DEVICE_PROFILES: dict[str, BiometricDeviceProfile] = {
         push_trans_flag=_DEFAULT_TRANS_FLAG,
         remote_enroll_command_template=_REMOTE_ENROLL_TEMPLATE,
     ),
-    "zkteco_f18_pro": BiometricDeviceProfile(
-        key="zkteco_f18_pro",
-        label="ZKTeco F18 Pro",
-        manufacturer="ZKTeco",
-        supports_remote_enroll=True,
-        max_users=3000,
-        max_fingers_per_user=10,
-        push_trans_flag=_DEFAULT_TRANS_FLAG,
-        remote_enroll_command_template=_REMOTE_ENROLL_TEMPLATE,
-    ),
-    "zkteco_k40": BiometricDeviceProfile(
-        key="zkteco_k40",
-        label="ZKTeco K40",
-        manufacturer="ZKTeco",
-        supports_remote_enroll=True,
-        max_users=3000,
-        max_fingers_per_user=10,
-        push_trans_flag=_DEFAULT_TRANS_FLAG,
-        remote_enroll_command_template=_REMOTE_ENROLL_TEMPLATE,
-    ),
-    "zkteco_k60": BiometricDeviceProfile(
-        key="zkteco_k60",
-        label="ZKTeco K60",
-        manufacturer="ZKTeco",
-        supports_remote_enroll=True,
-        max_users=3000,
-        max_fingers_per_user=10,
-        push_trans_flag=_DEFAULT_TRANS_FLAG,
-        remote_enroll_command_template=_REMOTE_ENROLL_TEMPLATE,
+    "stellar": BiometricDeviceProfile(
+        key="stellar",
+        label="Stellar",
+        manufacturer="Stellar",
+        supports_remote_enroll=False,
+        max_users=0,
+        max_fingers_per_user=0,
+        push_trans_flag="",
+        remote_enroll_command_template=_STELLAR_STUB_TEMPLATE,
     ),
 }
 
-DEFAULT_DEVICE_PROFILE_KEY = "zkteco_f18"
+DEFAULT_DEVICE_PROFILE_KEY = "zkteco"
+
+# Legacy per-model keys → (profile, device_model) for data migration only.
+LEGACY_ZKTECO_PROFILE_MAP: dict[str, tuple[str, str]] = {
+    "zkteco_f18": ("zkteco", "F18"),
+    "zkteco_f18_pro": ("zkteco", "F18 Pro"),
+    "zkteco_k40": ("zkteco", "K40"),
+    "zkteco_k60": ("zkteco", "K60"),
+}
 
 
 def get_device_profile(key: str | None) -> BiometricDeviceProfile:
