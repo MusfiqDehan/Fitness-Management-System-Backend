@@ -84,32 +84,6 @@ def normalize_coverage_months(
     return sorted(normalized)
 
 
-def coverage_overlaps_paid(
-    *,
-    member_id: int,
-    coverage_months: list[str],
-    exclude_payment_id: int | None = None,
-) -> bool:
-    """True if another non-deleted paid payment for member covers any month."""
-    from apps.membership.models import Payment
-
-    if not coverage_months or not member_id:
-        return False
-
-    qs = Payment.objects.filter(
-        member_id=member_id,
-        is_deleted=False,
-        payment_status=Payment.STATUS_PAID,
-    )
-    if exclude_payment_id is not None:
-        qs = qs.exclude(pk=exclude_payment_id)
-
-    for month in coverage_months:
-        if qs.filter(coverage_months__contains=[month]).exists():
-            return True
-    return False
-
-
 def apply_year_month_and_multi_month_filters(queryset: QuerySet, params) -> QuerySet:
     """Apply year/month (payment_date OR coverage) and multi_month filters."""
     year = params.get("year")
