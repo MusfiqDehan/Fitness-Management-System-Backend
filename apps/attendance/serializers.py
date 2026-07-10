@@ -24,6 +24,7 @@ class AccessDeviceSerializer(serializers.ModelSerializer):
             "name",
             "device_sn",
             "device_profile",
+            "device_model",
             "mode",
             "status",
             "timezone",
@@ -72,6 +73,25 @@ class AccessDeviceSerializer(serializers.ModelSerializer):
         if not is_valid_device_profile(normalized):
             raise serializers.ValidationError("Unknown device profile.")
         return normalized
+
+    def validate_device_model(self, value):
+        return (value or "").strip()
+
+    def validate(self, attrs):
+        profile = attrs.get("device_profile")
+        if profile is None and self.instance is not None:
+            profile = self.instance.device_profile
+        model = attrs.get("device_model")
+        if model is None and self.instance is not None:
+            model = self.instance.device_model
+        model = (model or "").strip()
+        if profile == "zkteco" and not model:
+            raise serializers.ValidationError(
+                {"device_model": "Model name is required for ZKTeco devices."}
+            )
+        if "device_model" in attrs:
+            attrs["device_model"] = model
+        return attrs
 
 
 class AccessDeviceEndpointSerializer(serializers.ModelSerializer):
