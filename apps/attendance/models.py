@@ -27,6 +27,7 @@ class AccessDevice(models.Model):
 	name = models.CharField(max_length=120)
 	device_sn = models.CharField(max_length=100, unique=True)
 	device_profile = models.CharField(max_length=64, default=DEFAULT_DEVICE_PROFILE_KEY)
+	device_model = models.CharField(max_length=64, blank=True, default="")
 	mode = models.CharField(max_length=20, choices=MODE_CHOICES, default=MODE_ADMS)
 	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_UNKNOWN)
 	timezone = models.CharField(max_length=64, default="Asia/Dhaka")
