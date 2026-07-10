@@ -92,6 +92,10 @@ class Tenant(TenantMixin):
     updated_at = models.DateTimeField(auto_now=True)
 
     auto_create_schema = True
+    # Drop the PostgreSQL schema on delete. Without this, tenant-schema
+    # identity_user rows keep a cross-schema FK to public.tenancy_tenant and
+    # Django admin/shell deletes raise IntegrityError (often seen as HTTP 502).
+    auto_drop_schema = True
 
     class Meta:
         ordering = ["name"]
@@ -101,6 +105,13 @@ class Tenant(TenantMixin):
 
     def allows_user_entry(self):
         return self.is_enabled and self.status in self.ENTRY_ALLOWED_STATUSES
+
+    def delete(self, force_drop=False, *args, **kwargs):
+        from django_tenants.utils import get_public_schema_name
+
+        if self.schema_name == get_public_schema_name():
+            raise PermissionError("The public tenant cannot be deleted.")
+        return super().delete(force_drop=force_drop, *args, **kwargs)
 
 
 # ---------------------------------------------------------------
