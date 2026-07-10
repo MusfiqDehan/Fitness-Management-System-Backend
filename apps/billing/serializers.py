@@ -364,10 +364,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         member.save(update_fields=['member_package', 'membership_type', 'updated_at'])
 
     def validate(self, attrs):
-        from apps.billing.services.coverage_months import (
-            coverage_overlaps_paid,
-            normalize_coverage_months,
-        )
+        from apps.billing.services.coverage_months import normalize_coverage_months
         from apps.billing.services.line_items import normalize_line_items
 
         payment_status = attrs.get('payment_status')
@@ -397,31 +394,8 @@ class PaymentSerializer(serializers.ModelSerializer):
         if 'line_items' in attrs:
             attrs['line_items'] = normalize_line_items(attrs.get('line_items') or [])
 
-        final_status = attrs.get(
-            'payment_status',
-            getattr(self.instance, 'payment_status', None),
-        )
-        if final_status == Payment.STATUS_PAID:
-            member = attrs.get('member') or getattr(self.instance, 'member', None)
-            member_id = getattr(member, 'id', member)
-            months = attrs.get(
-                'coverage_months',
-                getattr(self.instance, 'coverage_months', None) if self.instance else None,
-            ) or []
-            exclude_id = self.instance.pk if self.instance is not None else None
-            if member_id and coverage_overlaps_paid(
-                member_id=int(member_id),
-                coverage_months=list(months),
-                exclude_payment_id=exclude_id,
-            ):
-                raise serializers.ValidationError(
-                    {
-                        'coverage_months': (
-                            'A paid payment for this member already covers one or more '
-                            'of the selected months.'
-                        )
-                    }
-                )
+        # Multiple paid payments for the same member/month are allowed
+        # (e.g. partial top-ups). The payments table groups them by member.
 
         return attrs
 
