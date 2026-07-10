@@ -1534,6 +1534,23 @@ class PaymentAnalyticsAPIView(APIView):
         total_partial = qs.filter(payment_status='partial').aggregate(s=Sum('amount'))['s'] or Decimal('0')
         transaction_count = qs.count()
 
+        # All-time totals (not limited by period) for payments overview cards.
+        all_time_qs = scope_queryset_by_branch_access(
+            Payment.objects.filter(is_deleted=False),
+            request.user,
+            branch_field='member__branch_id',
+            branch_filter_id=request.query_params.get('branch'),
+        )
+        all_time_collected = (
+            all_time_qs.filter(payment_status='paid').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        )
+        all_time_due = (
+            all_time_qs.filter(payment_status='due').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        )
+        all_time_partial = (
+            all_time_qs.filter(payment_status='partial').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        )
+
         # Current calendar month paid collection by payment_date (independent of period).
         month_start = today.replace(day=1)
         if today.month == 12:
@@ -1596,6 +1613,9 @@ class PaymentAnalyticsAPIView(APIView):
             'total_collected': float(total_collected),
             'total_due': float(total_due),
             'total_partial': float(total_partial),
+            'all_time_collected': float(all_time_collected),
+            'all_time_due': float(all_time_due),
+            'all_time_partial': float(all_time_partial),
             'transaction_count': transaction_count,
             'current_month_collected': float(current_month_collected),
             'trend_pct': trend_pct,
