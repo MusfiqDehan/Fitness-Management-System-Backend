@@ -725,7 +725,8 @@ class RemoteFingerprintEnrollmentTests(TestCase):
 			cls.device = AccessDevice.objects.create(
 				name="Front Gate",
 				device_sn="ZKT-F18-ENR",
-				device_profile="zkteco_f18",
+				device_profile="zkteco",
+				device_model="F18",
 				mode=AccessDevice.MODE_ADMS,
 			)
 			cls.member = Member.objects.create(
@@ -746,8 +747,13 @@ class RemoteFingerprintEnrollmentTests(TestCase):
 			response = BiometricDeviceProfileListAPIView.as_view()(request)
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
 		keys = {row["key"] for row in response.data}
-		self.assertIn("zkteco_f18", keys)
-		self.assertIn("zkteco_f18_pro", keys)
+		self.assertIn("zkteco", keys)
+		self.assertIn("stellar", keys)
+		self.assertNotIn("zkteco_f18", keys)
+		zkteco = next(row for row in response.data if row["key"] == "zkteco")
+		stellar = next(row for row in response.data if row["key"] == "stellar")
+		self.assertTrue(zkteco["supports_remote_enroll"])
+		self.assertFalse(stellar["supports_remote_enroll"])
 
 	@patch("apps.attendance.services.enrollment.publish_attendance_event")
 	def test_start_enrollment_queues_profile_commands(self, mock_publish):
