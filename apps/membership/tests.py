@@ -562,7 +562,8 @@ class BranchScopedListHelpersTests(APITestCase):
 		)
 		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-	def test_payment_paid_overlap_rejected(self):
+	def test_payment_paid_allows_shared_coverage_month(self):
+		"""Multiple paid payments for the same member/month are allowed."""
 		self.client.force_authenticate(user=self.admin)
 		first = self.client.post(
 			"/api/v1/membership/payments/",
@@ -591,7 +592,8 @@ class BranchScopedListHelpersTests(APITestCase):
 			format="json",
 			HTTP_HOST="scope.testserver",
 		)
-		self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(second.data["coverage_months"], ["2026-09", "2026-10"])
 
 	def test_payment_due_allows_shared_coverage_month(self):
 		self.client.force_authenticate(user=self.admin)
