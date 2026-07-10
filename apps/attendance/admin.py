@@ -11,7 +11,17 @@ from .models import (
 
 @admin.register(AccessDevice)
 class AccessDeviceAdmin(admin.ModelAdmin):
-	list_display = ("id", "name", "device_sn", "device_profile", "mode", "status", "is_active", "last_seen_at")
+	list_display = (
+		"id",
+		"name",
+		"device_sn",
+		"device_profile",
+		"device_model",
+		"mode",
+		"status",
+		"is_active",
+		"last_seen_at",
+	)
 	list_filter = ("mode", "status", "is_active")
 	search_fields = ("name", "device_sn")
 
