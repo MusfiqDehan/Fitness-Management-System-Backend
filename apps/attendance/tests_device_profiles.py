@@ -17,6 +17,8 @@ class BiometricDeviceProfileTests(SimpleTestCase):
     def test_zkteco_supports_remote_enroll(self):
         profile = get_device_profile("zkteco")
         self.assertTrue(profile.supports_remote_enroll)
+        self.assertTrue(profile.supports_fingerprint)
+        self.assertTrue(profile.supports_card)
         self.assertEqual(profile.manufacturer, "ZKTeco")
         cmd = profile.build_remote_enroll_command(pin="11", fingerprint_slot=0)
         self.assertTrue(cmd.startswith("ENROLL_FP"))
@@ -25,6 +27,7 @@ class BiometricDeviceProfileTests(SimpleTestCase):
     def test_stellar_does_not_support_remote_enroll(self):
         profile = get_device_profile("stellar")
         self.assertFalse(profile.supports_remote_enroll)
+        self.assertFalse(profile.supports_card)
         self.assertEqual(profile.manufacturer, "Stellar")
 
     def test_legacy_keys_invalid(self):
@@ -33,10 +36,11 @@ class BiometricDeviceProfileTests(SimpleTestCase):
 
     def test_build_userinfo_command(self):
         profile = get_device_profile("zkteco")
-        cmd = profile.build_userinfo_command(pin="42", name="Jane Doe")
+        cmd = profile.build_userinfo_command(pin="42", name="Jane Doe", card="RFID-9")
         self.assertIn("DATA UPDATE USERINFO", cmd)
         self.assertIn("PIN=42", cmd)
         self.assertIn("Name=Jane Doe", cmd)
+        self.assertIn("Card=RFID-9", cmd)
 
     def test_build_remote_enroll_command(self):
         profile = get_device_profile("zkteco")
