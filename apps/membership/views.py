@@ -918,12 +918,70 @@ class PublicMemberRegistrationAPIView(APIView):
                         .order_by('-created_at')
                         .first()
                     )
+                    coupon_code = str(request.data.get('coupon_code') or '').strip()
+                    apply_result = None
+                    tenant = getattr(request, 'tenant', None)
+                    feature_on = False
+                    if tenant is not None:
+                        from apps.tenancy.services import tenant_has_feature
+
+                        feature_on = tenant_has_feature(tenant, 'discount')
+
                     if package_payment is None and member.member_package is not None:
+                        amount = member.member_package.price
+                        line_items = []
+                        if feature_on:
+                            from apps.membership.services.discount_engine import (
+                                apply_discounts_for_payment,
+                                record_discount_usages,
+                            )
+
+                            apply_result = apply_discounts_for_payment(
+                                package=member.member_package,
+                                member=member,
+                                coverage_months=[],
+                                coupon_code=coupon_code or None,
+                                feature_enabled=True,
+                            )
+                            if apply_result is not None:
+                                amount = apply_result.total
+                                line_items = apply_result.line_items
                         package_payment = Payment.objects.create(
                             member=member,
                             payment_type='package',
-                            amount=member.member_package.price,
+                            amount=amount,
+                            line_items=line_items,
                         )
+                        if apply_result is not None:
+                            record_discount_usages(
+                                payment=package_payment,
+                                apply_result=apply_result,
+                                coupon_code=coupon_code or None,
+                            )
+                    elif package_payment is not None and feature_on and member.member_package is not None:
+                        from apps.membership.services.discount_engine import (
+                            apply_discounts_for_payment,
+                            record_discount_usages,
+                        )
+
+                        apply_result = apply_discounts_for_payment(
+                            package=member.member_package,
+                            member=member,
+                            coverage_months=package_payment.coverage_months or [],
+                            coupon_code=coupon_code or None,
+                            feature_enabled=True,
+                        )
+                        if apply_result is not None and apply_result.applied:
+                            package_payment.amount = apply_result.total
+                            package_payment.line_items = apply_result.line_items
+                            package_payment.save(
+                                update_fields=['amount', 'line_items', 'updated_at']
+                            )
+                            record_discount_usages(
+                                payment=package_payment,
+                                apply_result=apply_result,
+                                coupon_code=coupon_code or None,
+                            )
 
                     if package_payment is None:
                         raise ValueError('Could not prepare package payment for checkout.')
