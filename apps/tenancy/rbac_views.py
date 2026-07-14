@@ -579,6 +579,7 @@ class PlatformInvitationListCreateView(APIView):
                     f"You've been invited to join the Platform Team as "
                     f"{payload['role'].name}. Accept by visiting: {accept_url}"
                 ),
+                mail_route="platform",
             )
 
             _record_audit(

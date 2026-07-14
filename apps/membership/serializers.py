@@ -1,6 +1,6 @@
 from decimal import Decimal, InvalidOperation
 
-from django.db import connection
+from django.db import connection, models
 from django_tenants.utils import get_public_schema_name, schema_context
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
@@ -9,7 +9,7 @@ import calendar
 
 from apps.dashboard.models import GymPreferences
 from utils.currency import convert_currency
-from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
+from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule, ClassEnrollment
 from datetime import date
 
 
@@ -154,6 +154,21 @@ class MemberPackageSerializer(PackageCurrencyDisplayMixin, serializers.ModelSeri
         )
         read_only_fields = ['created_at', 'updated_at']
 
+    def validate_add_ons(self, value):
+        from apps.billing.services.package_add_ons import normalize_package_add_ons
+
+        return normalize_package_add_ons(value)
+
+    def to_representation(self, instance):
+        from apps.billing.services.package_add_ons import normalize_package_add_ons
+
+        data = super().to_representation(instance)
+        try:
+            data["add_ons"] = normalize_package_add_ons(data.get("add_ons") or [])
+        except Exception:
+            data["add_ons"] = data.get("add_ons") or []
+        return data
+
     def get_display_currency(self, obj):
         return self._resolve_display_currency()
 
@@ -175,6 +190,16 @@ class MemberPackagePublicSerializer(PackageCurrencyDisplayMixin, serializers.Mod
             'display_currency', 'display_price',
             'description', 'features', 'add_ons', 'display_order', 'is_highlighted',
         )
+
+    def to_representation(self, instance):
+        from apps.billing.services.package_add_ons import normalize_package_add_ons
+
+        data = super().to_representation(instance)
+        try:
+            data["add_ons"] = normalize_package_add_ons(data.get("add_ons") or [])
+        except Exception:
+            data["add_ons"] = data.get("add_ons") or []
+        return data
 
     def get_display_currency(self, obj):
         return self._resolve_display_currency()
@@ -202,6 +227,8 @@ class MemberSerializer(serializers.ModelSerializer):
     age = serializers.SerializerMethodField()
     age_years = serializers.SerializerMethodField()
     invitation_pending = serializers.SerializerMethodField()
+    invitation_sent_at = serializers.DateTimeField(read_only=True)
+    invitation_expires_at = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = Member
@@ -211,13 +238,21 @@ class MemberSerializer(serializers.ModelSerializer):
             'member_package', 'member_package_id',
             'start_date', 'end_date', 'remaining_days', 'duration', 'duration_years', 'age', 'age_years',
             'card_id', 'fingerprint_id',
-            'emergency_contact_name', 'emergency_contact_phone', 'notes',
+            'emergency_contact_name', 'emergency_contact_phone',
+            'relationship_with_member', 'notes',
             'payment_method', 'payment_status', 'photo',
             'branch', 'branch_name',
             'is_active', 'is_published', 'invitation_pending',
+            'invitation_sent_at', 'invitation_expires_at',
             'created_at', 'updated_at',
         )
-        read_only_fields = ['created_at', 'updated_at', 'remaining_days']
+        read_only_fields = [
+            'created_at',
+            'updated_at',
+            'remaining_days',
+            'invitation_sent_at',
+            'invitation_expires_at',
+        ]
 
     def get_duration(self, obj):
         return _format_elapsed_ymd(obj.start_date)
@@ -234,17 +269,42 @@ class MemberSerializer(serializers.ModelSerializer):
     def get_invitation_pending(self, obj):
         return bool(obj.invitation_token)
 
+    @staticmethod
+    def _default_end_date(*, membership_type, member_package, start_date):
+        return Member.default_end_date(
+            membership_type=membership_type,
+            member_package=member_package,
+            start_date=start_date,
+        )
+
     def validate(self, attrs):
         membership_type = attrs.get('membership_type', getattr(self.instance, 'membership_type', None))
         email = attrs.get('email', getattr(self.instance, 'email', None))
+        is_member_import = bool(self.context.get('member_import'))
 
-        if not email:
+        if not email and not is_member_import:
             raise serializers.ValidationError({'email': 'This field is required.'})
 
         if membership_type == 'monthly':
             attrs['member_package'] = None
 
+        start_date = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        end_date = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError({'end_date': 'End date must be on or after start date.'})
+
         return attrs
+
+    def create(self, validated_data):
+        if validated_data.get('end_date') is None:
+            default_end = self._default_end_date(
+                membership_type=validated_data.get('membership_type', 'monthly'),
+                member_package=validated_data.get('member_package'),
+                start_date=validated_data.get('start_date'),
+            )
+            if default_end is not None:
+                validated_data['end_date'] = default_end
+        return super().create(validated_data)
 
 
 class MemberPublicSerializer(serializers.ModelSerializer):
@@ -330,7 +390,7 @@ class GymClassSerializer(serializers.ModelSerializer):
     class_type_display = serializers.CharField(source='get_class_type_display', read_only=True)
     level_display = serializers.CharField(source='get_level_display', read_only=True)
     trainer_name = serializers.CharField(source='trainer_profile.user.full_name', read_only=True, default=None)
-    trainer_profile_id = serializers.IntegerField(source='trainer_profile_id', read_only=True)
+    trainer_profile_id = serializers.IntegerField(read_only=True)
     image_url = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
@@ -381,6 +441,7 @@ class GymScheduleSerializer(serializers.ModelSerializer):
         model = GymSchedule
         fields = (
             'id', 'gym_class', 'trainer_profile', 'trainer_schedule', 'title', 'class_type', 'instructor',
+            'trainer_name',
             'recurrence_mode', 'recurrence_mode_display', 'scheduled_date',
             'day_of_week', 'day_of_week_display',
             'start_time', 'end_time', 'capacity',
@@ -413,3 +474,124 @@ class UnifiedScheduleSerializer(GymScheduleSerializer):
 
     def get_source(self, obj):
         return 'weekly' if obj.recurrence_mode == 'weekly' else 'one_off'
+
+
+class GymClassDetailSerializer(GymClassSerializer):
+    active_enrollments = serializers.IntegerField(read_only=True, required=False)
+    schedule_count = serializers.IntegerField(read_only=True, required=False)
+    capacity_remaining = serializers.IntegerField(read_only=True, required=False)
+
+    class Meta(GymClassSerializer.Meta):
+        fields = GymClassSerializer.Meta.fields + (
+            'active_enrollments',
+            'schedule_count',
+            'capacity_remaining',
+        )
+
+
+class ClassEnrollmentMemberSerializer(serializers.ModelSerializer):
+    member_id = serializers.IntegerField(source='member.id', read_only=True)
+    member_name = serializers.CharField(source='member.full_name', read_only=True)
+    member_email = serializers.CharField(source='member.email', read_only=True)
+    member_phone = serializers.CharField(source='member.phone_number', read_only=True)
+    sessions_booked = serializers.SerializerMethodField()
+    last_punctuality = serializers.SerializerMethodField()
+    last_punctuality_source = serializers.SerializerMethodField()
+    last_punctuality_override = serializers.SerializerMethodField()
+    last_booking_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassEnrollment
+        fields = (
+            'id', 'member_id', 'member_name', 'member_email', 'member_phone',
+            'enrolled_at', 'status', 'source', 'sessions_booked',
+            'last_punctuality', 'last_punctuality_source', 'last_punctuality_override',
+            'last_booking_id',
+        )
+
+    def get_sessions_booked(self, obj):
+        from apps.trainer.models import ScheduleBooking
+        trainer_class_id = obj.gym_class.trainer_class_id
+        if not trainer_class_id:
+            return 0
+        return ScheduleBooking.objects.filter(
+            member=obj.member,
+            schedule__trainer_class_id=trainer_class_id,
+            is_deleted=False,
+        ).exclude(status='cancelled').count()
+
+    def _latest_booking(self, obj):
+        from apps.trainer.models import ScheduleBooking
+
+        trainer_class_id = obj.gym_class.trainer_class_id
+        if not trainer_class_id:
+            return None
+        return (
+            ScheduleBooking.objects.filter(
+                member=obj.member,
+                schedule__trainer_class_id=trainer_class_id,
+                is_deleted=False,
+            )
+            .exclude(status='cancelled')
+            .select_related('schedule')
+            .order_by('-schedule__scheduled_date', '-schedule__start_time')
+            .first()
+        )
+
+    def get_last_punctuality(self, obj):
+        from apps.membership.services.class_attendance import ClassAttendanceService
+
+        booking = self._latest_booking(obj)
+        if not booking:
+            return None
+        return ClassAttendanceService.compute_punctuality(booking).get('punctuality')
+
+    def get_last_punctuality_source(self, obj):
+        from apps.membership.services.class_attendance import ClassAttendanceService
+
+        booking = self._latest_booking(obj)
+        if not booking:
+            return None
+        return ClassAttendanceService.compute_punctuality(booking).get('punctuality_source')
+
+    def get_last_booking_id(self, obj):
+        booking = self._latest_booking(obj)
+        return booking.id if booking else None
+
+    def get_last_punctuality_override(self, obj):
+        booking = self._latest_booking(obj)
+        return booking.punctuality_override if booking else None
+
+
+class MemberClassEnrollmentSerializer(serializers.ModelSerializer):
+    class_id = serializers.IntegerField(source='gym_class.id', read_only=True)
+    class_name = serializers.CharField(source='gym_class.name', read_only=True)
+    class_type = serializers.CharField(source='gym_class.class_type', read_only=True)
+    class_type_display = serializers.CharField(source='gym_class.get_class_type_display', read_only=True)
+    image_url = serializers.CharField(source='gym_class.image_url', read_only=True)
+    instructor = serializers.CharField(source='gym_class.instructor', read_only=True)
+    trainer_name = serializers.CharField(source='gym_class.trainer_profile.user.full_name', read_only=True, default='')
+    upcoming_sessions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassEnrollment
+        fields = (
+            'id', 'class_id', 'class_name', 'class_type', 'class_type_display',
+            'image_url', 'instructor', 'trainer_name', 'enrolled_at', 'source',
+            'upcoming_sessions',
+        )
+
+    def get_upcoming_sessions(self, obj):
+        from apps.trainer.models import TrainerSchedule
+        from django.utils import timezone
+        trainer_class_id = obj.gym_class.trainer_class_id
+        if not trainer_class_id:
+            return 0
+        today = timezone.now().date()
+        return TrainerSchedule.objects.filter(
+            trainer_class_id=trainer_class_id,
+            is_deleted=False,
+            is_cancelled=False,
+        ).filter(
+            models.Q(scheduled_date__gte=today) | models.Q(scheduled_date__isnull=True)
+        ).count()

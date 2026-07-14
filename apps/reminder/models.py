@@ -15,6 +15,7 @@ class Notification(BaseModel):
     WELCOME_MEMBER = 'welcome_member'
     WELCOME_TRAINER = 'welcome_trainer'
     CLASS_BOOKING_CONFIRMED = 'class_booking_confirmed'
+    CLASS_ENROLLMENT_CONFIRMED = 'class_enrollment_confirmed'
     NEW_BOOKING_RECEIVED = 'new_booking_received'
     BOOKING_CANCELLED = 'booking_cancelled'
     PAYMENT_CONFIRMED = 'payment_confirmed'
@@ -29,6 +30,7 @@ class Notification(BaseModel):
         (WELCOME_MEMBER, 'Welcome Member'),
         (WELCOME_TRAINER, 'Welcome Trainer'),
         (CLASS_BOOKING_CONFIRMED, 'Class Booking Confirmed'),
+        (CLASS_ENROLLMENT_CONFIRMED, 'Class Enrollment Confirmed'),
         (NEW_BOOKING_RECEIVED, 'New Booking Received'),
         (BOOKING_CANCELLED, 'Booking Cancelled'),
         (PAYMENT_CONFIRMED, 'Payment Confirmed'),

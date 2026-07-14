@@ -1,11 +1,11 @@
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
 
 from django.test import TestCase
 from django.test import override_settings
 from django.utils import timezone
 from django_tenants.utils import schema_context
 from rest_framework import status
-from rest_framework.test import APIRequestFactory
+from rest_framework.test import APIRequestFactory, force_authenticate
 from unittest.mock import MagicMock, patch
 
 from apps.attendance.models import AccessDevice, AttendanceIngestEvent, DeviceUser
@@ -19,13 +19,14 @@ from apps.attendance.views import (
 	IclockGetRequestAPIView,
 	MemberAttendanceLogListAPIView,
 	MembersInsideAPIView,
+	FingerprintUnlinkedListAPIView,
 	_build_attlog_sync_command,
 )
 from apps.access.models import Role, UserRole
 from apps.gym_branch.models import Branch
 from apps.identity.models import User
 from apps.membership.models import Attendance, Member
-from apps.tenancy.models import AccessDeviceRoute, Domain, Tenant
+from apps.tenancy.models import AccessDeviceRoute, Domain, Feature, Tenant, TenantFeatureFlag
 
 
 class ADMSIngestionServiceTests(TestCase):
@@ -537,3 +538,295 @@ class AttendanceBranchScopeTests(TestCase):
 
 			queryset = view.get_queryset()
 			self.assertEqual(list(queryset.values_list("member_id", flat=True)), [self.member_self.id])
+
+
+class FingerprintUnlinkedListPaginationTests(TestCase):
+	SCHEMA_NAME = "attendance_fp_pagination_test"
+
+	@classmethod
+	def setUpTestData(cls):
+		with schema_context("public"):
+			cls.public_tenant, _ = Tenant.objects.get_or_create(
+				schema_name="public",
+				defaults={
+					"name": "Public",
+					"slug": "public",
+					"code": "PUBFP001",
+					"owner_email": "root@fp-pagination.test",
+					"billing_email": "root@fp-pagination.test",
+					"status": "active",
+					"is_trial": False,
+				},
+			)
+			Domain.objects.get_or_create(
+				domain="testserver",
+				tenant=cls.public_tenant,
+				defaults={"is_primary": True},
+			)
+
+			cls.tenant, _ = Tenant.objects.get_or_create(
+				schema_name=cls.SCHEMA_NAME,
+				defaults={
+					"name": "Fingerprint Pagination Tenant",
+					"slug": "fp-pagination-tenant",
+					"code": "FPPAG001",
+					"owner_email": "admin@fp-pagination.test",
+					"billing_email": "admin@fp-pagination.test",
+					"status": "active",
+					"is_trial": False,
+				},
+			)
+			Domain.objects.get_or_create(
+				domain="fp-pagination.testserver",
+				tenant=cls.tenant,
+				defaults={"is_primary": True},
+			)
+			feature, _ = Feature.objects.get_or_create(
+				key="attendance.fingerprints",
+				defaults={"name": "Fingerprints", "sort_order": 1},
+			)
+			TenantFeatureFlag.objects.update_or_create(
+				tenant=cls.tenant,
+				feature=feature,
+				defaults={
+					"is_enabled": True,
+					"source": TenantFeatureFlag.SOURCE_OVERRIDE,
+				},
+			)
+
+		with schema_context(cls.tenant.schema_name):
+			cls.admin = User.objects.create_user(
+				email="admin@fp-pagination.test",
+				password="StrongPass123!",
+				tenant=cls.tenant,
+				is_superuser=True,
+				is_staff=True,
+			)
+			cls.device_a = AccessDevice.objects.create(name="Front Gate", device_sn="FP-PAG-A")
+			cls.device_b = AccessDevice.objects.create(name="Side Gate", device_sn="FP-PAG-B")
+			for index in range(12):
+				DeviceUser.objects.create(
+					access_device=cls.device_a if index % 2 == 0 else cls.device_b,
+					device_uid=f"UID-{index:03d}",
+					name=f"User {index}",
+					status=DeviceUser.STATUS_UNLINKED,
+				)
+			DeviceUser.objects.create(
+				access_device=cls.device_a,
+				device_uid="LINKED-999",
+				name="Linked User",
+				status=DeviceUser.STATUS_LINKED,
+			)
+
+	def setUp(self):
+		self.factory = APIRequestFactory()
+
+	def _get_unlinked(self, query_string=""):
+		request = self.factory.get(f"/api/v1/attendance/fingerprints/unlinked/{query_string}")
+		force_authenticate(request, user=self.admin)
+
+		with schema_context(self.tenant.schema_name):
+			response = FingerprintUnlinkedListAPIView.as_view()(request)
+
+		return response
+
+	def test_paginated_response_shape_and_page_size(self):
+		response = self._get_unlinked("?page=2&page_size=5")
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data["count"], 12)
+		self.assertEqual(response.data["page"], 2)
+		self.assertEqual(response.data["page_size"], 5)
+		self.assertEqual(response.data["total_pages"], 3)
+		self.assertEqual(len(response.data["results"]), 5)
+
+	def test_search_filters_by_device_uid_name_or_device(self):
+		response = self._get_unlinked("?search=Side+Gate")
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data["count"], 6)
+		self.assertTrue(all("Side Gate" in row["access_device_name"] for row in response.data["results"]))
+
+		uid_response = self._get_unlinked("?search=UID-001")
+		self.assertEqual(uid_response.status_code, status.HTTP_200_OK)
+		self.assertEqual(uid_response.data["count"], 1)
+		self.assertEqual(uid_response.data["results"][0]["device_uid"], "UID-001")
+
+	def test_unlinked_list_scoping_unchanged(self):
+		response = self._get_unlinked()
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data["count"], 12)
+		self.assertTrue(all(row["status"] == DeviceUser.STATUS_UNLINKED for row in response.data["results"]))
+		self.assertNotIn("LINKED-999", [row["device_uid"] for row in response.data["results"]])
+
+		filtered = self._get_unlinked(f"?access_device_id={self.device_a.id}")
+		self.assertEqual(filtered.status_code, status.HTTP_200_OK)
+		self.assertEqual(filtered.data["count"], 6)
+		self.assertTrue(all(row["access_device_name"] == "Front Gate" for row in filtered.data["results"]))
+
+
+class RemoteFingerprintEnrollmentTests(TestCase):
+	SCHEMA_NAME = "remote_enroll_test"
+
+	@classmethod
+	def setUpTestData(cls):
+		with schema_context("public"):
+			cls.public_tenant, _ = Tenant.objects.get_or_create(
+				schema_name="public",
+				defaults={
+					"name": "Public",
+					"slug": "public",
+					"code": "PUBENR01",
+					"owner_email": "root@remote-enroll.test",
+					"billing_email": "root@remote-enroll.test",
+					"status": "active",
+					"is_trial": False,
+				},
+			)
+			Domain.objects.get_or_create(
+				domain="testserver",
+				tenant=cls.public_tenant,
+				defaults={"is_primary": True},
+			)
+			cls.tenant, _ = Tenant.objects.get_or_create(
+				schema_name=cls.SCHEMA_NAME,
+				defaults={
+					"name": "Remote Enroll Tenant",
+					"slug": "remote-enroll-tenant",
+					"code": "REMENR01",
+					"owner_email": "admin@remote-enroll.test",
+					"billing_email": "admin@remote-enroll.test",
+					"status": "active",
+					"is_trial": False,
+				},
+			)
+			Domain.objects.get_or_create(
+				domain="remote-enroll.testserver",
+				tenant=cls.tenant,
+				defaults={"is_primary": True},
+			)
+			for key in ("attendance.fingerprints", "attendance.devices"):
+				feature, _ = Feature.objects.get_or_create(key=key, defaults={"name": key, "sort_order": 1})
+				TenantFeatureFlag.objects.update_or_create(
+					tenant=cls.tenant,
+					feature=feature,
+					defaults={"is_enabled": True, "source": TenantFeatureFlag.SOURCE_OVERRIDE},
+				)
+
+		with schema_context(cls.tenant.schema_name):
+			cls.admin = User.objects.create_user(
+				email="admin@remote-enroll.test",
+				password="StrongPass123!",
+				tenant=cls.tenant,
+				is_superuser=True,
+				is_staff=True,
+			)
+			cls.device = AccessDevice.objects.create(
+				name="Front Gate",
+				device_sn="ZKT-F18-ENR",
+				device_profile="zkteco",
+				device_model="F18",
+				mode=AccessDevice.MODE_ADMS,
+			)
+			cls.member = Member.objects.create(
+				full_name="Jane Member",
+				phone_number="01700000001",
+				is_active=True,
+			)
+
+	def setUp(self):
+		self.factory = APIRequestFactory()
+
+	def test_device_profiles_list(self):
+		from apps.attendance.views import BiometricDeviceProfileListAPIView
+
+		request = self.factory.get("/api/v1/attendance/device-profiles/")
+		force_authenticate(request, user=self.admin)
+		with schema_context(self.tenant.schema_name):
+			response = BiometricDeviceProfileListAPIView.as_view()(request)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		keys = {row["key"] for row in response.data}
+		self.assertIn("zkteco", keys)
+		self.assertIn("stellar", keys)
+		self.assertNotIn("zkteco_f18", keys)
+		zkteco = next(row for row in response.data if row["key"] == "zkteco")
+		stellar = next(row for row in response.data if row["key"] == "stellar")
+		self.assertTrue(zkteco["supports_remote_enroll"])
+		self.assertFalse(stellar["supports_remote_enroll"])
+
+	@patch("apps.attendance.services.enrollment.publish_attendance_event")
+	def test_start_enrollment_queues_profile_commands(self, mock_publish):
+		from apps.attendance.views import FingerprintEnrollmentStartAPIView
+		from apps.attendance.models import FingerprintEnrollmentSession
+
+		request = self.factory.post(
+			"/api/v1/attendance/fingerprints/enroll/",
+			{"member_id": self.member.id, "access_device_id": self.device.id},
+			format="json",
+		)
+		force_authenticate(request, user=self.admin)
+		with schema_context(self.tenant.schema_name):
+			response = FingerprintEnrollmentStartAPIView.as_view()(request)
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(response.data["status"], FingerprintEnrollmentSession.STATUS_QUEUED)
+		with schema_context(self.tenant.schema_name):
+			self.device.refresh_from_db()
+			pending = self.device.meta_json.get("pending_commands", [])
+		self.assertEqual(len(pending), 2)
+		self.assertTrue(pending[0]["cmd"].startswith("DATA UPDATE USERINFO"))
+		self.assertTrue(pending[1]["cmd"].startswith("ENROLL_FP"))
+
+	@patch("apps.attendance.services.enrollment.publish_attendance_event")
+	def test_devicecmd_ack_advances_session(self, mock_publish):
+		from apps.attendance.services.enrollment import FingerprintEnrollmentService
+		from apps.attendance.models import FingerprintEnrollmentSession
+
+		with schema_context(self.tenant.schema_name):
+			session = FingerprintEnrollmentService.start_enrollment(
+				member=self.member,
+				device=self.device,
+				user=self.admin,
+			)
+			self.device.refresh_from_db()
+			first_cmd_id = str(self.device.meta_json["pending_commands"][0]["id"])
+			updated = FingerprintEnrollmentService.handle_command_ack(
+				device=self.device,
+				command_id=first_cmd_id,
+				return_code=0,
+				cmd_echo="DATA",
+			)
+			self.assertEqual(updated.status, FingerprintEnrollmentSession.STATUS_USERINFO_SENT)
+
+	@patch("apps.attendance.services.enrollment.publish_attendance_event")
+	def test_fp_ingest_completes_session_and_links_member(self, mock_publish):
+		from apps.attendance.services.enrollment import FingerprintEnrollmentService
+		from apps.attendance.models import FingerprintEnrollmentSession
+
+		with schema_context(self.tenant.schema_name):
+			session = FingerprintEnrollmentService.start_enrollment(
+				member=self.member,
+				device=self.device,
+				user=self.admin,
+			)
+			session.status = FingerprintEnrollmentSession.STATUS_AWAITING_SCAN
+			session.save(update_fields=["status", "updated_at"])
+			completed = FingerprintEnrollmentService.handle_fingerprint_ingested(
+				device=self.device,
+				device_uid=session.device_uid,
+			)
+			self.member.refresh_from_db()
+			self.assertEqual(completed.status, FingerprintEnrollmentSession.STATUS_COMPLETED)
+			self.assertEqual(self.member.fingerprint_id, session.device_uid)
+
+	def test_push_handshake_on_options_all(self):
+		with schema_context(self.tenant.schema_name):
+			view = IclockCdataAPIView.as_view()
+			request = self.factory.get("/iclock/cdata/?SN=ZKT-F18-ENR&options=all")
+			response = view(request)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		body = response.content.decode("utf-8")
+		self.assertIn("GET OPTION FROM:", body)
+		self.assertIn("ServerVer=3.0.1", body)
+		self.assertIn("TransFlag=", body)

@@ -125,7 +125,7 @@ FULL_ACCESS_FEATURE_KEYS = [
     "cms.banners", "cms.blogs",
     "branches",
     "reports", "reminders",
-    "settings", "permissions", "email_config", "public_website",
+    "settings", "permissions", "email_config", "public_website", "custom_domain",
 ]
 
 

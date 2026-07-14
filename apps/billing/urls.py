@@ -8,6 +8,7 @@ from .views import (
     PackageListCreateAPIView,
     PaymentAPIView,
     PaymentCancelView,
+    PaymentExportAPIView,
     PaymentFailView,
     PaymentInitiateView,
     PaymentInvoicePdfAPIView,
@@ -21,6 +22,7 @@ from .views import (
     TenantGatewayConfigView,
     TenantInitiateSubscriptionChangeView,
     TenantSubscriptionInvoiceAdminView,
+    TenantSubscriptionInvoiceAdminPdfView,
     SubscriptionSummaryView,
 )
 
@@ -34,6 +36,7 @@ urlpatterns = [
     path('packages/<int:pk>/features/', PackageFeaturesAPIView.as_view(), name='package-features'),
     # Payment CRUD
     path('payments/', PaymentAPIView.as_view(), name='payment-list-create'),
+    path('payments/export/', PaymentExportAPIView.as_view(), name='payment-export'),
     path('payments/stats/', PaymentStatsAPIView.as_view(), name='payment-stats'),
     path('payments/members/', PaymentMemberListAPIView.as_view(), name='payment-member-options'),
     path('payments/<int:pk>/invoice/', PaymentInvoicePdfAPIView.as_view(), name='payment-invoice-pdf'),
@@ -54,6 +57,11 @@ urlpatterns = [
     # Tenant subscription plan change & admin invoice view (no payments feature gate)
     path('subscription/initiate-change/', TenantInitiateSubscriptionChangeView.as_view(), name='subscription-initiate-change'),
     path('subscription/admin-invoices/', TenantSubscriptionInvoiceAdminView.as_view(), name='subscription-admin-invoices'),
+    path(
+        'subscription/admin-invoices/<int:pk>/invoice/',
+        TenantSubscriptionInvoiceAdminPdfView.as_view(),
+        name='subscription-admin-invoice-pdf',
+    ),
     path('subscription/summary/', SubscriptionSummaryView.as_view(), name='subscription-summary'),
 ]
 

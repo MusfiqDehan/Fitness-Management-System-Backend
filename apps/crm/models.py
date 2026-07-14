@@ -69,8 +69,15 @@ class TenantEmailConfig(BaseModel):
     """
     Tenant-managed SMTP / email backend configuration.
 
-    Only one tenant config may be active at a time in the current schema.
+    Stored in the public schema with an explicit tenant FK so each workspace
+    keeps an isolated mail profile. Only one config may be active per tenant.
     """
+
+    tenant = models.ForeignKey(
+        "tenancy.Tenant",
+        on_delete=models.CASCADE,
+        related_name="email_configs",
+    )
 
     BACKEND_CHOICES = [
         ("django.core.mail.backends.smtp.EmailBackend", "SMTP"),

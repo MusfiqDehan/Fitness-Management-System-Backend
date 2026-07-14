@@ -19,10 +19,13 @@ from django.template.loader import render_to_string
 from django.conf import settings
 from django_filters.rest_framework import DjangoFilterBackend
 from django_tenants.utils import schema_context
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from urllib.parse import urlparse
 import logging
+import json
+import time
+from pathlib import Path
 import uuid
 import secrets
 import csv
@@ -32,6 +35,7 @@ import os
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule
 from .services.class_catalog import ClassCatalogService, MandatoryTrainerRequired, ClassCatalogServiceError
 from apps.billing.serializers import PaymentSerializer
+from .filters import MemberFilter
 from .serializers import (
     MemberSerializer,
     MemberPublicSerializer,
@@ -62,7 +66,6 @@ from apps.billing.services import get_gateway
 
 logger = logging.getLogger(__name__)
 
-
 _MEMBER_IMPORT_ALLOWED_EXTENSIONS = {'.csv', '.xls', '.xlsx', '.xlx'}
 
 
@@ -85,6 +88,26 @@ def _coerce_bool(value):
     if normalized in {'0', 'false', 'no', 'n', 'inactive'}:
         return False
     return None
+
+
+def _coerce_date(value):
+    text = _coerce_str(value)
+    if not text:
+        return None
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y'):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _find_existing_import_member(*, full_name, phone_number, date_of_birth):
+    return Member.all_objects.filter(
+        full_name=full_name,
+        phone_number=phone_number,
+        date_of_birth=date_of_birth,
+    ).first()
 
 
 def _as_row_dict(headers, values):
@@ -352,6 +375,7 @@ class MemberActions:
         'deactivate': lambda self, req, pk: self._toggle_flag(Member, pk, 'is_active', False),
         'restore':    lambda self, req, pk: self._restore(pk),
         'resend_invitation': lambda self, req, pk: self._resend_invitation(req, pk),
+        'cancel_invitation': lambda self, req, pk: self._cancel_invitation(req, pk),
     }
 
     def _scope_members_queryset(self, include_deleted=False):
@@ -424,6 +448,31 @@ class MemberActions:
             'invite_url': invite_url,
         })
 
+    def _cancel_invitation(self, request, pk):
+        try:
+            member = self._scope_members_queryset().get(pk=pk)
+        except Member.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not member.invitation_token:
+            return Response(
+                {'detail': 'Member has no pending invitation.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        member.invitation_token = None
+        member.invitation_sent_at = None
+        member.invitation_expires_at = None
+        member.save(
+            update_fields=[
+                'invitation_token',
+                'invitation_sent_at',
+                'invitation_expires_at',
+                'updated_at',
+            ],
+        )
+        return Response({'message': 'Invitation cancelled', 'invitation_pending': False})
+
 
 class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
     """Handles all Member operations and actions."""
@@ -432,7 +481,7 @@ class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
     serializer_class = MemberSerializer
     permission_classes = [HasFeatureMethodPermission]
     branch_scope_field = 'branch_id'
-    filterset_fields = ['is_active', 'membership_type', 'payment_status', 'branch', 'member_package']
+    filterset_class = MemberFilter
     search_fields = [
         'full_name',
         'phone_number',
@@ -589,12 +638,10 @@ class MemberImportAPIView(APIView):
                 skipped_count += 1
                 continue
 
-            existing = Member.all_objects.filter(phone_number=phone_number).first()
-
             payload = {
                 'phone_number': phone_number,
                 'full_name': _coerce_str(_row_pick(row, ['full_name', 'name', 'member_name']))
-                or (existing.full_name if existing else phone_number),
+                or phone_number,
             }
 
             optional_text_fields = {
@@ -619,7 +666,7 @@ class MemberImportAPIView(APIView):
                     continue
                 payload[field] = _coerce_str(value)
 
-            membership_type = payload.get('membership_type') or (existing.membership_type if existing else 'monthly')
+            membership_type = payload.get('membership_type') or 'monthly'
             membership_type = _coerce_str(membership_type).lower()
             if membership_type not in {'package', 'monthly'}:
                 errors.append({'row': row_number, 'error': "membership_type must be 'package' or 'monthly'."})
@@ -630,8 +677,6 @@ class MemberImportAPIView(APIView):
             package_raw = _row_pick(row, ['member_package_id', 'package_id', 'package', 'member_package'])
             package_id = _resolve_package_id(package_raw, package_name_map)
             if membership_type == 'package':
-                if package_id is None and existing and existing.member_package_id:
-                    package_id = existing.member_package_id
                 if package_id is None:
                     errors.append({'row': row_number, 'error': 'Package membership requires member_package_id or package name.'})
                     skipped_count += 1
@@ -644,8 +689,6 @@ class MemberImportAPIView(APIView):
             branch_id = _resolve_branch_id(branch_raw, branch_name_map)
             if branch_id is None and scope_ids is not None:
                 branch_id = scope_ids[0]
-            if branch_id is None and existing and existing.branch_id:
-                branch_id = existing.branch_id
 
             if scope_ids is not None:
                 if branch_id is None:
@@ -658,52 +701,74 @@ class MemberImportAPIView(APIView):
             if branch_id is not None:
                 payload['branch'] = branch_id
 
+            full_name = payload['full_name']
+            dob_raw = payload.get('date_of_birth')
+            parsed_dob = _coerce_date(dob_raw) if dob_raw else None
+            if dob_raw and parsed_dob is None:
+                errors.append({'row': row_number, 'error': 'Invalid date_of_birth format.'})
+                skipped_count += 1
+                continue
+            if parsed_dob is not None:
+                payload['date_of_birth'] = parsed_dob.isoformat()
+
             is_active_raw = _row_pick(row, ['is_active', 'active', 'status'])
             is_active = _coerce_bool(is_active_raw) if is_active_raw is not None else None
             if is_active is not None:
                 payload['is_active'] = is_active
 
-            if existing is None:
-                total_limit_error = total_capacity_exceeded(
-                    Member.objects,
-                    'max_users',
-                    limit_type='members',
-                )
-                if total_limit_error is not None:
-                    errors.append({'row': row_number, 'error': total_limit_error.get('detail', 'Member plan limit exceeded.')})
-                    skipped_count += 1
-                    continue
+            total_limit_error = total_capacity_exceeded(
+                Member.objects,
+                'max_users',
+                limit_type='members',
+            )
+            if total_limit_error is not None:
+                errors.append({'row': row_number, 'error': total_limit_error.get('detail', 'Member plan limit exceeded.')})
+                skipped_count += 1
+                continue
 
-                branch_limit_error = branch_capacity_exceeded(
-                    Member.objects,
-                    branch_id,
-                    'max_members_per_branch',
-                    limit_type='members_per_branch',
-                )
-                if branch_limit_error is not None:
-                    errors.append({'row': row_number, 'error': branch_limit_error.get('detail', 'Branch member limit exceeded.')})
-                    skipped_count += 1
-                    continue
+            branch_limit_error = branch_capacity_exceeded(
+                Member.objects,
+                branch_id,
+                'max_members_per_branch',
+                limit_type='members_per_branch',
+            )
+            if branch_limit_error is not None:
+                errors.append({'row': row_number, 'error': branch_limit_error.get('detail', 'Branch member limit exceeded.')})
+                skipped_count += 1
+                continue
+
+            existing = _find_existing_import_member(
+                full_name=full_name,
+                phone_number=phone_number,
+                date_of_birth=parsed_dob,
+            )
 
             try:
                 with transaction.atomic():
-                    if existing is None:
-                        serializer = MemberSerializer(data=payload)
+                    if existing:
+                        was_deleted = existing.is_deleted
+                        serializer = MemberSerializer(
+                            existing,
+                            data=payload,
+                            partial=True,
+                            context={'member_import': True},
+                        )
+                        serializer.is_valid(raise_exception=True)
+                        member = serializer.save()
+                        if was_deleted:
+                            member.restore()
+                            created_count += 1
+                        else:
+                            updated_count += 1
                     else:
-                        if existing.is_deleted:
-                            existing.restore()
-                        serializer = MemberSerializer(existing, data=payload, partial=True)
-                    serializer.is_valid(raise_exception=True)
-                    serializer.save()
+                        serializer = MemberSerializer(data=payload, context={'member_import': True})
+                        serializer.is_valid(raise_exception=True)
+                        serializer.save()
+                        created_count += 1
             except Exception as exc:
                 errors.append({'row': row_number, 'error': str(exc)})
                 skipped_count += 1
                 continue
-
-            if existing is None:
-                created_count += 1
-            else:
-                updated_count += 1
 
         total_rows = len(parsed_rows)
         result = {
@@ -954,12 +1019,15 @@ class MemberAnalyticsAPIView(APIView):
     permission_classes = [HasFeatureMethodPermission]
 
     def get(self, request):
-        from django.db.models import Count
-        from datetime import timedelta
+        from django.db.models import Count, Q
 
         branch_filter = request.query_params.get("branch")
+        period = request.query_params.get("period", "monthly").lower()
+        date_from = request.query_params.get("from")
+        date_to = request.query_params.get("to")
         schema_name = connection.schema_name
         scope = stats_scope_token(request.user, branch_filter)
+        cache_scope = f"{scope}:p={period}:f={date_from or ''}:t={date_to or ''}"
 
         def load():
             now = timezone.now()
@@ -968,7 +1036,7 @@ class MemberAnalyticsAPIView(APIView):
             month_start = today.replace(day=1)
 
             base_qs = scope_queryset_by_branch_access(
-                Member.objects.all(),
+                Member.objects.filter(is_deleted=False),
                 request.user,
                 branch_field="branch_id",
                 branch_filter_id=request.query_params.get("branch"),
@@ -977,6 +1045,9 @@ class MemberAnalyticsAPIView(APIView):
             total = base_qs.count()
             active = base_qs.filter(is_active=True, end_date__gte=today).count()
             expired = base_qs.filter(end_date__lt=today).count()
+            pending_invitations = base_qs.filter(
+                invitation_token__isnull=False,
+            ).exclude(invitation_token='').count()
             expiring_soon = base_qs.filter(
                 end_date__gte=today, end_date__lte=in_7_days
             ).count()
@@ -1004,23 +1075,103 @@ class MemberAnalyticsAPIView(APIView):
                 p["member_package__name"] or "No Package": p["count"] for p in package_dist
             }
 
+            package_breakdown = [
+                {
+                    "label": row["member_package__name"] or "No Package",
+                    "active": row["active"],
+                    "expired": row["expired"],
+                }
+                for row in (
+                    base_qs.values("member_package__name")
+                    .annotate(
+                        active=Count("id", filter=Q(is_active=True, end_date__gte=today)),
+                        expired=Count("id", filter=Q(end_date__lt=today)),
+                    )
+                    .order_by("-active", "-expired")[:5]
+                )
+            ]
+
+            retention_denominator = active + expired
+            retention_rate = (
+                round(active / retention_denominator * 100, 1)
+                if retention_denominator > 0
+                else 0.0
+            )
+
+            member_trend = self._build_member_trend(
+                base_qs, period, today, date_from, date_to
+            )
+
             return {
                 "total": total,
                 "active": active,
                 "expired": expired,
+                "pending_invitations": pending_invitations,
                 "expiring_soon": expiring_soon,
                 "new_this_month": new_this_month,
                 "new_last_month": new_last_month,
                 "gender_dist": gender_dist,
                 "package_dist": package_dist_dict,
+                "package_breakdown": package_breakdown,
+                "retention_rate": retention_rate,
+                "member_trend": member_trend,
+                "period": period,
             }
 
         payload = get_cached_value(
-            stats_key(schema_name, "member_analytics", scope),
+            stats_key(schema_name, "member_analytics", cache_scope),
             STATS_TTL,
             load,
         )
         return Response(payload)
+
+    def _build_member_trend(self, base_qs, period, today, date_from=None, date_to=None):
+        import calendar
+        from datetime import datetime as dt_datetime
+
+        results = []
+        if period == "today":
+            for hour in [6, 9, 12, 15, 18, 21]:
+                label = f"{hour}{'a' if hour < 12 else 'p'}"
+                count = base_qs.filter(
+                    created_at__date=today,
+                    created_at__hour__gte=hour,
+                    created_at__hour__lt=hour + 3,
+                ).count()
+                results.append({"label": label, "value": count})
+        elif period == "weekly":
+            for i in range(7):
+                day = today - timedelta(days=6 - i)
+                count = base_qs.filter(created_at__date=day).count()
+                results.append({"label": day.strftime("%a"), "value": count})
+        elif period == "custom" and date_from and date_to:
+            start = dt_datetime.strptime(date_from, "%Y-%m-%d").date()
+            end = dt_datetime.strptime(date_to, "%Y-%m-%d").date()
+            if start > end:
+                start, end = end, start
+            span = (end - start).days + 1
+            segments = 4
+            seg_len = max(1, span // segments)
+            for i in range(segments):
+                seg_start = start + timedelta(days=i * seg_len)
+                if i == segments - 1:
+                    seg_end = end
+                else:
+                    seg_end = min(start + timedelta(days=(i + 1) * seg_len - 1), end)
+                count = base_qs.filter(
+                    created_at__date__gte=seg_start,
+                    created_at__date__lte=seg_end,
+                ).count()
+                results.append({"label": f"W{i + 1}", "value": count})
+        else:
+            year = today.year
+            for month in range(1, 13):
+                count = base_qs.filter(
+                    created_at__year=year,
+                    created_at__month=month,
+                ).count()
+                results.append({"label": calendar.month_abbr[month], "value": count})
+        return results
 
 
 # =============================================================================
@@ -1100,12 +1251,25 @@ class InviteMemberAPIView(APIView):
 
         try:
             with transaction.atomic():
+                member_package = (
+                    MemberPackage.objects.filter(pk=member_package_id).first()
+                    if member_package_id
+                    else None
+                )
+                start_date = date.today()
+                end_date = Member.default_end_date(
+                    membership_type='package' if member_package_id else 'monthly',
+                    member_package=member_package,
+                    start_date=start_date,
+                )
                 member = Member.objects.create(
                     full_name=full_name or email.split('@')[0],
                     phone_number=phone_number,
                     email=email,
                     member_package_id=member_package_id,
                     branch_id=branch_id,
+                    start_date=start_date,
+                    end_date=end_date,
                     is_active=False,
                 )
                 invite_url = _send_member_invitation_email(
@@ -1271,6 +1435,8 @@ class PaymentView(BranchScopedListMixin, ModelCRUDView):
     ordering = ['id']
 
     def get_queryset(self):
+        from apps.billing.services.coverage_months import apply_year_month_and_multi_month_filters
+
         queryset = super().get_queryset()
         from_date = self.request.query_params.get('from_date')
         to_date = self.request.query_params.get('to_date')
@@ -1280,7 +1446,7 @@ class PaymentView(BranchScopedListMixin, ModelCRUDView):
         if to_date:
             queryset = queryset.filter(payment_date__date__lte=to_date)
 
-        return queryset
+        return apply_year_month_and_multi_month_filters(queryset, self.request.query_params)
 
 
 # =============================================================================
@@ -1368,6 +1534,42 @@ class PaymentAnalyticsAPIView(APIView):
         total_partial = qs.filter(payment_status='partial').aggregate(s=Sum('amount'))['s'] or Decimal('0')
         transaction_count = qs.count()
 
+        # All-time totals (not limited by period) for payments overview cards.
+        all_time_qs = scope_queryset_by_branch_access(
+            Payment.objects.filter(is_deleted=False),
+            request.user,
+            branch_field='member__branch_id',
+            branch_filter_id=request.query_params.get('branch'),
+        )
+        all_time_collected = (
+            all_time_qs.filter(payment_status='paid').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        )
+        all_time_due = (
+            all_time_qs.filter(payment_status='due').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        )
+        all_time_partial = (
+            all_time_qs.filter(payment_status='partial').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        )
+
+        # Current calendar month paid collection by payment_date (independent of period).
+        month_start = today.replace(day=1)
+        if today.month == 12:
+            next_month_start = today.replace(year=today.year + 1, month=1, day=1)
+        else:
+            next_month_start = today.replace(month=today.month + 1, day=1)
+        current_month_qs = scope_queryset_by_branch_access(
+            Payment.objects.filter(
+                payment_date__date__gte=month_start,
+                payment_date__date__lt=next_month_start,
+                payment_status='paid',
+                is_deleted=False,
+            ),
+            request.user,
+            branch_field='member__branch_id',
+            branch_filter_id=request.query_params.get('branch'),
+        )
+        current_month_collected = current_month_qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+
         # Previous period for trend
         delta = (today - start).days or 1
         prev_start = start - timedelta(days=delta)
@@ -1411,7 +1613,11 @@ class PaymentAnalyticsAPIView(APIView):
             'total_collected': float(total_collected),
             'total_due': float(total_due),
             'total_partial': float(total_partial),
+            'all_time_collected': float(all_time_collected),
+            'all_time_due': float(all_time_due),
+            'all_time_partial': float(all_time_partial),
             'transaction_count': transaction_count,
+            'current_month_collected': float(current_month_collected),
             'trend_pct': trend_pct,
             'overdue_count': overdue_count,
             'payment_methods': payment_methods,
@@ -1466,19 +1672,116 @@ class GymClassView(ModelCRUDView):
     serializer_class = GymClassSerializer
     permission_classes = [HasFeatureMethodPermission]
 
+    # region agent log
+    @staticmethod
+    def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+        payload = {
+            'sessionId': '43cf3d',
+            'hypothesisId': hypothesis_id,
+            'location': location,
+            'message': message,
+            'data': data,
+            'timestamp': int(time.time() * 1000),
+        }
+        for log_path in (
+            Path(settings.BASE_DIR).parent / '.cursor' / 'debug-43cf3d.log',
+            Path(settings.BASE_DIR) / '.cursor' / 'debug-43cf3d.log',
+        ):
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with log_path.open('a', encoding='utf-8') as handle:
+                    handle.write(json.dumps(payload) + '\n')
+                break
+            except OSError:
+                continue
+    # endregion
+
     def _catalog_service(self, request):
         return ClassCatalogService(user=request.user)
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        gym_class_id = self.request.query_params.get('gym_class')
+        if gym_class_id:
+            queryset = queryset.filter(gym_class_id=gym_class_id)
+        return queryset
+
+    def _list(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        # region agent log
+        self._agent_debug_log(
+            'B',
+            'membership/views.py:GymClassView._list',
+            'gym class list requested',
+            {
+                'total_count': queryset.count(),
+                'trainer_synced_count': queryset.filter(trainer_class__isnull=False).count(),
+            },
+        )
+        # endregion
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            # region agent log
+            self._agent_debug_log(
+                'A',
+                'membership/views.py:GymClassView._list',
+                'gym class serializer bound for paginated list',
+                {'serialized_count': len(page)},
+            )
+            # endregion
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        # region agent log
+        self._agent_debug_log(
+            'A',
+            'membership/views.py:GymClassView._list',
+            'gym class serializer bound for full list',
+            {'serialized_count': queryset.count()},
+        )
+        # endregion
+        return Response(serializer.data)
+
     def _create(self, request):
+        # region agent log
+        self._agent_debug_log(
+            'B',
+            'membership/views.py:GymClassView._create',
+            'gym class create requested',
+            {'has_trainer_profile': 'trainer_profile' in request.data},
+        )
+        # endregion
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        validated = serializer.validated_data
+        trainer_ref = validated.get('trainer_profile')
+        # region agent log
+        self._agent_debug_log(
+            'L',
+            'membership/views.py:GymClassView._create',
+            'validated trainer_profile ref type',
+            {
+                'trainer_profile_type': type(trainer_ref).__name__ if trainer_ref is not None else None,
+                'trainer_profile_pk': getattr(trainer_ref, 'pk', trainer_ref),
+            },
+        )
+        # endregion
         try:
-            instance = self._catalog_service(request).create_gym_class_from_admin(serializer.validated_data)
+            instance = self._catalog_service(request).create_gym_class_from_admin(validated)
         except MandatoryTrainerRequired as exc:
             return Response({'trainer_profile': [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
         except ClassCatalogServiceError as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+        response_data = self.get_serializer(instance).data
+        # region agent log
+        self._agent_debug_log(
+            'A',
+            'membership/views.py:GymClassView._create',
+            'gym class created and serialized',
+            {'gym_class_id': instance.id, 'trainer_class_id': instance.trainer_class_id},
+        )
+        # endregion
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
     def _update(self, pk, request, partial):
         instance = self.get_object()
@@ -1501,6 +1804,59 @@ class GymScheduleView(ModelCRUDView):
     ).order_by('day_of_week', 'start_time')
     serializer_class = GymScheduleSerializer
     permission_classes = [HasFeatureMethodPermission]
+
+    # region agent log
+    @staticmethod
+    def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+        payload = {
+            'sessionId': '43cf3d',
+            'hypothesisId': hypothesis_id,
+            'location': location,
+            'message': message,
+            'data': data,
+            'timestamp': int(time.time() * 1000),
+        }
+        for log_path in (
+            Path(settings.BASE_DIR).parent / '.cursor' / 'debug-43cf3d.log',
+            Path(settings.BASE_DIR) / '.cursor' / 'debug-43cf3d.log',
+        ):
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with log_path.open('a', encoding='utf-8') as handle:
+                    handle.write(json.dumps(payload) + '\n')
+                break
+            except OSError:
+                continue
+    # endregion
+
+    def _list(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        # region agent log
+        self._agent_debug_log(
+            'H',
+            'membership/views.py:GymScheduleView._list',
+            'gym schedule list requested',
+            {
+                'total_count': queryset.count(),
+                'trainer_synced_count': queryset.filter(trainer_schedule__isnull=False).count(),
+                'one_off_count': queryset.filter(recurrence_mode='one_off').count(),
+            },
+        )
+        # endregion
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        # region agent log
+        self._agent_debug_log(
+            'H',
+            'membership/views.py:GymScheduleView._list',
+            'gym schedule list serialized',
+            {'serialized_count': queryset.count()},
+        )
+        # endregion
+        return Response(serializer.data)
 
     def _catalog_service(self, request):
         return ClassCatalogService(user=request.user)

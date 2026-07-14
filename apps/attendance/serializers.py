@@ -6,7 +6,14 @@ from django_tenants.utils import get_public_schema_name, schema_context
 from apps.membership.models import Attendance, Member
 from apps.tenancy.models import AccessDeviceRoute
 
-from .models import AccessDevice, AccessDeviceEndpoint, DeviceCredential, DeviceUser
+from apps.attendance.device_profiles import is_valid_device_profile
+from .models import (
+	AccessDevice,
+	AccessDeviceEndpoint,
+	DeviceCredential,
+	DeviceUser,
+	FingerprintEnrollmentSession,
+)
 
 
 class AccessDeviceSerializer(serializers.ModelSerializer):
@@ -16,6 +23,8 @@ class AccessDeviceSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "device_sn",
+            "device_profile",
+            "device_model",
             "mode",
             "status",
             "timezone",
@@ -58,6 +67,31 @@ class AccessDeviceSerializer(serializers.ModelSerializer):
             return normalized
 
         raise serializers.ValidationError("Device serial number is already assigned to another tenant.")
+
+    def validate_device_profile(self, value):
+        normalized = (value or "").strip()
+        if not is_valid_device_profile(normalized):
+            raise serializers.ValidationError("Unknown device profile.")
+        return normalized
+
+    def validate_device_model(self, value):
+        return (value or "").strip()
+
+    def validate(self, attrs):
+        profile = attrs.get("device_profile")
+        if profile is None and self.instance is not None:
+            profile = self.instance.device_profile
+        model = attrs.get("device_model")
+        if model is None and self.instance is not None:
+            model = self.instance.device_model
+        model = (model or "").strip()
+        if profile == "zkteco" and not model:
+            raise serializers.ValidationError(
+                {"device_model": "Model name is required for ZKTeco devices."}
+            )
+        if "device_model" in attrs:
+            attrs["device_model"] = model
+        return attrs
 
 
 class AccessDeviceEndpointSerializer(serializers.ModelSerializer):
@@ -125,6 +159,48 @@ class FingerprintUnlinkSerializer(serializers.Serializer):
         if not DeviceUser.objects.filter(id=value).exists():
             raise serializers.ValidationError("Device user not found.")
         return value
+
+
+class FingerprintEnrollmentStartSerializer(serializers.Serializer):
+    member_id = serializers.IntegerField()
+    access_device_id = serializers.IntegerField()
+    fingerprint_slot = serializers.IntegerField(required=False, min_value=0, max_value=9, default=0)
+
+    def validate(self, attrs):
+        member = Member.objects.filter(id=attrs["member_id"]).first()
+        if not member:
+            raise serializers.ValidationError({"member_id": "Member not found."})
+        device = AccessDevice.objects.filter(id=attrs["access_device_id"], is_active=True).first()
+        if not device:
+            raise serializers.ValidationError({"access_device_id": "Access device not found or inactive."})
+        attrs["member"] = member
+        attrs["device"] = device
+        return attrs
+
+
+class FingerprintEnrollmentSessionSerializer(serializers.ModelSerializer):
+    member_name = serializers.CharField(source="member.full_name", read_only=True)
+    access_device_name = serializers.CharField(source="access_device.name", read_only=True)
+    device_profile = serializers.CharField(source="access_device.device_profile", read_only=True)
+
+    class Meta:
+        model = FingerprintEnrollmentSession
+        fields = (
+            "id",
+            "access_device",
+            "access_device_name",
+            "device_profile",
+            "member",
+            "member_name",
+            "device_uid",
+            "fingerprint_slot",
+            "status",
+            "failure_reason",
+            "expires_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
 
 
 class AttendanceLogSerializer(serializers.ModelSerializer):

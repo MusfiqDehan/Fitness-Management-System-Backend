@@ -86,6 +86,15 @@ class TenantEmailConfigView(ModelCRUDView):
     serializer_class = TenantEmailConfigSerializer
     permission_classes = [HasFeaturePermission.require("email_config", "view")]
 
+    def _request_tenant(self):
+        return getattr(self.request, "tenant", None)
+
+    def get_queryset(self):
+        tenant = self._request_tenant()
+        if tenant is None:
+            return TenantEmailConfig.objects.none()
+        return TenantEmailConfig.objects.filter(tenant=tenant, is_deleted=False)
+
     actions = {
         "activate": lambda self, req, pk: self._action_activate(req, pk),
         "deactivate": lambda self, req, pk: self._action_deactivate(req, pk),
@@ -98,9 +107,19 @@ class TenantEmailConfigView(ModelCRUDView):
         return super().get_permissions()
 
     def _create(self, request):
+        tenant = self._request_tenant()
+        if tenant is None:
+            return Response(
+                {"detail": "Tenant context is required for email configuration."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        instance = serializer.save(created_by=request.user, updated_by=request.user)
+        instance = serializer.save(
+            tenant=tenant,
+            created_by=request.user,
+            updated_by=request.user,
+        )
         return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
 
     def _update(self, pk, request, partial=True):
@@ -112,7 +131,7 @@ class TenantEmailConfigView(ModelCRUDView):
 
     def _action_activate(self, request, pk):
         instance = self.get_object()
-        TenantEmailConfig.objects.exclude(pk=instance.pk).update(is_active=False)
+        TenantEmailConfig.objects.filter(tenant=instance.tenant).exclude(pk=instance.pk).update(is_active=False)
         instance.is_active = True
         instance.updated_by = request.user
         instance.save(update_fields=["is_active", "updated_by_id", "updated_at"])

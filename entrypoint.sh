@@ -1,10 +1,57 @@
 #!/bin/sh
 set -e
 
+# Database connectivity:
+# - Normal app traffic: DATABASE_URL → PgBouncer (USE_PGBOUNCER=1 in .env.prod)
+# - Bootstrap/migrations: DIRECT_DATABASE_URL → PostgreSQL (db:5432)
+#
+# Production (SKIP_DB_BOOTSTRAP=1) runs migrations manually:
+#   docker compose -f docker-compose.prod.yml run --rm \
+#     -e RUN_MIGRATIONS=1 backend python manage.py migrate_schemas --noinput
+
+apply_direct_database_url() {
+    if [ -n "${DIRECT_DATABASE_URL:-}" ]; then
+        echo "Using DIRECT_DATABASE_URL for bootstrap/migrations (bypassing PgBouncer)."
+        export DATABASE_URL="${DIRECT_DATABASE_URL}"
+        export USE_PGBOUNCER=0
+        export DB_CONN_MAX_AGE=0
+        return 0
+    fi
+
+    if [ "${USE_PGBOUNCER:-0}" != "1" ] && [ -n "${DATABASE_URL:-}" ]; then
+        echo "PgBouncer disabled; using DATABASE_URL directly for bootstrap/migrations."
+        export USE_PGBOUNCER=0
+        export DB_CONN_MAX_AGE=0
+        return 0
+    fi
+
+    echo "ERROR: DIRECT_DATABASE_URL is not set. Migrations must connect to PostgreSQL directly (db:5432), not PgBouncer." >&2
+    echo "Add DIRECT_DATABASE_URL to .env.local or .env.prod, e.g. postgresql://user:pass%40word@db:5432/gym_db" >&2
+    exit 1
+}
+
+# True when this container is invoked for schema migrations.
+is_migration_invocation() {
+    if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
+        return 0
+    fi
+    case " $* " in
+        *" migrate_schemas "*|*" migrate "*) return 0 ;;
+    esac
+    return 1
+}
+
 if [ "${SKIP_DB_BOOTSTRAP:-0}" = "1" ]; then
-    echo "Skipping DB bootstrap/migrations for this container (SKIP_DB_BOOTSTRAP=1)."
+    if is_migration_invocation "$@"; then
+        apply_direct_database_url
+    else
+        echo "Skipping DB bootstrap/migrations (SKIP_DB_BOOTSTRAP=1)."
+        echo "To migrate production, run: ./scripts/migrate-prod.sh"
+    fi
     exec "$@"
 fi
+
+apply_direct_database_url
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
@@ -136,8 +183,8 @@ python manage.py all_tenants_command seed_tenant_roles
 echo "Syncing canonical feature registry into Feature table..."
 python manage.py sync_features
 
-echo "Seeding platform packages and re-syncing tenant feature flags..."
-python manage.py seed_platform_packages --resync-tenants
+# echo "Seeding platform packages and re-syncing tenant feature flags..."
+# python manage.py seed_platform_packages --resync-tenants
 
 echo "Ensuring superadmin account exists..."
 python manage.py create_superadmin

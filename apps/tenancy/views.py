@@ -1,5 +1,7 @@
 from datetime import date, datetime, time, timedelta
+import hashlib
 import logging
+import secrets
 from urllib.parse import quote
 
 from django.conf import settings
@@ -31,7 +33,7 @@ from utils.cache_helpers import (
     invalidate_user_permissions,
     tenant_overview_key,
 )
-from apps.crm.email_delivery import resolve_tenant_mail_route
+from apps.crm.email_delivery import resolve_operational_mail_route, resolve_platform_mail_route
 from apps.identity.models import User
 from .models import Tenant, Domain, Invitation, EmailQueue, TenantAuditLog, PaymentGateway, PlatformPackage, PlatformSettings
 from .permissions import IsPlatformFeaturePermission
@@ -46,6 +48,7 @@ from .serializers import (
 	TenantUpdateSerializer,
 	SuperadminInvitationSerializer,
 	PlatformSettingsSerializer,
+	TenantAdminInvitationListSerializer,
 	full_domain_for_subdomain,
 )
 from .services import normalize_plan_slug
@@ -106,7 +109,17 @@ def _json_safe(value):
 	return value
 
 
-def _issue_email(*, tenant, to_email, purpose, subject, template_name, context, fallback_text):
+def _issue_email(
+	*,
+	tenant,
+	to_email,
+	purpose,
+	subject,
+	template_name,
+	context,
+	fallback_text,
+	mail_route="operational",
+):
 	safe_context = _json_safe(context or {})
 	html_body = render_to_string(template_name, context)
 	mail_log = EmailQueue.objects.create(
@@ -119,7 +132,10 @@ def _issue_email(*, tenant, to_email, purpose, subject, template_name, context, 
 		context=safe_context,
 	)
 
-	from_email, connection = resolve_tenant_mail_route(tenant)
+	if mail_route == "platform":
+		from_email, connection, _ = resolve_platform_mail_route()
+	else:
+		from_email, connection = resolve_operational_mail_route(tenant)
 	email = EmailMultiAlternatives(
 		subject=subject,
 		body=fallback_text,
@@ -132,28 +148,46 @@ def _issue_email(*, tenant, to_email, purpose, subject, template_name, context, 
 	try:
 		email.send(fail_silently=False)
 	except Exception as first_exc:
-		# Fall back to global settings connection if tenant route fails at send time.
-		fallback_from = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
+		fallback_from, fallback_connection, _ = resolve_platform_mail_route()
+		if not fallback_from:
+			fallback_from = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
 		fallback_email = EmailMultiAlternatives(
 			subject=subject,
 			body=fallback_text,
 			from_email=fallback_from,
 			to=[to_email],
+			connection=fallback_connection,
 		)
 		fallback_email.attach_alternative(html_body, "text/html")
 		try:
 			fallback_email.send(fail_silently=False)
 		except Exception as exc:
-			mail_log.status = EmailQueue.STATUS_FAILED
-			mail_log.attempts += 1
-			mail_log.last_error = f"primary={first_exc}; fallback={exc}"
-			mail_log.save(update_fields=["status", "attempts", "last_error"])
-			return
+			env_fallback = EmailMultiAlternatives(
+				subject=subject,
+				body=fallback_text,
+				from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local"),
+				to=[to_email],
+			)
+			env_fallback.attach_alternative(html_body, "text/html")
+			try:
+				env_fallback.send(fail_silently=False)
+			except Exception as env_exc:
+				mail_log.status = EmailQueue.STATUS_FAILED
+				mail_log.attempts += 1
+				mail_log.last_error = f"primary={first_exc}; platform={exc}; env={env_exc}"
+				mail_log.save(update_fields=["status", "attempts", "last_error"])
+				return
 
 		mail_log.status = EmailQueue.STATUS_SENT
 		mail_log.sent_at = timezone.now()
 		mail_log.attempts += 1
 		mail_log.save(update_fields=["status", "sent_at", "attempts"])
+		return
+
+	mail_log.status = EmailQueue.STATUS_SENT
+	mail_log.sent_at = timezone.now()
+	mail_log.attempts += 1
+	mail_log.save(update_fields=["status", "sent_at", "attempts"])
 
 
 def _derive_schema_name(subdomain):
@@ -632,6 +666,7 @@ class TenantSelfRegistrationAPIView(APIView):
 				"expires_at": invitation.expires_at,
 			},
 			fallback_text=f"Verify your registration by visiting {setup_url}",
+			mail_route="platform",
 		)
 
 		return Response(
@@ -647,10 +682,44 @@ class TenantSelfRegistrationAPIView(APIView):
 		)
 
 
+def _rotate_tenant_invitation_token(invitation):
+	raw_token = secrets.token_urlsafe(32)
+	invitation.token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+	invitation.expires_at = timezone.now() + timedelta(minutes=60 * 24)
+	invitation.save(update_fields=["token_hash", "expires_at"])
+	return raw_token
+
+
+def _send_tenant_invitation_email(invitation, request, raw_token):
+	domain_name = (invitation.metadata or {}).get("domain") or full_domain_for_subdomain(
+		invitation.subdomain,
+		request=request,
+	)
+	setup_url = _build_frontend_url(
+		f"/accept-invite?token={quote(raw_token)}",
+		subdomain=invitation.subdomain,
+		domain=domain_name,
+		prefer_public=_prefer_public_onboarding_links(),
+	)
+	_issue_email(
+		tenant=invitation.tenant,
+		to_email=invitation.email,
+		purpose=EmailQueue.PURPOSE_INVITATION,
+		subject="You have been invited to a tenant workspace",
+		template_name="tenancy/emails/invitation_email.html",
+		context={
+			"company_name": invitation.company_name,
+			"subdomain": invitation.subdomain,
+			"invitation_url": setup_url,
+			"expires_at": invitation.expires_at,
+		},
+		fallback_text=f"Accept your invitation by visiting {setup_url}",
+		mail_route="platform",
+	)
+	return setup_url
+
+
 class SuperadminInvitationAPIView(APIView):
-	permission_classes = [
-		IsPlatformFeaturePermission.require("platform.tenants", "edit"),
-	]
 	throttle_classes = [
 		# BurstAnonRateThrottle,
 		# BurstUserRateThrottle,
@@ -659,6 +728,23 @@ class SuperadminInvitationAPIView(APIView):
 		ScopedRateThrottle,
 	]
 	throttle_scope = "superadmin_invitation"
+
+	def get_permissions(self):
+		if self.request.method == "GET":
+			return [IsPlatformFeaturePermission.require("platform.tenants", "view")()]
+		return [IsPlatformFeaturePermission.require("platform.tenants", "edit")()]
+
+	def get(self, request):
+		with schema_context(get_public_schema_name()):
+			invitations = (
+				Invitation.objects.filter(
+					token_type=Invitation.TOKEN_TYPE_INVITATION,
+					used_at__isnull=True,
+				)
+				.order_by("-created_at")
+			)
+			data = TenantAdminInvitationListSerializer(invitations, many=True).data
+		return Response(data)
 
 	def post(self, request):
 		serializer = SuperadminInvitationSerializer(
@@ -718,6 +804,7 @@ class SuperadminInvitationAPIView(APIView):
 						"expires_at": invitation.expires_at,
 					},
 					fallback_text=f"Accept your invitation by visiting {setup_url}",
+					mail_route="platform",
 				)
 
 				_record_audit(
@@ -780,6 +867,7 @@ class SuperadminInvitationAPIView(APIView):
 					"expires_at": invitation.expires_at,
 				},
 				fallback_text=f"Accept your invitation by visiting {setup_url}",
+				mail_route="platform",
 			)
 
 			_record_audit(
@@ -799,6 +887,78 @@ class SuperadminInvitationAPIView(APIView):
 				},
 				status=status.HTTP_201_CREATED,
 			)
+
+
+class TenantAdminInvitationDetailView(APIView):
+	permission_classes = [
+		IsPlatformFeaturePermission.require("platform.tenants", "edit"),
+	]
+
+	def _get_pending_invitation(self, pk):
+		with schema_context(get_public_schema_name()):
+			return generics.get_object_or_404(
+				Invitation,
+				pk=pk,
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				used_at__isnull=True,
+			)
+
+	def delete(self, request, pk):
+		invitation = self._get_pending_invitation(pk)
+		with schema_context(get_public_schema_name()):
+			invitation.delete()
+		_record_audit(
+			request,
+			action="tenant.invitation.revoked",
+			tenant=invitation.tenant,
+			target_type="pending_tenant",
+			target_id=pk,
+			metadata={"email": invitation.email, "subdomain": invitation.subdomain},
+		)
+		return Response(status=status.HTTP_204_NO_CONTENT)
+
+	def patch(self, request, pk):
+		action = request.query_params.get("action")
+		if action != "resend":
+			return Response({"detail": "Unsupported action."}, status=status.HTTP_400_BAD_REQUEST)
+
+		with schema_context(get_public_schema_name()):
+			invitation = generics.get_object_or_404(
+				Invitation,
+				pk=pk,
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+			)
+			if invitation.used_at is not None:
+				return Response(
+					{"detail": "Invitation has already been accepted."},
+					status=status.HTTP_400_BAD_REQUEST,
+				)
+
+			raw_token = _rotate_tenant_invitation_token(invitation)
+			try:
+				setup_url = _send_tenant_invitation_email(invitation, request, raw_token)
+			except Exception as exc:
+				return Response(
+					{"error": f"Failed to send invitation email: {str(exc)}"},
+					status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+				)
+
+		_record_audit(
+			request,
+			action="tenant.invitation.resent",
+			tenant=invitation.tenant,
+			target_type="pending_tenant",
+			target_id=invitation.id,
+			metadata={"email": invitation.email, "subdomain": invitation.subdomain},
+		)
+		return Response(
+			{
+				"message": "Invitation resent successfully",
+				"invitation_sent": True,
+				"invite_url": setup_url,
+			},
+			status=status.HTTP_200_OK,
+		)
 
 
 class InvitationValidationAPIView(APIView):
@@ -1227,7 +1387,8 @@ class TenantAdminOverviewAPIView(APIView):
 				trial = tenants.filter(status="trial").count()
 				users = _count_tenant_admin_users()
 				pending_invites = Invitation.objects.filter(
-					used_at__isnull=True, expires_at__gt=timezone.now()
+					token_type=Invitation.TOKEN_TYPE_INVITATION,
+					used_at__isnull=True,
 				).count()
 			return {
 				"total_tenants": total,

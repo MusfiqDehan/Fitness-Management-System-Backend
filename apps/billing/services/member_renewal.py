@@ -31,8 +31,15 @@ def apply_paid_payment(payment: Payment, *, previous_status: str | None = None) 
     if member.member_package and member.member_package.duration_in_days:
         duration = member.member_package.duration_in_days
 
+    coverage_count = getattr(payment, "coverage_month_count", None)
+    if coverage_count is None:
+        months = getattr(payment, "coverage_months", None) or []
+        coverage_count = len(months) if isinstance(months, list) else 0
+    if coverage_count < 1:
+        coverage_count = 1
+
     base = member.end_date if member.end_date and member.end_date >= today else today
-    member.end_date = base + timedelta(days=duration)
+    member.end_date = base + timedelta(days=duration * coverage_count)
     member.payment_status = "paid"
     member.is_active = True
     member.save(update_fields=["end_date", "payment_status", "is_active", "updated_at"])

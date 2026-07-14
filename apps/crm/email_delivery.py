@@ -2,7 +2,6 @@ import logging
 
 from django.conf import settings
 from django.core.mail import get_connection
-from django_tenants.utils import schema_context
 
 from .models import EmailConfig, TenantEmailConfig
 
@@ -33,52 +32,28 @@ def _build_connection_from_config(config):
     )
 
 
-def resolve_tenant_mail_route(tenant):
-    """
-    Resolve tenant mail route safely.
+def _default_from_address():
+    return getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
 
-    Returns a tuple of (from_email, connection_or_none).
-    Falls back to DEFAULT_FROM_EMAIL and Django's default connection whenever
-    tenant config is missing, inaccessible, or invalid.
-    """
-    default_from = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
 
+def _from_email_for_config(config, default_from=None):
+    default_from = default_from or _default_from_address()
+    return config.default_from_email or config.host_user or default_from
+
+
+def _active_tenant_email_config(tenant):
     if tenant is None:
-        return default_from, None
-
-    try:
-        with schema_context(tenant.schema_name):
-            config = TenantEmailConfig.objects.filter(is_active=True, is_deleted=False).first()
-    except Exception as exc:
-        logger.warning(
-            "Tenant email config lookup failed for schema=%s: %s",
-            getattr(tenant, "schema_name", "unknown"),
-            exc,
-        )
-        return default_from, None
-
-    if config is None:
-        return default_from, None
-
-    from_email = config.default_from_email or config.host_user or default_from
-
-    try:
-        connection = _build_connection_from_config(config)
-    except Exception as exc:
-        logger.warning(
-            "Tenant email connection build failed for schema=%s config_id=%s: %s",
-            getattr(tenant, "schema_name", "unknown"),
-            getattr(config, "id", None),
-            exc,
-        )
-        return default_from, None
-
-    return from_email, connection
+        return None
+    return TenantEmailConfig.objects.filter(
+        tenant_id=tenant.id,
+        is_active=True,
+        is_deleted=False,
+    ).first()
 
 
 def resolve_platform_mail_route():
     """Resolve platform mail route safely from active EmailConfig."""
-    default_from = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
+    default_from = _default_from_address()
     default_to = getattr(settings, "CONTACT_EMAIL", default_from)
 
     try:
@@ -90,11 +65,11 @@ def resolve_platform_mail_route():
     if config is None:
         return default_from, None, default_to
 
-    from_email = config.default_from_email or config.host_user or default_from
+    from_email = _from_email_for_config(config, default_from)
     to_email = config.contact_email or config.host_user or default_to
 
     try:
-        connection = _build_connection_from_config(config)
+        mail_connection = _build_connection_from_config(config)
     except Exception as exc:
         logger.warning(
             "Platform email connection build failed for config_id=%s: %s",
@@ -103,4 +78,40 @@ def resolve_platform_mail_route():
         )
         return default_from, None, default_to
 
-    return from_email, connection, to_email
+    return from_email, mail_connection, to_email
+
+
+def resolve_operational_mail_route(tenant):
+    """
+    Resolve mail route for tenant operational emails.
+
+    Priority: tenant config -> platform admin config -> Django env settings.
+    """
+    default_from = _default_from_address()
+
+    if tenant is None:
+        platform_from, platform_connection, _ = resolve_platform_mail_route()
+        return platform_from, platform_connection
+
+    config = _active_tenant_email_config(tenant)
+
+    if config is not None:
+        from_email = _from_email_for_config(config, default_from)
+        try:
+            mail_connection = _build_connection_from_config(config)
+            return from_email, mail_connection
+        except Exception as exc:
+            logger.warning(
+                "Tenant email connection build failed for tenant_id=%s config_id=%s: %s",
+                getattr(tenant, "id", None),
+                getattr(config, "id", None),
+                exc,
+            )
+
+    platform_from, platform_connection, _ = resolve_platform_mail_route()
+    return platform_from, platform_connection
+
+
+def resolve_tenant_mail_route(tenant):
+    """Backward-compatible alias for tenant operational mail resolution."""
+    return resolve_operational_mail_route(tenant)

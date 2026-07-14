@@ -137,6 +137,14 @@ class FeatureRegistrySubscriptionsTests(FeatureRegistryConsistencyTests):
         self.assertIn("subscriptions", FULL_ACCESS_FEATURE_KEYS)
         self.assertIn("subscriptions", iter_tenant_leaf_keys())
 
+    def test_subscriptions_in_platform_package_seed(self):
+        from apps.tenancy.management.commands.seed_platform_packages import CORE_FEATURES, PACKAGES
+
+        core_keys = {key for key, _, _ in CORE_FEATURES}
+        self.assertIn("subscriptions", core_keys)
+        for slug in ("starter", "growth", "enterprise"):
+            self.assertIn("subscriptions", PACKAGES[slug]["features"])
+
 
 class MemberRenewalServiceTests(APITestCase):
     def setUp(self):
@@ -193,6 +201,7 @@ class MemberRenewalServiceTests(APITestCase):
                 payment_method="cash",
                 payment_status=Payment.STATUS_PAID,
                 payment_date=timezone.now(),
+                coverage_months=["2026-07"],
             )
 
     def test_apply_paid_payment_extends_end_date(self):
@@ -201,7 +210,16 @@ class MemberRenewalServiceTests(APITestCase):
             apply_paid_payment(self.payment, previous_status=Payment.STATUS_DUE)
             self.member.refresh_from_db()
             self.assertEqual(self.member.payment_status, "paid")
-            self.assertGreater(self.member.end_date, old_end)
+            self.assertEqual(self.member.end_date, old_end + timedelta(days=30))
+
+    def test_apply_paid_payment_scales_by_coverage_month_count(self):
+        with schema_context(self.tenant.schema_name):
+            self.payment.coverage_months = ["2026-07", "2026-08", "2026-09"]
+            self.payment.save(update_fields=["coverage_months"])
+            old_end = self.member.end_date
+            apply_paid_payment(self.payment, previous_status=Payment.STATUS_DUE)
+            self.member.refresh_from_db()
+            self.assertEqual(self.member.end_date, old_end + timedelta(days=90))
 
     def test_apply_paid_payment_skips_when_already_paid(self):
         with schema_context(self.tenant.schema_name):
@@ -591,3 +609,61 @@ class PlatformSubscriptionPaymentCrudTests(PlatformBillingTestBase):
             HTTP_HOST="testserver",
         )
         self.assertEqual(res2.status_code, status.HTTP_204_NO_CONTENT)
+
+
+class TenantSubscriptionAdminInvoiceTests(PlatformBillingTestBase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        with schema_context(cls.tenant.schema_name):
+            cls.tenant_admin = User.objects.create_user(
+                email="admin@platbill.test",
+                password="StrongPass123!",
+                tenant=cls.tenant,
+                role="admin",
+            )
+
+    @patch("apps.billing.views._render_subscription_invoice_pdf", return_value=b"%PDF")
+    def test_tenant_admin_can_view_subscription_invoice_pdf(self, _pdf):
+        invoice = self._create_invoice()
+        self.client.force_authenticate(user=self.tenant_admin)
+        res = self.client.get(
+            f"/api/v1/billing/subscription/admin-invoices/{invoice.id}/invoice/",
+            HTTP_HOST="platbill.testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertIn("inline", res["Content-Disposition"])
+
+    @patch("apps.billing.views._render_subscription_invoice_pdf", return_value=b"%PDF")
+    def test_tenant_admin_can_download_subscription_invoice_pdf(self, _pdf):
+        invoice = self._create_invoice()
+        self.client.force_authenticate(user=self.tenant_admin)
+        res = self.client.get(
+            f"/api/v1/billing/subscription/admin-invoices/{invoice.id}/invoice/?download=1",
+            HTTP_HOST="platbill.testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertIn("attachment", res["Content-Disposition"])
+
+    @patch("apps.billing.views._render_subscription_invoice_pdf", return_value=b"%PDF")
+    def test_tenant_admin_cannot_download_other_tenant_invoice(self, _pdf):
+        with schema_context("public"):
+            other = Tenant.objects.create(
+                schema_name="platbill_other",
+                name="Other Tenant",
+                slug="platbill-other",
+                code="PLATB002",
+                owner_email="other@platbill.test",
+                billing_email="other@platbill.test",
+                status="active",
+            )
+            Domain.objects.create(domain="other.testserver", tenant=other, is_primary=True)
+        invoice = self._create_invoice(tenant=other)
+        self.client.force_authenticate(user=self.tenant_admin)
+        res = self.client.get(
+            f"/api/v1/billing/subscription/admin-invoices/{invoice.id}/invoice/",
+            HTTP_HOST="platbill.testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)

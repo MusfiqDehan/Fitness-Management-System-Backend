@@ -1,4 +1,5 @@
 from unittest.mock import patch
+from datetime import timedelta
 
 from django.core import mail
 from django.test import override_settings
@@ -272,6 +273,117 @@ class TenancyApiTests(APITestCase):
 		self.assertTrue(email_log.context["invitation_url"].startswith("http://managed.localhost:5173/accept-invite?token="))
 		self.assertIn("http://managed.localhost:5173/accept-invite?token=", email_log.text_body)
 		self.assertIn("http://managed.localhost:5173/accept-invite?token=", mail.outbox[-1].body)
+
+	def test_list_tenant_invitations_returns_pending_only(self):
+		self.client.force_authenticate(user=self.public_user)
+		with schema_context("public"):
+			Invitation.objects.create(
+				token_type=Invitation.TOKEN_TYPE_PLATFORM_INVITE,
+				email="platform@example.com",
+				subdomain="platform",
+				company_name="Platform",
+				token_hash="platform-invite-hash",
+				expires_at=timezone.now() + timedelta(days=1),
+			)
+			tenant_invite = Invitation.objects.create(
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				email="tenant-pending@example.com",
+				subdomain="pendingco",
+				company_name="Pending Co",
+				token_hash="tenant-pending-hash",
+				expires_at=timezone.now() + timedelta(days=1),
+			)
+
+		res = self.client.get(
+			"/api/v1/tenancy/admin/invitations/",
+			HTTP_HOST="testserver",
+		)
+		self.assertEqual(res.status_code, status.HTTP_200_OK)
+		emails = [row["email"] for row in res.data]
+		self.assertIn("tenant-pending@example.com", emails)
+		self.assertNotIn("platform@example.com", emails)
+
+	def test_revoke_tenant_invitation(self):
+		self.client.force_authenticate(user=self.public_user)
+		with schema_context("public"):
+			invitation = Invitation.objects.create(
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				email="revoke@example.com",
+				subdomain="revokeco",
+				company_name="Revoke Co",
+				token_hash="revoke-hash",
+				expires_at=timezone.now() + timedelta(days=1),
+			)
+			invitation_id = invitation.id
+
+		res = self.client.delete(
+			f"/api/v1/tenancy/admin/invitations/{invitation_id}/",
+			HTTP_HOST="testserver",
+		)
+		self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+		with schema_context("public"):
+			self.assertFalse(Invitation.objects.filter(pk=invitation_id).exists())
+
+	def test_resend_tenant_invitation(self):
+		self.client.force_authenticate(user=self.public_user)
+		with schema_context("public"):
+			invitation = Invitation.objects.create(
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				email="resend@example.com",
+				subdomain="resendco",
+				company_name="Resend Co",
+				token_hash="resend-old-hash",
+				expires_at=timezone.now() + timedelta(days=1),
+				metadata={"domain": "resendco.api.testserver"},
+			)
+			invitation_id = invitation.id
+			old_hash = invitation.token_hash
+
+		res = self.client.patch(
+			f"/api/v1/tenancy/admin/invitations/{invitation_id}/?action=resend",
+			HTTP_HOST="testserver",
+		)
+		self.assertEqual(res.status_code, status.HTTP_200_OK)
+		self.assertTrue(res.data["invitation_sent"])
+		with schema_context("public"):
+			invitation.refresh_from_db()
+			self.assertNotEqual(invitation.token_hash, old_hash)
+
+	def test_tenant_overview_pending_invitations_scoped_to_tenant_type(self):
+		self.client.force_authenticate(user=self.public_user)
+		with schema_context("public"):
+			before = Invitation.objects.filter(
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				used_at__isnull=True,
+			).count()
+			Invitation.objects.create(
+				token_type=Invitation.TOKEN_TYPE_PLATFORM_INVITE,
+				email="platform-only@example.com",
+				subdomain="plat",
+				company_name="Plat",
+				token_hash="platform-only-hash",
+				expires_at=timezone.now() + timedelta(days=1),
+			)
+			Invitation.objects.create(
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				email="tenant-only@example.com",
+				subdomain="tenantonly",
+				company_name="Tenant Only",
+				token_hash="tenant-only-hash",
+				expires_at=timezone.now() + timedelta(days=1),
+			)
+			after = Invitation.objects.filter(
+				token_type=Invitation.TOKEN_TYPE_INVITATION,
+				used_at__isnull=True,
+			).count()
+
+		res = self.client.get(
+			"/api/v1/tenancy/admin/overview/",
+			HTTP_HOST="testserver",
+		)
+		self.assertEqual(res.status_code, status.HTTP_200_OK)
+		self.assertEqual(res.data["pending_invitations"], after)
+		self.assertEqual(after, before + 1)
 
 	def test_tenant_schema_superuser_cannot_use_tenant_management(self):
 		self.client.force_authenticate(user=self.user)

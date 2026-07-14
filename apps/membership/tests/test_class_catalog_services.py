@@ -103,6 +103,17 @@ class UnifiedClassCatalogServiceTests(TestCase):
             self.assertEqual(trainer_class.name, 'Sunrise Flow')
             self.assertEqual(trainer_class.trainer_id, self.trainer_profile.id)
 
+    def test_admin_create_accepts_trainer_profile_instance(self):
+        """DRF validated_data passes model instances, not raw PKs."""
+        with schema_context(self.tenant.schema_name):
+            gym_class = self.admin_service.create_gym_class_from_admin({
+                'name': 'Instance Flow',
+                'class_type': 'yoga',
+                'level': 'beginner',
+                'trainer_profile': self.trainer_profile,
+            })
+            self.assertEqual(gym_class.trainer_profile_id, self.trainer_profile.id)
+
     def test_admin_update_reassigns_trainer(self):
         with schema_context(self.tenant.schema_name):
             gym_class = self.admin_service.create_gym_class_from_admin({
@@ -146,6 +157,47 @@ class UnifiedClassCatalogServiceTests(TestCase):
             self.assertIsNotNone(gym_class)
             self.assertEqual(gym_class.name, 'Evening Stretch')
             self.assertEqual(gym_class.trainer_profile_id, self.trainer_profile.id)
+
+    def test_admin_create_karate_class(self):
+        with schema_context(self.tenant.schema_name):
+            gym_class = self.admin_service.create_gym_class_from_admin({
+                'name': 'Kids Karate',
+                'class_type': 'karate',
+                'level': 'beginner',
+                'trainer_profile': self.trainer_profile.id,
+            })
+
+            self.assertEqual(gym_class.class_type, 'karate')
+            self.assertEqual(gym_class.get_class_type_display(), 'Karate')
+
+    def test_admin_create_swimming_class(self):
+        with schema_context(self.tenant.schema_name):
+            gym_class = self.admin_service.create_gym_class_from_admin({
+                'name': 'Lane Swim',
+                'class_type': 'swimming',
+                'level': 'intermediate',
+                'trainer_profile': self.trainer_profile.id,
+            })
+
+            self.assertEqual(gym_class.class_type, 'swimming')
+            self.assertEqual(gym_class.get_class_type_display(), 'Swimming')
+
+    def test_trainer_create_karate_syncs_gym_class_enum(self):
+        with schema_context(self.tenant.schema_name):
+            trainer_class = self.trainer_service.create_trainer_class(
+                self.trainer_profile,
+                {
+                    'name': 'Shotokan Basics',
+                    'category': 'karate',
+                    'difficulty_level': 'beginner',
+                    'duration_minutes': 45,
+                    'max_participants': 16,
+                },
+            )
+
+            gym_class = trainer_class.gym_class
+            self.assertIsNotNone(gym_class)
+            self.assertEqual(gym_class.class_type, 'karate')
 
     def test_trainer_cannot_manage_other_trainer_class(self):
         with schema_context(self.tenant.schema_name):

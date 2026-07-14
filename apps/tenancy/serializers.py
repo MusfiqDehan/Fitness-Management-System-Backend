@@ -334,7 +334,17 @@ class PlatformGymProfileSerializer(serializers.ModelSerializer):
 class PlatformGymPreferencesSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlatformGymPreferences
-        fields = ["id", "language", "currency", "date_format", "week_start", "theme", "updated_at"]
+        fields = [
+            "id",
+            "language",
+            "currency",
+            "date_format",
+            "week_start",
+            "theme",
+            "topbar_show_date",
+            "topbar_show_description",
+            "updated_at",
+        ]
         read_only_fields = ["id", "updated_at"]
 
 
@@ -402,6 +412,26 @@ class PlatformInvitationListSerializer(serializers.ModelSerializer):
             "is_expired",
             "used_at",
             "created_at",
+        ]
+
+
+class TenantAdminInvitationListSerializer(serializers.ModelSerializer):
+    is_expired = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Invitation
+        fields = [
+            "id",
+            "email",
+            "invitee_full_name",
+            "subdomain",
+            "company_name",
+            "invited_by_email",
+            "expires_at",
+            "is_expired",
+            "used_at",
+            "created_at",
+            "tenant_id",
         ]
 
 

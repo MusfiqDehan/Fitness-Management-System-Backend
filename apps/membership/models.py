@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from datetime import date, timedelta
@@ -52,7 +53,7 @@ class Member(BaseModel):
     )
 
     full_name = models.CharField(max_length=150)
-    phone_number = models.CharField(max_length=20, unique=True)
+    phone_number = models.CharField(max_length=20)
     email = models.EmailField(blank=True, null=True)
     gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True)
     date_of_birth = models.DateField(null=True, blank=True)
@@ -89,6 +90,7 @@ class Member(BaseModel):
 
     emergency_contact_name = models.CharField(max_length=150, blank=True, default="")
     emergency_contact_phone = models.CharField(max_length=20, blank=True, default="")
+    relationship_with_member = models.CharField(max_length=100, blank=True, default="")
     notes = models.TextField(blank=True, default="")
 
     # Payment tracking
@@ -108,6 +110,12 @@ class Member(BaseModel):
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['full_name', 'phone_number', 'date_of_birth'],
+                name='uniq_member_name_phone_dob',
+            ),
+        ]
         indexes = [
             models.Index(
                 fields=['branch', 'is_deleted', 'is_active', 'end_date'],
@@ -140,21 +148,21 @@ class Member(BaseModel):
             return max(delta.days, 0)
         return 0
 
+    @staticmethod
+    def default_end_date(*, membership_type, member_package, start_date):
+        if not start_date:
+            return None
+        if membership_type == 'package' and member_package:
+            return start_date + timedelta(days=member_package.duration_in_days)
+        if membership_type == 'monthly':
+            return start_date + timedelta(days=30)
+        return None
+
     # ----------------------------
     # SAVE LOGIC
     # ----------------------------
 
     def save(self, *args, **kwargs):
-        # Set end_date
-        if self.membership_type == 'package' and self.member_package:
-            self.end_date = self.start_date + timedelta(days=self.member_package.duration_in_days)
-        elif self.membership_type == 'monthly':
-            self.end_date = self.start_date + timedelta(days=30)
-
-        # Auto deactivate expired
-        if self.end_date:
-            self.is_active = self.end_date >= timezone.now().date()
-
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -197,6 +205,15 @@ class Payment(BaseModel):
     invoice_no = models.CharField(max_length=64, blank=True, null=True, unique=True)
     note = models.TextField(blank=True, null=True)
     is_paid = models.BooleanField(default=False)
+    # Sorted unique YYYY-MM strings for months this payment covers.
+    coverage_months = models.JSONField(default=list, blank=True)
+    # Flexible fee breakdown: [{type, name, amount, ref?}].
+    line_items = models.JSONField(default=list, blank=True)
+
+    @property
+    def coverage_month_count(self) -> int:
+        months = self.coverage_months or []
+        return len(months) if isinstance(months, list) else 0
 
     class Meta:
         ordering = ['-payment_date']
@@ -266,6 +283,8 @@ class GymClass(BaseModel):
         ('cardio', 'Cardio'),
         ('pilates', 'Pilates'),
         ('zumba', 'Zumba'),
+        ('karate', 'Karate'),
+        ('swimming', 'Swimming'),
         ('other', 'Other'),
     )
     LEVELS = (
@@ -362,3 +381,64 @@ class GymSchedule(BaseModel):
 
     def __str__(self):
         return f"{self.title} ({self.day_of_week} {self.start_time})"
+
+
+# =============================================================================
+# CLASS ENROLLMENT (member enrolled in a gym class)
+# =============================================================================
+
+class ClassEnrollment(BaseModel):
+    ENROLLMENT_STATUS = (
+        ('active', 'Active'),
+        ('removed', 'Removed'),
+    )
+    ENROLLMENT_SOURCE = (
+        ('admin', 'Admin'),
+        ('self', 'Self'),
+    )
+
+    gym_class = models.ForeignKey(
+        GymClass,
+        on_delete=models.CASCADE,
+        related_name='enrollments',
+    )
+    member = models.ForeignKey(
+        Member,
+        on_delete=models.CASCADE,
+        related_name='class_enrollments',
+    )
+    enrolled_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, choices=ENROLLMENT_STATUS, default='active')
+    source = models.CharField(max_length=20, choices=ENROLLMENT_SOURCE, default='admin')
+    enrolled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='class_enrollments_created',
+    )
+
+    class Meta:
+        ordering = ['-enrolled_at']
+        indexes = [
+            models.Index(
+                fields=['gym_class', 'status'],
+                name='idx_classenroll_class_status',
+                condition=Q(is_deleted=False),
+            ),
+            models.Index(
+                fields=['member', 'status'],
+                name='idx_classenroll_member_status',
+                condition=Q(is_deleted=False),
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['gym_class', 'member'],
+                condition=Q(is_deleted=False),
+                name='uniq_active_class_enrollment',
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.member.full_name} -> {self.gym_class.name}"

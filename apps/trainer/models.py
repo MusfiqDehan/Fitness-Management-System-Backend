@@ -267,6 +267,18 @@ class ScheduleBooking(BaseModel):
         ('no_show', 'No Show'),
     )
 
+    BOOKING_SOURCE = (
+        ('member_booked', 'Member Booked'),
+        ('admin_assigned', 'Admin Assigned'),
+    )
+
+    PUNCTUALITY_OVERRIDE = (
+        ('pending', 'Pending'),
+        ('on_time', 'On Time'),
+        ('late', 'Late'),
+        ('absent', 'Absent'),
+    )
+
     schedule = models.ForeignKey(
         TrainerSchedule,
         on_delete=models.CASCADE,
@@ -286,6 +298,17 @@ class ScheduleBooking(BaseModel):
     check_in_time = models.DateTimeField(null=True, blank=True)
     check_out_time = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, default='')
+    source = models.CharField(
+        max_length=20,
+        choices=BOOKING_SOURCE,
+        default='member_booked',
+    )
+    punctuality_override = models.CharField(
+        max_length=20,
+        choices=PUNCTUALITY_OVERRIDE,
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         unique_together = ['schedule', 'member']

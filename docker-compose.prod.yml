@@ -1,37 +1,67 @@
+# Production compose. Requires .env.prod in this directory (env_file per service).
+# Run: docker compose -f docker-compose.prod.yml up -d --build
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-backend-image: &backend-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: gym-backend:${IMAGE_TAG:-latest}
+  env_file: .env.prod
+  environment:
+    - DJANGO_SETTINGS_MODULE=config.settings
+    - SKIP_DB_BOOTSTRAP=1
+    - USE_PGBOUNCER=1
+    - CELERY_BROKER_URL=redis://redis:6379/0
+    - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    - REDIS_HOST=redis
+    - REDIS_PORT=6379
+    - REDIS_CACHE_URL=redis://redis:6379/2
+  volumes:
+    - backend_static:/app/staticfiles
+    - backend_media:/app/media
+  networks:
+    - app_network
+    - traefik_proxy
+  logging: *default-logging
+  restart: unless-stopped
+
 services:
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: gym-backend
-    image: gym-backend:latest
-    env_file: .env.prod
+    <<: *backend-image
+    stop_grace_period: 35s
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
       - SKIP_DB_BOOTSTRAP=1
+      - USE_PGBOUNCER=1
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_CACHE_URL=redis://redis:6379/2
+      - ASGI_WORKERS=4
+      - API_WORKERS=4
+      - API_THREADS=2
     expose:
       - "8021"
     depends_on:
+      pgbouncer:
+        condition: service_healthy
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - backend_static:/app/staticfiles
-      - backend_media:/app/media
-    networks:
-      - app_network
-      - traefik_proxy
+    mem_limit: 1024m
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" -H \"X-Forwarded-Proto: https\" http://127.0.0.1:8021/api/v1/health/tenant/ > /dev/null",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" http://127.0.0.1:8021/api/v1/health/live/ > /dev/null",
         ]
       interval: 30s
       timeout: 10s
@@ -41,94 +71,180 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik_proxy"
 
-      # ── Backend router: fitssort.com + all *.fitssort.com subdomains,
-      #    only for API / admin / media / static / ADMS device paths.
-      #    HostRegexp uses a plain Go regex (Traefik v3 syntax).
-      - "traefik.http.routers.backend.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`) || PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
-      - "traefik.http.routers.backend.entrypoints=websecure"
-      - "traefik.http.routers.backend.tls=true"
-      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
-      # Stabilise wildcard TLS matching for HostRegexp routes (Traefik v3)
-      - "traefik.http.routers.backend.tls.domains[0].main=fitssort.com"
-      - "traefik.http.routers.backend.tls.domains[0].sans=*.fitssort.com"
-      - "traefik.http.routers.backend.priority=100"
-      - "traefik.http.routers.backend.middlewares=security-headers@file,compress@file"
+      # ── HTTPS API (rate limited) — platform hosts
+      - "traefik.http.routers.backend-api.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/api`) || PathPrefix(`/admin`) || PathPrefix(`/media`) || PathPrefix(`/static`))"
+      - "traefik.http.routers.backend-api.entrypoints=websecure"
+      - "traefik.http.routers.backend-api.tls=true"
+      - "traefik.http.routers.backend-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.backend-api.tls.domains[0].main=fitssort.com"
+      - "traefik.http.routers.backend-api.tls.domains[0].sans=*.fitssort.com"
+      - "traefik.http.routers.backend-api.priority=100"
+      - "traefik.http.routers.backend-api.middlewares=security-headers@file,compress@file,api-ratelimit@file"
+      - "traefik.http.routers.backend-api.service=backend"
 
-      - "traefik.http.routers.backend.service=backend"
+      # ── HTTPS API — tenant custom domains
+      - "traefik.http.routers.backend-custom-api.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/admin`) || PathPrefix(`/media`) || PathPrefix(`/static`))"
+      - "traefik.http.routers.backend-custom-api.entrypoints=websecure"
+      - "traefik.http.routers.backend-custom-api.tls=true"
+      - "traefik.http.routers.backend-custom-api.tls.certresolver=customdomains"
+      - "traefik.http.routers.backend-custom-api.priority=100"
+      - "traefik.http.routers.backend-custom-api.middlewares=security-headers@file,compress@file,api-ratelimit@file"
+      - "traefik.http.routers.backend-custom-api.service=backend"
+
       - "traefik.http.services.backend.loadbalancer.server.port=8021"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.path=/api/v1/health/live/"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.hostname=fitssort.com"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.interval=15s"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.timeout=5s"
+    command: ["/bin/sh", "/app/scripts/run-api-prod.sh"]
 
-      # ── Plain-HTTP ADMS router for legacy devices that do not support HTTPS.
-      #    Restrict HTTP exposure to device endpoints only; all app/browser
-      #    traffic remains on the existing HTTPS routers above.
-      - "traefik.http.routers.backend-adms-http.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
-      - "traefik.http.routers.backend-adms-http.entrypoints=web"
-      - "traefik.http.routers.backend-adms-http.priority=200"
-      - "traefik.http.routers.backend-adms-http.service=backend"
+  backend_ws:
+    <<: *backend-image
+    stop_grace_period: 35s
+    expose:
+      - "8023"
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 384m
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" http://127.0.0.1:8023/api/v1/health/live/ > /dev/null",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
 
-      # ── Standard HTTP router for browser/API traffic. Redirect to HTTPS while
-      #    leaving the higher-priority ADMS HTTP router above untouched.
-      - "traefik.http.routers.backend-http.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`))"
-      - "traefik.http.routers.backend-http.entrypoints=web"
-      - "traefik.http.routers.backend-http.priority=10"
-      - "traefik.http.routers.backend-http.middlewares=redirect-to-https@file"
-      - "traefik.http.routers.backend-http.service=backend"
+      # ── HTTPS WebSocket — platform hosts
+      - "traefik.http.routers.backend-ws.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && PathPrefix(`/ws`)"
+      - "traefik.http.routers.backend-ws.entrypoints=websecure"
+      - "traefik.http.routers.backend-ws.tls=true"
+      - "traefik.http.routers.backend-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.backend-ws.tls.domains[0].main=fitssort.com"
+      - "traefik.http.routers.backend-ws.tls.domains[0].sans=*.fitssort.com"
+      - "traefik.http.routers.backend-ws.priority=100"
+      - "traefik.http.routers.backend-ws.middlewares=security-headers@file,ws-headers@file"
+      - "traefik.http.routers.backend-ws.service=backend-ws"
 
-      # ── Backend router for tenant-owned CUSTOM domains (any host that is not
-      #    fitssort.com / *.fitssort.com), API / admin / media / static / ADMS paths.
-      #    On-demand Let's Encrypt cert per SNI via the customdomains resolver.
-      - "traefik.http.routers.backend-custom.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`) || PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
-      - "traefik.http.routers.backend-custom.entrypoints=websecure"
-      - "traefik.http.routers.backend-custom.tls=true"
-      - "traefik.http.routers.backend-custom.tls.certresolver=customdomains"
-      - "traefik.http.routers.backend-custom.priority=100"
-      - "traefik.http.routers.backend-custom.middlewares=security-headers@file,compress@file"
-      - "traefik.http.routers.backend-custom.service=backend"
+      # ── HTTPS WebSocket — tenant custom domains
+      - "traefik.http.routers.backend-custom-ws.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && PathPrefix(`/ws`)"
+      - "traefik.http.routers.backend-custom-ws.entrypoints=websecure"
+      - "traefik.http.routers.backend-custom-ws.tls=true"
+      - "traefik.http.routers.backend-custom-ws.tls.certresolver=customdomains"
+      - "traefik.http.routers.backend-custom-ws.priority=100"
+      - "traefik.http.routers.backend-custom-ws.middlewares=security-headers@file,ws-headers@file"
+      - "traefik.http.routers.backend-custom-ws.service=backend-ws"
 
-      # ── Plain-HTTP ADMS router for tenant-owned CUSTOM domains. Needed for
-      #    devices that only support domain + HTTP, not HTTPS.
-      - "traefik.http.routers.backend-custom-adms-http.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
-      - "traefik.http.routers.backend-custom-adms-http.entrypoints=web"
-      - "traefik.http.routers.backend-custom-adms-http.priority=200"
-      - "traefik.http.routers.backend-custom-adms-http.service=backend"
+      - "traefik.http.services.backend-ws.loadbalancer.server.port=8023"
+    command: ["/bin/sh", "/app/scripts/run-asgi-ws-prod.sh"]
 
-      # ── Standard HTTP router for custom-domain browser/API traffic. Redirect
-      #    to HTTPS while keeping ADMS HTTP on the dedicated router above.
-      - "traefik.http.routers.backend-custom-http.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/media`) || PathPrefix(`/static`) || PathPrefix(`/admin`) || PathPrefix(`/ws`))"
-      - "traefik.http.routers.backend-custom-http.entrypoints=web"
-      - "traefik.http.routers.backend-custom-http.priority=10"
-      - "traefik.http.routers.backend-custom-http.middlewares=redirect-to-https@file"
-      - "traefik.http.routers.backend-custom-http.service=backend"
-    command: ["daphne", "-b", "0.0.0.0", "-p", "8021", "config.asgi:application"]
-    restart: unless-stopped
+  backend_adms:
+    <<: *backend-image
+    stop_grace_period: 35s
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings
+      - SKIP_DB_BOOTSTRAP=1
+      - USE_PGBOUNCER=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_CACHE_URL=redis://redis:6379/2
+      - ADMS_ASGI_WORKERS=4
+      - ADMS_WORKERS=4
+      - ADMS_THREADS=4
+    expose:
+      - "8022"
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 384m
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" http://127.0.0.1:8022/api/v1/health/live/ > /dev/null",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
+
+      # ── HTTP-only ADMS devices — platform hosts (port 80, no TLS)
+      - "traefik.http.routers.backend-adms.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
+      - "traefik.http.routers.backend-adms.entrypoints=web"
+      - "traefik.http.routers.backend-adms.priority=100"
+      - "traefik.http.routers.backend-adms.middlewares=adms-http-headers@file"
+      - "traefik.http.routers.backend-adms.service=backend-adms"
+
+      # ── HTTP-only ADMS — tenant custom domains
+      - "traefik.http.routers.backend-custom-adms.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
+      - "traefik.http.routers.backend-custom-adms.entrypoints=web"
+      - "traefik.http.routers.backend-custom-adms.priority=100"
+      - "traefik.http.routers.backend-custom-adms.middlewares=adms-http-headers@file"
+      - "traefik.http.routers.backend-custom-adms.service=backend-adms"
+
+      - "traefik.http.services.backend-adms.loadbalancer.server.port=8022"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.path=/api/v1/health/live/"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.hostname=fitssort.com"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.interval=15s"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.timeout=5s"
+    command: ["/bin/sh", "/app/scripts/run-adms-prod.sh"]
 
   celery_worker:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: gym-celery-worker
-    image: gym-backend:latest
+    stop_grace_period: 35s
+    image: gym-backend:${IMAGE_TAG:-latest}
     env_file: .env.prod
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
       - SKIP_DB_BOOTSTRAP=1
+      - USE_PGBOUNCER=1
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_CACHE_URL=redis://redis:6379/2
     depends_on:
+      pgbouncer:
+        condition: service_started
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
       backend:
         condition: service_healthy
-    command: ["celery", "-A", "config.celery:app", "worker", "--loglevel=INFO", "--concurrency=4", "--prefetch-multiplier=1", "--max-tasks-per-child=500"]
+    command:
+      [
+        "celery",
+        "-A",
+        "config.celery:app",
+        "worker",
+        "--loglevel=INFO",
+        "--concurrency=2",
+        "--prefetch-multiplier=1",
+        "--max-tasks-per-child=500",
+        "--soft-time-limit=240",
+        "--time-limit=300",
+      ]
     volumes:
       - backend_media:/app/media
       - backend_static:/app/staticfiles
     networks:
       - app_network
+    mem_limit: 1024m
+    logging: *default-logging
     restart: unless-stopped
 
   celery_beat:
@@ -136,16 +252,19 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: gym-celery-beat
-    image: gym-backend:latest
+    image: gym-backend:${IMAGE_TAG:-latest}
     env_file: .env.prod
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
+      - USE_PGBOUNCER=1
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_CACHE_URL=redis://redis:6379/2
     depends_on:
+      pgbouncer:
+        condition: service_started
       db:
         condition: service_healthy
       redis:
@@ -158,14 +277,49 @@ services:
       - backend_static:/app/staticfiles
     networks:
       - app_network
+    mem_limit: 256m
+    logging: *default-logging
+    restart: unless-stopped
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    container_name: gym-pgbouncer
+    env_file: .env.prod
+    environment:
+      # edoburu generates pgbouncer.ini from env at container start. DATABASE_URL in
+      # .env.prod targets pgbouncer:6432 for Django — clear it here so the pooler
+      # backend uses PostgreSQL (db:5432), not itself.
+      DATABASE_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      LISTEN_PORT: "6432"
+      POOL_MODE: session
+      MAX_CLIENT_CONN: 200
+      DEFAULT_POOL_SIZE: 20
+      AUTH_TYPE: scram-sha-256
+      SERVER_RESET_QUERY: DISCARD ALL
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U $${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app_network
+    mem_limit: 128m
+    logging: *default-logging
     restart: unless-stopped
 
   db:
     image: postgres:17.9-alpine
     container_name: gym-db
     env_file: .env.prod
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgresql.conf:/etc/postgresql/postgresql.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -173,12 +327,26 @@ services:
       retries: 5
     networks:
       - app_network
+    mem_limit: 2560m
+    logging: *default-logging
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: gym-redis
-    command: ["redis-server", "--save", "300", "1000", "--appendonly", "yes"]
+    command:
+      [
+        "redis-server",
+        "--save",
+        "300",
+        "1000",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "384mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -186,7 +354,30 @@ services:
       retries: 5
     networks:
       - app_network
+    mem_limit: 512m
+    logging: *default-logging
     restart: unless-stopped
+
+  # Restarts backend containers when their Docker healthcheck fails.
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    container_name: gym-autoheal
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: all
+      AUTOHEAL_INTERVAL: 15
+      AUTOHEAL_START_PERIOD: 120
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - app_network
+    mem_limit: 64m
+    logging: *default-logging
+
+  # Optional: run backups on the host cron instead of a sidecar.
+  # Example (host crontab, daily 02:30 UTC):
+  #   30 2 * * * cd /path/to/gym_app_new_backend && POSTGRES_USER=... POSTGRES_DB=... ./scripts/backup-postgres.sh
 
 volumes:
   postgres_data:

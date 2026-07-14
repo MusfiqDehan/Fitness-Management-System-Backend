@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from apps.membership.models import Attendance, Member
 from apps.attendance.models import AccessDevice, AttendanceIngestEvent, DeviceUser
+from apps.attendance.services.enrollment import FingerprintEnrollmentService
 from apps.attendance.services.realtime import publish_attendance_event
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,11 @@ class ADMSIngestionService:
                 ADMSIngestionService._handle_attlog(device, event)
             elif event.event_type in {"USERINFO", "FP", "OPERLOG"}:
                 ADMSIngestionService._handle_device_user(device, event)
+                if event.event_type == "FP":
+                    FingerprintEnrollmentService.handle_fingerprint_ingested(
+                        device=device,
+                        device_uid=event.device_uid,
+                    )
 
             handled += 1
             logger.info("[INGESTION] SN=%s handled type=%s uid=%s name=%s",
@@ -82,6 +88,10 @@ class ADMSIngestionService:
 
             if current_table in {"USERINFO", "FP", "OPERLOG"}:
                 uid = ADMSIngestionService._extract_pin(line)
+                if not uid:
+                    uid_match = re.search(r"^(\d+)\t", line)
+                    if uid_match:
+                        uid = uid_match.group(1)
                 if not uid:
                     continue
                 name = ADMSIngestionService._extract_kv_field(line, "Name")

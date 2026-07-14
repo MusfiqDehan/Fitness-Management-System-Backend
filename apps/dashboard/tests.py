@@ -242,3 +242,59 @@ class DashboardAPIViewTests(APITestCase):
 	def test_gym_profile_patch_syncs_all_fields_to_site_settings(self):
 		"""SiteSettings was removed; this is now a no-op compatibility stub."""
 		return
+
+
+class GymPreferencesAPITests(APITestCase):
+	def setUp(self):
+		self.admin_user = User.objects.create_user(
+			email='admin-prefs@example.com',
+			password='StrongPass123!',
+			role='admin',
+			is_staff=True,
+		)
+
+	def test_get_preferences_returns_topbar_defaults(self):
+		self.client.force_authenticate(user=self.admin_user)
+		response = self.client.get(reverse('dashboard:settings-preferences'))
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertFalse(response.data['topbar_show_date'])
+		self.assertTrue(response.data['topbar_show_description'])
+
+	def test_patch_topbar_show_date_only(self):
+		from apps.dashboard.models import GymPreferences
+
+		GymPreferences.objects.update_or_create(
+			pk=1,
+			defaults={'topbar_show_description': True},
+		)
+
+		self.client.force_authenticate(user=self.admin_user)
+		response = self.client.patch(
+			reverse('dashboard:settings-preferences'),
+			{'topbar_show_date': True},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertTrue(response.data['topbar_show_date'])
+		self.assertTrue(response.data['topbar_show_description'])
+
+	def test_patch_topbar_show_description_only(self):
+		from apps.dashboard.models import GymPreferences
+
+		GymPreferences.objects.update_or_create(
+			pk=1,
+			defaults={'topbar_show_date': True},
+		)
+
+		self.client.force_authenticate(user=self.admin_user)
+		response = self.client.patch(
+			reverse('dashboard:settings-preferences'),
+			{'topbar_show_description': False},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertTrue(response.data['topbar_show_date'])
+		self.assertFalse(response.data['topbar_show_description'])

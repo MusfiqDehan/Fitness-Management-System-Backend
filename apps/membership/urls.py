@@ -22,6 +22,18 @@ from .views import (
     PublicGymClassListAPIView,
     PublicGymScheduleListAPIView,
 )
+from apps.billing.views import PaymentExportAPIView
+from .class_detail_views import (
+    GymClassDetailAPIView,
+    GymClassSchedulesAPIView,
+    GymClassMembersAPIView,
+    GymClassTrainerAPIView,
+    GymClassAttendanceAPIView,
+    GymClassAttendanceItemAPIView,
+    GymScheduleBookingsAPIView,
+    MyClassEnrollmentsAPIView,
+    MyClassAttendanceAPIView,
+)
 
 app_name = 'membership'
 
@@ -36,7 +48,7 @@ urlpatterns = [
     # ========== MEMBERS ==========
     # GET/POST         /members/                            → list / create
     # GET/PUT/PATCH/DELETE /members/{pk}/                   → retrieve / update / soft delete
-    # PATCH            /members/{pk}/?action=activate|deactivate|restore|resend_invitation
+    # PATCH            /members/{pk}/?action=activate|deactivate|restore|resend_invitation|cancel_invitation
     path('members/', MemberView.as_view(), name='member-list'),
     path('members/import/', MemberImportAPIView.as_view(), name='member-import'),
     path('members/<int:pk>/', MemberView.as_view(), name='member-detail'),
@@ -46,6 +58,7 @@ urlpatterns = [
 
     # ========== PAYMENTS ==========
     path('payments/', PaymentView.as_view(), name='payment-list'),
+    path('payments/export/', PaymentExportAPIView.as_view(), name='payment-export'),
     path('payments/<int:pk>/', PaymentView.as_view(), name='payment-detail'),
     path('payments/analytics/', PaymentAnalyticsAPIView.as_view(), name='payment-analytics'),
     path('my-subscription/', MemberMySubscriptionAPIView.as_view(), name='member-my-subscription'),
@@ -56,8 +69,21 @@ urlpatterns = [
     # ========== GYM CLASSES & SCHEDULES ==========
     path('gym-classes/', GymClassView.as_view(), name='gymclass-list'),
     path('gym-classes/<int:pk>/', GymClassView.as_view(), name='gymclass-detail'),
+    path('gym-classes/<int:pk>/detail/', GymClassDetailAPIView.as_view(), name='gymclass-detail-composite'),
+    path('gym-classes/<int:pk>/schedules/', GymClassSchedulesAPIView.as_view(), name='gymclass-schedules'),
+    path('gym-classes/<int:pk>/members/', GymClassMembersAPIView.as_view(), name='gymclass-members'),
+    path('gym-classes/<int:pk>/trainer/', GymClassTrainerAPIView.as_view(), name='gymclass-trainer'),
+    path('gym-classes/<int:pk>/attendance/', GymClassAttendanceAPIView.as_view(), name='gymclass-attendance'),
+    path(
+        'gym-classes/<int:pk>/attendance/<int:booking_id>/',
+        GymClassAttendanceItemAPIView.as_view(),
+        name='gymclass-attendance-item',
+    ),
     path('gym-schedules/', GymScheduleView.as_view(), name='gymschedule-list'),
     path('gym-schedules/<int:pk>/', GymScheduleView.as_view(), name='gymschedule-detail'),
+    path('gym-schedules/<int:pk>/bookings/', GymScheduleBookingsAPIView.as_view(), name='gymschedule-bookings'),
+    path('my-enrollments/', MyClassEnrollmentsAPIView.as_view(), name='my-class-enrollments'),
+    path('my-class-attendance/', MyClassAttendanceAPIView.as_view(), name='my-class-attendance'),
     path('unified-classes/', UnifiedClassListAPIView.as_view(), name='unified-class-list'),
     path('unified-schedules/', UnifiedScheduleListAPIView.as_view(), name='unified-schedule-list'),
 

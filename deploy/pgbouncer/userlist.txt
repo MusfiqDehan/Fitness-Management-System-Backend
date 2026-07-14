@@ -1,0 +1,2 @@
+# Generated at container start by deploy/pgbouncer/docker-entrypoint.sh
+# Production compose uses edoburu/pgbouncer with DATABASE_URL env vars instead.

@@ -23,10 +23,27 @@ DIFFICULTY_TO_LEVEL = {
     'advanced': 'advanced',
     'all': 'beginner',
 }
+WEEKDAY_TO_GYM_DAY = (
+    'monday',
+    'tuesday',
+    'wednesday',
+    'thursday',
+    'friday',
+    'saturday',
+    'sunday',
+)
 
 
 class ClassScheduleSyncService:
     """Keeps gym catalog and trainer workspace class/schedule records in sync."""
+
+    @classmethod
+    def _resolve_gym_day_of_week(cls, trainer_schedule: TrainerSchedule) -> str:
+        if trainer_schedule.day_of_week:
+            return trainer_schedule.day_of_week
+        if trainer_schedule.scheduled_date:
+            return WEEKDAY_TO_GYM_DAY[trainer_schedule.scheduled_date.weekday()]
+        return 'monday'
 
     @classmethod
     @transaction.atomic
@@ -180,6 +197,7 @@ class ClassScheduleSyncService:
 
         if gym_schedule is None:
             recurrence_mode = 'weekly' if trainer_schedule.day_of_week else 'one_off'
+            day_of_week = cls._resolve_gym_day_of_week(trainer_schedule)
             gym_schedule = GymSchedule.objects.create(
                 gym_class=gym_class,
                 trainer_profile=trainer_schedule.trainer,
@@ -188,7 +206,7 @@ class ClassScheduleSyncService:
                 instructor=instructor,
                 recurrence_mode=recurrence_mode,
                 scheduled_date=trainer_schedule.scheduled_date,
-                day_of_week=trainer_schedule.day_of_week or 'monday',
+                day_of_week=day_of_week,
                 start_time=trainer_schedule.start_time,
                 end_time=trainer_schedule.end_time,
                 capacity=trainer_class.max_participants,
@@ -207,8 +225,7 @@ class ClassScheduleSyncService:
         gym_schedule.instructor = instructor
         gym_schedule.recurrence_mode = 'weekly' if trainer_schedule.day_of_week else 'one_off'
         gym_schedule.scheduled_date = trainer_schedule.scheduled_date
-        if trainer_schedule.day_of_week:
-            gym_schedule.day_of_week = trainer_schedule.day_of_week
+        gym_schedule.day_of_week = cls._resolve_gym_day_of_week(trainer_schedule)
         gym_schedule.start_time = trainer_schedule.start_time
         gym_schedule.end_time = trainer_schedule.end_time
         gym_schedule.capacity = trainer_class.max_participants

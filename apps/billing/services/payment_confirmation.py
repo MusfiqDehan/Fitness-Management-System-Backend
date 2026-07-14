@@ -67,10 +67,14 @@ def dispatch_member_payment(payment, channels: list[str] | None, *, actor=None, 
     if member is None:
         return
 
+    from apps.billing.services.coverage_months import format_coverage_months_label
+
     tenant_name = _gym_name()
     actor_name = getattr(actor, "full_name", None) or getattr(actor, "email", "") or "Staff"
     invoice_no = payment.invoice_no or f"INV-{payment.id:06d}"
     amount = str(payment.amount)
+    coverage_label = format_coverage_months_label(getattr(payment, "coverage_months", None) or [])
+    coverage_clause = f" Covered months: {coverage_label}." if coverage_label else ""
 
     if "email" in active and member.email:
         try:
@@ -82,11 +86,13 @@ def dispatch_member_payment(payment, channels: list[str] | None, *, actor=None, 
                 "amount": amount,
                 "invoice_no": invoice_no,
                 "gym_name": tenant_name,
+                "coverage_months": coverage_label,
             }
             html_body = render_to_string("billing/emails/payment_confirmation.html", context)
             text_body = (
                 f"Hi {member.full_name},\n\n"
-                f"Your payment of {amount} has been received. Invoice: {invoice_no}.\n\n"
+                f"Your payment of {amount} has been received. Invoice: {invoice_no}."
+                f"{coverage_clause}\n\n"
                 f"Thank you,\n{tenant_name}"
             )
             from_email, connection = resolve_tenant_mail_route(tenant)
@@ -117,7 +123,10 @@ def dispatch_member_payment(payment, channels: list[str] | None, *, actor=None, 
                 create_notification(
                     notification_type=Notification.PAYMENT_CONFIRMED,
                     title="Payment confirmed",
-                    message=f"Your payment of {amount} ({invoice_no}) was recorded.",
+                    message=(
+                        f"Your payment of {amount} ({invoice_no}) was recorded."
+                        f"{coverage_clause}"
+                    ),
                     actor_name=actor_name,
                     target_type="payment",
                     target_id=str(payment.id),
@@ -130,7 +139,10 @@ def dispatch_member_payment(payment, channels: list[str] | None, *, actor=None, 
             create_notification(
                 notification_type=Notification.PAYMENT_RECEIVED,
                 title="Payment received",
-                message=f"{member.full_name} paid {amount} ({invoice_no}).",
+                message=(
+                    f"{member.full_name} paid {amount} ({invoice_no})."
+                    f"{coverage_clause}"
+                ),
                 actor_name=actor_name,
                 target_type="payment",
                 target_id=str(payment.id),
