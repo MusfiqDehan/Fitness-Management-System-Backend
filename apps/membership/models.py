@@ -442,3 +442,163 @@ class ClassEnrollment(BaseModel):
 
     def __str__(self):
         return f"{self.member.full_name} -> {self.gym_class.name}"
+
+
+class Discount(BaseModel):
+    """Flexible discount / coupon definition for member packages."""
+
+    TYPE_PERCENTAGE = "percentage"
+    TYPE_FIXED_AMOUNT = "fixed_amount"
+    TYPE_FIXED_PRICE = "fixed_price"
+    TYPE_BUY_X_GET_Y = "buy_x_get_y"
+    TYPE_TIERED = "tiered"
+    TYPE_FREE_ADDON = "free_addon"
+    DISCOUNT_TYPES = (
+        (TYPE_PERCENTAGE, "Percentage"),
+        (TYPE_FIXED_AMOUNT, "Fixed Amount"),
+        (TYPE_FIXED_PRICE, "Fixed Price"),
+        (TYPE_BUY_X_GET_Y, "Buy X Get Y"),
+        (TYPE_TIERED, "Tiered / Volume"),
+        (TYPE_FREE_ADDON, "Free Add-on"),
+    )
+
+    MODE_AUTOMATIC = "automatic"
+    MODE_COUPON = "coupon"
+    MODE_BOTH = "both"
+    APPLICATION_MODES = (
+        (MODE_AUTOMATIC, "Automatic"),
+        (MODE_COUPON, "Coupon"),
+        (MODE_BOTH, "Both"),
+    )
+
+    LOGIC_AND = "and"
+    LOGIC_OR = "or"
+    CONDITION_LOGIC = (
+        (LOGIC_AND, "AND"),
+        (LOGIC_OR, "OR"),
+    )
+
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True, default="")
+    discount_type = models.CharField(max_length=32, choices=DISCOUNT_TYPES)
+    config = models.JSONField(default=dict, blank=True)
+    application_mode = models.CharField(
+        max_length=16, choices=APPLICATION_MODES, default=MODE_AUTOMATIC
+    )
+    coupon_code = models.CharField(max_length=64, blank=True, null=True, db_index=True)
+    priority = models.IntegerField(default=100)
+    is_stackable = models.BooleanField(default=False)
+    stack_group = models.CharField(max_length=64, blank=True, default="")
+    scope = models.JSONField(default=dict, blank=True)
+    condition_logic = models.CharField(
+        max_length=8, choices=CONDITION_LOGIC, default=LOGIC_AND
+    )
+    starts_at = models.DateTimeField(null=True, blank=True)
+    ends_at = models.DateTimeField(null=True, blank=True)
+    usage_limit_total = models.PositiveIntegerField(null=True, blank=True)
+    usage_limit_per_member = models.PositiveIntegerField(null=True, blank=True)
+    show_list_price = models.BooleanField(
+        default=False,
+        help_text="Show strikethrough original + discounted price on package listings",
+    )
+    show_percent_badge = models.BooleanField(
+        default=False,
+        help_text="Show percent-off badge on package listings (percentage discounts)",
+    )
+
+    class Meta:
+        ordering = ["priority", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["coupon_code"],
+                condition=Q(is_deleted=False) & ~Q(coupon_code=None) & ~Q(coupon_code=""),
+                name="uniq_discount_coupon_code_active",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["is_active", "is_deleted", "priority"],
+                name="idx_discount_active_priority",
+                condition=Q(is_deleted=False),
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.discount_type})"
+
+    def save(self, *args, **kwargs):
+        if self.coupon_code is not None:
+            code = str(self.coupon_code).strip()
+            self.coupon_code = code.upper() if code else None
+        super().save(*args, **kwargs)
+
+
+class DiscountCondition(BaseModel):
+    """Rule attached to a discount (field / operator / value)."""
+
+    OP_EQ = "eq"
+    OP_NEQ = "neq"
+    OP_IN = "in"
+    OP_GTE = "gte"
+    OP_LTE = "lte"
+    OP_BETWEEN = "between"
+    OPERATORS = (
+        (OP_EQ, "Equals"),
+        (OP_NEQ, "Not equals"),
+        (OP_IN, "In"),
+        (OP_GTE, "Greater or equal"),
+        (OP_LTE, "Less or equal"),
+        (OP_BETWEEN, "Between"),
+    )
+
+    discount = models.ForeignKey(
+        Discount, on_delete=models.CASCADE, related_name="conditions"
+    )
+    field = models.CharField(max_length=64)
+    operator = models.CharField(max_length=16, choices=OPERATORS, default=OP_EQ)
+    value = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"{self.discount_id}:{self.field} {self.operator}"
+
+
+class DiscountUsage(models.Model):
+    """Immutable ledger of discount redemptions on payments."""
+
+    discount = models.ForeignKey(
+        Discount, on_delete=models.PROTECT, related_name="usages"
+    )
+    member = models.ForeignKey(
+        Member,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="discount_usages",
+    )
+    payment = models.ForeignKey(
+        Payment, on_delete=models.CASCADE, related_name="discount_usages"
+    )
+    coupon_code_used = models.CharField(max_length=64, blank=True, default="")
+    amount_saved = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    meta = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["payment", "discount"],
+                name="uniq_discount_usage_payment",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["discount", "created_at"], name="idx_dusage_discount_created"),
+            models.Index(fields=["member", "discount"], name="idx_dusage_member_discount"),
+        ]
+
+    def __str__(self):
+        return f"usage discount={self.discount_id} payment={self.payment_id}"
+
