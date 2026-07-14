@@ -91,8 +91,8 @@ class FingerprintEnrollmentService:
 		user,
 		fingerprint_slot: int = 0,
 	) -> FingerprintEnrollmentSession:
-		if device.mode != AccessDevice.MODE_ADMS:
-			raise EnrollmentNotSupported("Remote enrollment requires an ADMS-mode device.")
+		if device.mode not in (AccessDevice.MODE_ADMS, AccessDevice.MODE_TCP_RELAY):
+			raise EnrollmentNotSupported("Remote enrollment requires ADMS or TCP Relay mode.")
 		if not device.is_active:
 			raise EnrollmentNotSupported("Access device is inactive.")
 
@@ -117,7 +117,12 @@ class FingerprintEnrollmentService:
 			created_by=user if getattr(user, "is_authenticated", False) else None,
 		)
 
-		userinfo_cmd = build_userinfo_command(profile, pin=device_uid, name=member.full_name)
+		userinfo_cmd = build_userinfo_command(
+			profile,
+			pin=device_uid,
+			name=member.full_name,
+			card=member.card_id or "",
+		)
 		enroll_cmd = build_remote_enroll_command(
 			profile,
 			pin=device_uid,
