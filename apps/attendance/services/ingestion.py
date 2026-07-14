@@ -16,6 +16,10 @@ from apps.attendance.services.realtime import publish_attendance_event
 
 logger = logging.getLogger(__name__)
 
+VERIFY_TO_ENTRY_METHOD = {
+    2: "card",
+}
+
 
 @dataclass
 class ParsedEvent:
@@ -24,6 +28,10 @@ class ParsedEvent:
     event_time: datetime | None
     raw_line: str
     name: str | None = None
+    verify_mode: int | None = None
+    status: int | None = None
+    in_out: int | None = None
+    card_number: str | None = None
 
 
 class ADMSIngestionService:
@@ -35,10 +43,21 @@ class ADMSIngestionService:
         skipped = 0
 
         for event in events:
-            logger.debug("[INGESTION] SN=%s event type=%s uid=%s time=%s",
-                         device.device_sn, event.event_type, event.device_uid, event.event_time)
+            logger.debug(
+                "[INGESTION] SN=%s event type=%s uid=%s time=%s verify=%s",
+                device.device_sn,
+                event.event_type,
+                event.device_uid,
+                event.event_time,
+                event.verify_mode,
+            )
             if ADMSIngestionService._is_duplicate(device, event):
-                logger.debug("[INGESTION] SN=%s DUPLICATE type=%s uid=%s", device.device_sn, event.event_type, event.device_uid)
+                logger.debug(
+                    "[INGESTION] SN=%s DUPLICATE type=%s uid=%s",
+                    device.device_sn,
+                    event.event_type,
+                    event.device_uid,
+                )
                 skipped += 1
                 continue
 
@@ -53,8 +72,13 @@ class ADMSIngestionService:
                     )
 
             handled += 1
-            logger.info("[INGESTION] SN=%s handled type=%s uid=%s name=%s",
-                        device.device_sn, event.event_type, event.device_uid, event.name)
+            logger.info(
+                "[INGESTION] SN=%s handled type=%s uid=%s name=%s",
+                device.device_sn,
+                event.event_type,
+                event.device_uid,
+                event.name,
+            )
 
         return {
             "handled": handled,
@@ -78,12 +102,27 @@ class ADMSIngestionService:
                 continue
 
             if current_table == "ATTLOG":
-                parts = [p.strip() for p in line.split("\t") if p.strip()]
-                if len(parts) < 2:
+                parts = [p.strip() for p in line.split("\t")]
+                # Keep empty trailing cells but require at least PIN + time
+                nonempty = [p for p in parts if p]
+                if len(nonempty) < 2:
                     continue
                 uid = parts[0]
                 dt = ADMSIngestionService._parse_datetime(parts[1])
-                out.append(ParsedEvent("ATTLOG", uid, dt, line))
+                status = ADMSIngestionService._parse_int(parts[2]) if len(parts) > 2 and parts[2] != "" else None
+                verify = ADMSIngestionService._parse_int(parts[3]) if len(parts) > 3 and parts[3] != "" else None
+                in_out = ADMSIngestionService._parse_int(parts[4]) if len(parts) > 4 and parts[4] != "" else None
+                out.append(
+                    ParsedEvent(
+                        "ATTLOG",
+                        uid,
+                        dt,
+                        line,
+                        verify_mode=verify,
+                        status=status,
+                        in_out=in_out,
+                    )
+                )
                 continue
 
             if current_table in {"USERINFO", "FP", "OPERLOG"}:
@@ -95,9 +134,26 @@ class ADMSIngestionService:
                 if not uid:
                     continue
                 name = ADMSIngestionService._extract_kv_field(line, "Name")
-                out.append(ParsedEvent(current_table, uid, None, line, name=name))
+                card = ADMSIngestionService._extract_kv_field(line, "Card")
+                out.append(
+                    ParsedEvent(
+                        current_table,
+                        uid,
+                        None,
+                        line,
+                        name=name,
+                        card_number=card,
+                    )
+                )
 
         return out
+
+    @staticmethod
+    def _parse_int(value: str) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _extract_pin(line: str) -> str:
@@ -152,11 +208,69 @@ class ADMSIngestionService:
             return True
 
     @staticmethod
+    def entry_method_for_verify(verify_mode: int | None) -> str:
+        """Map ZKTeco verify codes to Attendance.entry_method (card|fingerprint)."""
+        if verify_mode is None:
+            return "fingerprint"
+        return VERIFY_TO_ENTRY_METHOD.get(int(verify_mode), "fingerprint")
+
+    @staticmethod
+    def verify_method_label(verify_mode: int | None) -> str:
+        labels = {
+            0: "password",
+            1: "fingerprint",
+            2: "card",
+            3: "pin",
+            4: "face",
+        }
+        if verify_mode is None:
+            return "fingerprint"
+        return labels.get(int(verify_mode), "fingerprint")
+
+    @staticmethod
+    def _resolve_member(device: AccessDevice, event: ParsedEvent) -> Member | None:
+        linked = (
+            DeviceUser.objects.filter(
+                access_device=device,
+                device_uid=event.device_uid,
+                status=DeviceUser.STATUS_LINKED,
+                member__isnull=False,
+            )
+            .select_related("member")
+            .first()
+        )
+        if linked and linked.member_id:
+            return linked.member
+
+        member = Member.objects.filter(fingerprint_id=event.device_uid).first()
+        if member:
+            return member
+
+        if event.verify_mode == 2:
+            # Card scan: try DeviceUser.card_number → member.card_id
+            device_user = DeviceUser.objects.filter(
+                access_device=device,
+                device_uid=event.device_uid,
+            ).first()
+            card = (device_user.card_number if device_user else None) or None
+            if card:
+                member = Member.objects.filter(card_id=card).first()
+                if member:
+                    return member
+            # Fallback: any member whose card_id equals device PIN (rare)
+            member = Member.objects.filter(card_id=event.device_uid).first()
+            if member:
+                return member
+
+        return None
+
+    @staticmethod
     @transaction.atomic
     def _handle_device_user(device: AccessDevice, event: ParsedEvent) -> None:
         defaults = {
             "name": event.name,
             "status": DeviceUser.STATUS_UNLINKED,
+            "card_number": event.card_number or "",
         }
         user, created = DeviceUser.objects.get_or_create(
             access_device=device,
@@ -169,6 +283,9 @@ class ADMSIngestionService:
             if event.name and not user.name:
                 user.name = event.name
                 update_fields.append("name")
+            if event.card_number and user.card_number != event.card_number:
+                user.card_number = event.card_number
+                update_fields.append("card_number")
             if user.status == DeviceUser.STATUS_DELETED:
                 user.status = DeviceUser.STATUS_UNLINKED
                 update_fields.append("status")
@@ -183,6 +300,7 @@ class ADMSIngestionService:
                 "device_user_id": user.id,
                 "device_uid": user.device_uid,
                 "name": user.name,
+                "card_number": user.card_number,
                 "status": user.status,
                 "created": created,
             },
@@ -191,26 +309,33 @@ class ADMSIngestionService:
     @staticmethod
     @transaction.atomic
     def _handle_attlog(device: AccessDevice, event: ParsedEvent) -> None:
-        member = Member.objects.filter(fingerprint_id=event.device_uid).first()
+        entry_method = ADMSIngestionService.entry_method_for_verify(event.verify_mode)
+        verify_label = ADMSIngestionService.verify_method_label(event.verify_mode)
+        member = ADMSIngestionService._resolve_member(device, event)
         if not member:
-            logger.warning("[INGESTION] ATTLOG uid=%s has no linked member — creating unlinked DeviceUser", event.device_uid)
+            logger.warning(
+                "[INGESTION] ATTLOG uid=%s verify=%s has no linked member — creating unlinked DeviceUser",
+                event.device_uid,
+                event.verify_mode,
+            )
             user, _ = DeviceUser.objects.get_or_create(
                 access_device=device,
                 device_uid=event.device_uid,
                 defaults={"status": DeviceUser.STATUS_UNLINKED},
             )
-            publish_attendance_event(
-                "unlinked-fingerprint-scanned",
-                {
-                    "access_device_id": device.id,
-                    "access_device_name": device.name,
-                    "device_sn": device.device_sn,
-                    "device_user_id": user.id,
-                    "device_uid": user.device_uid,
-                    "name": user.name,
-                    "status": user.status,
-                },
-            )
+            payload = {
+                "access_device_id": device.id,
+                "access_device_name": device.name,
+                "device_sn": device.device_sn,
+                "device_user_id": user.id,
+                "device_uid": user.device_uid,
+                "name": user.name,
+                "status": user.status,
+                "verify_method": verify_label,
+                "verify_mode": event.verify_mode,
+            }
+            publish_attendance_event("unlinked-device-scan", payload)
+            publish_attendance_event("unlinked-fingerprint-scanned", payload)
             return
 
         open_attendance = Attendance.objects.filter(member=member, check_out_time__isnull=True).first()
@@ -221,7 +346,7 @@ class ADMSIngestionService:
         else:
             Attendance.objects.create(
                 member=member,
-                entry_method="fingerprint",
+                entry_method=entry_method,
                 device_id=device.device_sn,
             )
             action = "checked_in"
@@ -234,5 +359,6 @@ class ADMSIngestionService:
                 "member_id": member.id,
                 "member_name": member.full_name,
                 "action": action,
+                "entry_method": entry_method,
             },
         )
