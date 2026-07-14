@@ -39,7 +39,14 @@ def apply_paid_payment(payment: Payment, *, previous_status: str | None = None) 
         coverage_count = 1
 
     base = member.end_date if member.end_date and member.end_date >= today else today
-    member.end_date = base + timedelta(days=duration * coverage_count)
+    extra_days = 0
+    for usage in payment.discount_usages.all():
+        meta = usage.meta or {}
+        try:
+            extra_days += int(meta.get("extra_duration_days") or 0)
+        except (TypeError, ValueError):
+            pass
+    member.end_date = base + timedelta(days=duration * coverage_count + extra_days)
     member.payment_status = "paid"
     member.is_active = True
     member.save(update_fields=["end_date", "payment_status", "is_active", "updated_at"])
