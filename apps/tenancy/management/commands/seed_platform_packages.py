@@ -25,6 +25,7 @@ CORE_FEATURES = [
     ("members", "Members", None),
     ("members.attendance", "Member Attendance", "members"),
     ("members.packages", "Member Packages", "members"),
+    ("discount", "Discounts", None),
     ("attendance.devices", "Access Devices", None),
     ("attendance.access_gate", "Access Gate", "attendance.devices"),
     ("attendance.fingerprints", "Fingerprint Linking", "attendance.devices"),
@@ -91,6 +92,7 @@ PACKAGES = {
         "price_period_label": "",
         "features": [
             "dashboard", "members", "members.attendance", "members.packages",
+            "discount",
             "attendance.devices", "attendance.access_gate", "attendance.fingerprints", "attendance.iclock",
             "instructors", "classes", "reports",
             "payments", "payments.invoices", "subscriptions",
@@ -135,6 +137,7 @@ PACKAGES = {
         "price_period_label": "",
         "features": [
             "dashboard", "members", "members.attendance", "members.packages",
+            "discount",
             "attendance.devices", "attendance.access_gate", "attendance.fingerprints", "attendance.iclock",
             "instructors", "classes",
             "payments", "payments.invoices", "payments.gateways", "subscriptions",
