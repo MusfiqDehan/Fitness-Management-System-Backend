@@ -8,7 +8,7 @@ from rest_framework import serializers
 import calendar
 
 from apps.dashboard.models import GymPreferences
-from utils.currency import convert_currency
+from utils.currency import convert_currency, normalize_currency_code
 from .models import Member, MemberPackage, Payment, Attendance, GymClass, GymSchedule, ClassEnrollment
 from datetime import date
 
@@ -108,11 +108,14 @@ class PackageCurrencyDisplayMixin:
         preferred_currency = tenant_currency or platform_default or gym_preferences_currency or "USD"
 
         if settings and settings.enable_currency_conversion:
-            if preferred_currency in matrix:
+            if preferred_currency in matrix or normalize_currency_code(preferred_currency) in matrix:
                 self._display_currency_cache = preferred_currency
-            elif platform_default in matrix:
+            elif platform_default in matrix or normalize_currency_code(platform_default) in matrix:
                 self._display_currency_cache = platform_default
-            elif gym_preferences_currency in matrix:
+            elif (
+                gym_preferences_currency in matrix
+                or normalize_currency_code(gym_preferences_currency) in matrix
+            ):
                 self._display_currency_cache = gym_preferences_currency
             else:
                 self._display_currency_cache = "USD"
@@ -134,13 +137,76 @@ class PackageCurrencyDisplayMixin:
         converted = convert_currency(amount, "USD", self._resolve_display_currency())
         return f"{converted:.2f}"
 
+    def _serialize_display_add_ons(self, add_ons):
+        """Keep stored USD amounts; add display_amount in the active display currency."""
+        if not isinstance(add_ons, list):
+            return []
+
+        converted = []
+        for addon in add_ons:
+            if not isinstance(addon, dict):
+                continue
+            item = dict(addon)
+            display_amount = self._serialize_display_price(item.get("amount"))
+            if display_amount is not None:
+                item["display_amount"] = display_amount
+            converted.append(item)
+        return converted
+
+
+class PackageDiscountListDisplayMixin:
+    """Helpers to attach `discount_list_display` (declare the field on each serializer)."""
+
+    def _ensure_discount_list_display_map(self, instance):
+        context = getattr(self, "context", None) or {}
+        cached = context.get("discount_list_display_map")
+        if cached is not None:
+            return cached
+
+        from apps.membership.services.discount_engine import build_package_list_display_map
+
+        display_map = build_package_list_display_map([instance])
+        if hasattr(self, "context") and self.context is not None:
+            self.context["discount_list_display_map"] = display_map
+        return display_map
+
+    def get_discount_list_display(self, obj):
+        display_map = self._ensure_discount_list_display_map(obj)
+        raw = display_map.get(int(obj.id)) if getattr(obj, "id", None) is not None else None
+        if not raw:
+            return None
+
+        serialize = getattr(self, "_serialize_display_price", None)
+        if not callable(serialize):
+            return raw
+
+        out = dict(raw)
+        for key in ("original_price", "discounted_price", "amount_saved"):
+            if out.get(key) is not None:
+                out[key] = serialize(out[key])
+        return out
+
+
+class MemberPackageListSerializer(serializers.ListSerializer):
+    """Prefetch list-display discounts once for the whole package list."""
+
+    def to_representation(self, data):
+        packages = list(data)
+        from apps.membership.services.discount_engine import build_package_list_display_map
+
+        self.child.context["discount_list_display_map"] = build_package_list_display_map(packages)
+        return super().to_representation(packages)
+
 
 # ----------------------------
 # MemberPackage
 # ----------------------------
-class MemberPackageSerializer(PackageCurrencyDisplayMixin, serializers.ModelSerializer):
+class MemberPackageSerializer(
+    PackageDiscountListDisplayMixin, PackageCurrencyDisplayMixin, serializers.ModelSerializer
+):
     display_currency = serializers.SerializerMethodField()
     display_price = serializers.SerializerMethodField()
+    discount_list_display = serializers.SerializerMethodField()
     features = serializers.JSONField(required=False, default=list)
     add_ons = serializers.JSONField(required=False, default=list)
 
@@ -148,11 +214,12 @@ class MemberPackageSerializer(PackageCurrencyDisplayMixin, serializers.ModelSeri
         model = MemberPackage
         fields = (
             'id', 'name', 'package_type', 'duration_in_days', 'price',
-            'display_currency', 'display_price',
+            'display_currency', 'display_price', 'discount_list_display',
             'description', 'features', 'add_ons', 'display_order',
             'is_active', 'is_highlighted', 'is_published', 'created_at', 'updated_at',
         )
         read_only_fields = ['created_at', 'updated_at']
+        list_serializer_class = MemberPackageListSerializer
 
     def validate_add_ons(self, value):
         from apps.billing.services.package_add_ons import normalize_package_add_ons
@@ -164,7 +231,9 @@ class MemberPackageSerializer(PackageCurrencyDisplayMixin, serializers.ModelSeri
 
         data = super().to_representation(instance)
         try:
-            data["add_ons"] = normalize_package_add_ons(data.get("add_ons") or [])
+            data["add_ons"] = self._serialize_display_add_ons(
+                normalize_package_add_ons(data.get("add_ons") or [])
+            )
         except Exception:
             data["add_ons"] = data.get("add_ons") or []
         return data
@@ -176,10 +245,13 @@ class MemberPackageSerializer(PackageCurrencyDisplayMixin, serializers.ModelSeri
         return self._serialize_display_price(obj.price)
 
 
-class MemberPackagePublicSerializer(PackageCurrencyDisplayMixin, serializers.ModelSerializer):
+class MemberPackagePublicSerializer(
+    PackageDiscountListDisplayMixin, PackageCurrencyDisplayMixin, serializers.ModelSerializer
+):
     """Public serializer for landing page - only published and active packages."""
     display_currency = serializers.SerializerMethodField()
     display_price = serializers.SerializerMethodField()
+    discount_list_display = serializers.SerializerMethodField()
     features = serializers.JSONField(required=False, default=list)
     add_ons = serializers.JSONField(required=False, default=list)
 
@@ -187,16 +259,19 @@ class MemberPackagePublicSerializer(PackageCurrencyDisplayMixin, serializers.Mod
         model = MemberPackage
         fields = (
             'id', 'name', 'package_type', 'duration_in_days', 'price',
-            'display_currency', 'display_price',
+            'display_currency', 'display_price', 'discount_list_display',
             'description', 'features', 'add_ons', 'display_order', 'is_highlighted',
         )
+        list_serializer_class = MemberPackageListSerializer
 
     def to_representation(self, instance):
         from apps.billing.services.package_add_ons import normalize_package_add_ons
 
         data = super().to_representation(instance)
         try:
-            data["add_ons"] = normalize_package_add_ons(data.get("add_ons") or [])
+            data["add_ons"] = self._serialize_display_add_ons(
+                normalize_package_add_ons(data.get("add_ons") or [])
+            )
         except Exception:
             data["add_ons"] = data.get("add_ons") or []
         return data
