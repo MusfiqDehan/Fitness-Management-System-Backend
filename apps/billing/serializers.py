@@ -23,7 +23,7 @@ from apps.tenancy.models import (
 )
 from apps.membership.models import Member, MemberPackage, Payment
 from apps.billing.models import TenantPaymentGateway, PaymentTransaction
-from utils.currency import convert_currency
+from utils.currency import convert_currency, normalize_currency_code
 
 
 class FeatureSerializer(serializers.ModelSerializer):
@@ -145,7 +145,8 @@ class PackageSerializer(serializers.ModelSerializer):
 
         if settings and candidate:
             if settings.enable_currency_conversion:
-                self._display_currency_cache = candidate if candidate in matrix else "USD"
+                supported = candidate in matrix or normalize_currency_code(candidate) in matrix
+                self._display_currency_cache = candidate if supported else "USD"
             else:
                 # Conversion disabled: keep amount as-is, only switch currency label.
                 self._display_currency_cache = candidate
@@ -272,6 +273,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    coupon_code = serializers.CharField(required=False, allow_blank=True, write_only=True, default="")
 
     def get_coverage_month_count(self, obj):
         return getattr(obj, "coverage_month_count", len(obj.coverage_months or []))
@@ -316,6 +318,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'coverage_months',
             'coverage_month_count',
             'line_items',
+            'coupon_code',
             'is_paid',
             'is_active',
             'is_published',
@@ -394,6 +397,60 @@ class PaymentSerializer(serializers.ModelSerializer):
         if 'line_items' in attrs:
             attrs['line_items'] = normalize_line_items(attrs.get('line_items') or [])
 
+        coupon_code = (attrs.get('coupon_code') or '').strip()
+        tenant = self.context.get('tenant') or getattr(
+            self.context.get('request'), 'tenant', None
+        )
+        feature_on = False
+        if tenant is not None:
+            from apps.tenancy.services import tenant_has_feature
+
+            feature_on = tenant_has_feature(tenant, 'discount')
+
+        if feature_on:
+            member = attrs.get('member')
+            if member is None and self.instance is not None:
+                member = self.instance.member
+            package = attrs.get('member_package_id_write')
+            if package is None and member is not None:
+                package = getattr(member, 'member_package', None)
+            if package is not None and member is not None:
+                from apps.membership.services.discount_engine import apply_discounts_for_payment
+
+                selected_addon_names = None
+                line_items = attrs.get('line_items')
+                if line_items:
+                    selected_addon_names = [
+                        i['name'] for i in line_items if str(i.get('type')) == 'addon'
+                    ]
+                result = apply_discounts_for_payment(
+                    package=package,
+                    member=member,
+                    coverage_months=attrs.get('coverage_months'),
+                    selected_addon_names=selected_addon_names,
+                    coupon_code=coupon_code or None,
+                    existing_line_items=line_items,
+                    feature_enabled=True,
+                )
+                if result is not None:
+                    # Always sync amount/line items from the engine so dashboard
+                    # totals match automatic + coupon discounts (or full price).
+                    customs = [
+                        i for i in (line_items or [])
+                        if str(i.get('type')) == 'custom'
+                    ]
+                    attrs['line_items'] = normalize_line_items(result.line_items + customs)
+                    attrs['amount'] = result.total
+                    if result.applied:
+                        self._pending_discount_result = result
+                        self._pending_discount_coupon = coupon_code
+                    else:
+                        self._pending_discount_result = None
+                        self._pending_discount_coupon = None
+        elif coupon_code:
+            # Feature off — ignore coupon silently
+            attrs.pop('coupon_code', None)
+
         # Multiple paid payments for the same member/month are allowed
         # (e.g. partial top-ups). The payments table groups them by member.
 
@@ -404,6 +461,20 @@ class PaymentSerializer(serializers.ModelSerializer):
 
         from apps.billing.services.member_renewal import apply_paid_payment
         from apps.billing.services.payment_confirmation import dispatch_member_payment
+
+        apply_result = getattr(self, '_pending_discount_result', None)
+        coupon_code = getattr(self, '_pending_discount_coupon', None)
+        if apply_result is not None:
+            from apps.membership.services.discount_engine import record_discount_usages
+
+            record_discount_usages(
+                payment=payment,
+                apply_result=apply_result,
+                coupon_code=coupon_code,
+            )
+            if apply_result.extra_duration_days:
+                # Stash on payment note meta via usages; renewal reads usages
+                pass
 
         apply_paid_payment(payment, previous_status=previous_status)
 
@@ -435,6 +506,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         notify_channels = validated_data.pop("notify_channels", [])
         member_package = validated_data.pop("member_package_id_write", None)
         validated_data.pop("invoice_no", None)
+        validated_data.pop("coupon_code", None)
         payment = super().create(validated_data)
         if member_package is not None:
             self._sync_member_package(payment.member, member_package)
@@ -446,6 +518,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         notify_channels = validated_data.pop("notify_channels", [])
         member_package = validated_data.pop("member_package_id_write", serializers.empty)
         validated_data.pop("invoice_no", None)
+        validated_data.pop("coupon_code", None)
         previous_status = instance.payment_status
         payment = super().update(instance, validated_data)
         if member_package is not serializers.empty and member_package is not None:
