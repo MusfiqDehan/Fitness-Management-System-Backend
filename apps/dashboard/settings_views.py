@@ -462,4 +462,12 @@ class PublicGymBrandingView(APIView):
             PUBLIC_BRANDING_TTL,
             load,
         )
-        return Response(payload)
+        # Feature flags are resolved fresh (not cached with branding) so plan /
+        # override toggles hide public coupon fields immediately.
+        discount_enabled = False
+        tenant = getattr(request, "tenant", None)
+        if tenant is not None:
+            from apps.tenancy.services import tenant_has_feature
+
+            discount_enabled = tenant_has_feature(tenant, "discount")
+        return Response({**payload, "discount_enabled": discount_enabled})
