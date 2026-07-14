@@ -39,6 +39,7 @@ from .services.adms_commands import (
 	queue_commands,
 	lookup_queued_command,
 )
+from .services.card_provision import CardProvisionService
 from .services.enrollment import (
 	EnrollmentConflict,
 	EnrollmentNotSupported,
@@ -50,6 +51,7 @@ from .services.realtime import publish_attendance_event
 from .serializers import (
 	AccessDeviceSerializer,
 	AttendanceLogSerializer,
+	CardProvisionSerializer,
 	DeviceCredentialRotateSerializer,
 	DeviceUserSerializer,
 	FingerprintLinkSerializer,
@@ -552,6 +554,8 @@ class BiometricDeviceProfileListAPIView(APIView):
 				"label": profile.label,
 				"manufacturer": profile.manufacturer,
 				"supports_remote_enroll": profile.supports_remote_enroll,
+				"supports_fingerprint": profile.supports_fingerprint,
+				"supports_card": profile.supports_card,
 				"max_users": profile.max_users,
 				"max_fingers_per_user": profile.max_fingers_per_user,
 			}
@@ -623,6 +627,58 @@ class FingerprintEnrollmentCancelAPIView(APIView):
 		session = get_object_or_404(FingerprintEnrollmentSession, pk=pk)
 		session = FingerprintEnrollmentService.cancel_enrollment(session)
 		return Response(FingerprintEnrollmentSessionSerializer(session).data)
+
+
+class CardProvisionAPIView(APIView):
+	feature_key = "attendance.fingerprints"
+	method_permission_map = {"POST": "edit"}
+	permission_classes = [HasFeatureMethodPermission]
+
+	def post(self, request):
+		serializer = CardProvisionSerializer(data=request.data)
+		serializer.is_valid(raise_exception=True)
+		member = serializer.validated_data["member"]
+		device = serializer.validated_data["device"]
+
+		members_qs = Member.objects.filter(id=member.id)
+		members_qs = scope_queryset_by_branch_access(
+			members_qs,
+			request.user,
+			branch_field="branch_id",
+		)
+		if not members_qs.exists():
+			return Response({"detail": "Member not found or not accessible."}, status=status.HTTP_404_NOT_FOUND)
+
+		try:
+			result = CardProvisionService.provision(
+				member=member,
+				device=device,
+				user=request.user,
+			)
+		except EnrollmentNotSupported as exc:
+			return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+		except EnrollmentServiceError as exc:
+			return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+		publish_attendance_event(
+			"card-provisioned",
+			{
+				"member_id": member.id,
+				"member_name": member.full_name,
+				"access_device_id": device.id,
+				"device_uid": result["device_uid"],
+				"card_id": result["card_id"],
+				"device_user_id": result["device_user_id"],
+			},
+		)
+		return Response(
+			{
+				"detail": "Card provision queued.",
+				**{k: v for k, v in result.items() if k != "queued_commands"},
+				"queued_command_ids": [c["id"] for c in result["queued_commands"]],
+			},
+			status=status.HTTP_201_CREATED,
+		)
 
 
 class PublicSchemaADMSDispatchMixin:
