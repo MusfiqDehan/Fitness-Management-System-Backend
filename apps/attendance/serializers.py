@@ -130,11 +130,30 @@ class DeviceUserSerializer(serializers.ModelSerializer):
             "member_name",
             "device_uid",
             "name",
+            "card_number",
             "status",
             "last_seen_at",
             "created_at",
         )
         read_only_fields = ("last_seen_at", "created_at")
+
+
+class CardProvisionSerializer(serializers.Serializer):
+    member_id = serializers.IntegerField()
+    access_device_id = serializers.IntegerField()
+
+    def validate(self, attrs):
+        member = Member.objects.filter(id=attrs["member_id"]).first()
+        if not member:
+            raise serializers.ValidationError({"member_id": "Member not found."})
+        device = AccessDevice.objects.filter(id=attrs["access_device_id"], is_active=True).first()
+        if not device:
+            raise serializers.ValidationError({"access_device_id": "Access device not found or inactive."})
+        if not (member.card_id or "").strip():
+            raise serializers.ValidationError({"member_id": "Member has no card_id set."})
+        attrs["member"] = member
+        attrs["device"] = device
+        return attrs
 
 
 class FingerprintLinkSerializer(serializers.Serializer):
