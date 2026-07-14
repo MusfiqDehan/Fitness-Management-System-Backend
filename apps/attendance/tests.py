@@ -753,7 +753,10 @@ class RemoteFingerprintEnrollmentTests(TestCase):
 		zkteco = next(row for row in response.data if row["key"] == "zkteco")
 		stellar = next(row for row in response.data if row["key"] == "stellar")
 		self.assertTrue(zkteco["supports_remote_enroll"])
+		self.assertTrue(zkteco.get("supports_card", True))
+		self.assertTrue(zkteco.get("supports_fingerprint", True))
 		self.assertFalse(stellar["supports_remote_enroll"])
+		self.assertFalse(stellar.get("supports_card", False))
 
 	@patch("apps.attendance.services.enrollment.publish_attendance_event")
 	def test_start_enrollment_queues_profile_commands(self, mock_publish):
