@@ -913,6 +913,7 @@ class PlatformGymPreferences(models.Model):
         ("EUR", "EUR — €"),
         ("GBP", "GBP — £"),
         ("BDT", "BDT — Tk."),
+        ("BDTT", "BDT — ৳"),
         ("INR", "INR — ₹"),
         ("AUD", "AUD — A$"),
         ("CAD", "CAD — C$"),
