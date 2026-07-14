@@ -60,8 +60,14 @@ def dequeue_next_command(device: AccessDevice) -> dict | None:
     return next_cmd
 
 
-def build_userinfo_command(profile: BiometricDeviceProfile, *, pin: str, name: str) -> str:
-    return profile.build_userinfo_command(pin=pin, name=name)
+def build_userinfo_command(
+    profile: BiometricDeviceProfile,
+    *,
+    pin: str,
+    name: str,
+    card: str = "",
+) -> str:
+    return profile.build_userinfo_command(pin=pin, name=name, card=card)
 
 
 def build_remote_enroll_command(
