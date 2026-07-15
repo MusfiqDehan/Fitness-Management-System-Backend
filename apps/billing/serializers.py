@@ -663,11 +663,19 @@ class PlatformSubscriptionPaymentUpdateSerializer(serializers.ModelSerializer):
             "billing_cycle",
             "period_start",
             "period_end",
+            "payment_type",
+            "custom_label",
+            "base_amount",
+            "adjustment_type",
+            "adjustment_amount",
+            "adjustment_reason",
             "reference_note",
             "notify_channels",
         ]
 
     def validate(self, attrs):
+        from apps.billing.services.subscription_billing import validate_charge_metadata
+
         instance = self.instance
         if instance is None:
             return attrs
@@ -688,13 +696,50 @@ class PlatformSubscriptionPaymentUpdateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "Pending gateway invoices may only be set to cancelled or failed."
                 )
+            return attrs
+
+        payment_type = attrs.get("payment_type", instance.payment_type)
+        custom_label = attrs.get("custom_label", instance.custom_label)
+        base_amount = attrs.get("base_amount", instance.base_amount)
+        adjustment_type = attrs.get("adjustment_type", instance.adjustment_type)
+        adjustment_amount = attrs.get("adjustment_amount", instance.adjustment_amount)
+        adjustment_reason = attrs.get("adjustment_reason", instance.adjustment_reason)
+        period_start = attrs.get("period_start", instance.period_start)
+        period_end = attrs.get("period_end", instance.period_end)
+        if payment_type != instance.PAYMENT_TYPE_PACKAGE:
+            period_end = None
+            if "period_end" in attrs:
+                attrs["period_end"] = None
+
+        try:
+            validate_charge_metadata(
+                payment_type=payment_type,
+                custom_label=custom_label or "",
+                base_amount=base_amount,
+                adjustment_type=adjustment_type,
+                adjustment_amount=adjustment_amount,
+                adjustment_reason=adjustment_reason or "",
+                period_start=period_start,
+                period_end=period_end,
+                require_period=False,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
         return attrs
 
     def update(self, instance, validated_data):
+        from apps.billing.services.subscription_billing import (
+            compute_final_amount,
+            maybe_activate_tenant_subscription,
+            recalc_tenant_subscription,
+        )
+
         reference_note = validated_data.pop("reference_note", None)
         notify_channels = validated_data.pop("notify_channels", None)
         previous_status = instance.status
+        previous_payment_type = instance.payment_type
+        amount_explicit = "amount" in validated_data
 
         if reference_note is not None:
             gw_resp = dict(instance.gateway_response or {})
@@ -704,16 +749,33 @@ class PlatformSubscriptionPaymentUpdateSerializer(serializers.ModelSerializer):
         for field, value in validated_data.items():
             setattr(instance, field, value)
 
+        if instance.payment_type != instance.PAYMENT_TYPE_PACKAGE:
+            instance.period_end = None
+
+        if not amount_explicit:
+            base = instance.base_amount if instance.base_amount is not None else instance.amount
+            instance.amount = compute_final_amount(
+                base,
+                instance.adjustment_type,
+                instance.adjustment_amount,
+            )
+
         if instance.status == instance.STATUS_SUCCESS and not instance.validated_at:
             instance.validated_at = timezone.now()
 
         instance.save()
         instance.refresh_from_db()
 
-        if instance.status == instance.STATUS_SUCCESS and previous_status != instance.STATUS_SUCCESS:
-            from apps.billing.services.subscription_billing import activate_tenant_subscription
+        payment_type_changed = previous_payment_type != instance.payment_type
+        became_success = (
+            instance.status == instance.STATUS_SUCCESS
+            and previous_status != instance.STATUS_SUCCESS
+        )
 
-            activate_tenant_subscription(instance)
+        if payment_type_changed and instance.status == instance.STATUS_SUCCESS:
+            recalc_tenant_subscription(instance.tenant)
+        elif became_success:
+            maybe_activate_tenant_subscription(instance)
 
         if notify_channels:
             from apps.billing.services.payment_confirmation import dispatch_subscription_invoice
@@ -735,6 +797,14 @@ class TenantSubscriptionInvoiceSerializer(serializers.Serializer):
     gateway_slug = serializers.CharField(read_only=True)
     status = serializers.CharField(read_only=True)
     billing_cycle = serializers.CharField(read_only=True)
+    payment_type = serializers.CharField(read_only=True)
+    custom_label = serializers.CharField(read_only=True)
+    base_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True, allow_null=True
+    )
+    adjustment_type = serializers.CharField(read_only=True)
+    adjustment_amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    adjustment_reason = serializers.CharField(read_only=True)
     is_trial = serializers.BooleanField(read_only=True)
     period_start = serializers.DateTimeField(read_only=True)
     period_end = serializers.DateTimeField(read_only=True)
