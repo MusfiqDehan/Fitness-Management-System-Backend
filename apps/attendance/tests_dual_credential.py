@@ -121,6 +121,41 @@ class DualCredentialIngestionTests(TestCase):
             pending = meta.get("pending_commands") or []
             self.assertTrue(any("USERINFO" in (c.get("cmd") or "") for c in pending))
 
+    def test_tcp_relay_enroll_ack_completes_session(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Relay Gate",
+                device_sn="ZKT-RELAY-ACK",
+                device_profile="zkteco",
+                device_model="K40",
+                mode=AccessDevice.MODE_TCP_RELAY,
+                is_active=True,
+            )
+            member = Member.objects.create(
+                full_name="Ack Member",
+                phone_number="01700000666",
+                start_date=timezone.now().date(),
+            )
+            session = FingerprintEnrollmentService.start_enrollment(
+                member=member,
+                device=device,
+                user=None,
+            )
+            device.refresh_from_db()
+            enroll_cmd = next(
+                c for c in (device.meta_json or {}).get("pending_commands", [])
+                if (c.get("cmd") or "").startswith("ENROLL_FP")
+            )
+            updated = FingerprintEnrollmentService.handle_command_ack(
+                device=device,
+                command_id=str(enroll_cmd["id"]),
+                return_code=0,
+                cmd_echo="DATA",
+            )
+            member.refresh_from_db()
+            self.assertEqual(updated.status, "completed")
+            self.assertEqual(member.fingerprint_id, session.device_uid)
+
     def test_card_provision_queues_userinfo(self):
         with schema_context(self.tenant.schema_name):
             device = AccessDevice.objects.create(
