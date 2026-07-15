@@ -918,7 +918,16 @@ class PublicMemberRegistrationAPIView(APIView):
                         .order_by('-created_at')
                         .first()
                     )
-                    coupon_code = str(request.data.get('coupon_code') or '').strip()
+                    from django.core.exceptions import ValidationError as DjangoValidationError
+
+                    from utils.coupon_code import validate_coupon_code_format
+
+                    try:
+                        coupon_code = validate_coupon_code_format(
+                            request.data.get('coupon_code')
+                        ) or ''
+                    except DjangoValidationError as exc:
+                        raise ValueError('; '.join(exc.messages)) from exc
                     apply_result = None
                     tenant = getattr(request, 'tenant', None)
                     feature_on = False
