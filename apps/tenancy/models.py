@@ -758,6 +758,24 @@ class TenantSubscriptionInvoice(models.Model):
         (STATUS_TRIAL, "Trial (no charge)"),
     ]
 
+    PAYMENT_TYPE_PACKAGE = "package"
+    PAYMENT_TYPE_SETUP_FEE = "setup_fee"
+    PAYMENT_TYPE_OTHER = "other"
+    PAYMENT_TYPE_CHOICES = [
+        (PAYMENT_TYPE_PACKAGE, "Package"),
+        (PAYMENT_TYPE_SETUP_FEE, "Setup Fee"),
+        (PAYMENT_TYPE_OTHER, "Other"),
+    ]
+
+    ADJUSTMENT_NONE = "none"
+    ADJUSTMENT_ADDITION = "addition"
+    ADJUSTMENT_DEDUCTION = "deduction"
+    ADJUSTMENT_TYPE_CHOICES = [
+        (ADJUSTMENT_NONE, "None"),
+        (ADJUSTMENT_ADDITION, "Addition"),
+        (ADJUSTMENT_DEDUCTION, "Deduction"),
+    ]
+
     tenant = models.ForeignKey(
         Tenant,
         on_delete=models.CASCADE,
@@ -785,6 +803,20 @@ class TenantSubscriptionInvoice(models.Model):
         choices=BILLING_CYCLE_CHOICES,
         default=BILLING_CYCLE_MONTHLY,
     )
+    payment_type = models.CharField(
+        max_length=20,
+        choices=PAYMENT_TYPE_CHOICES,
+        default=PAYMENT_TYPE_PACKAGE,
+    )
+    custom_label = models.CharField(max_length=200, blank=True, default="")
+    base_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    adjustment_type = models.CharField(
+        max_length=20,
+        choices=ADJUSTMENT_TYPE_CHOICES,
+        default=ADJUSTMENT_NONE,
+    )
+    adjustment_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    adjustment_reason = models.TextField(blank=True, default="")
     # Billing period this invoice covers
     period_start = models.DateTimeField(null=True, blank=True)
     period_end = models.DateTimeField(null=True, blank=True)
