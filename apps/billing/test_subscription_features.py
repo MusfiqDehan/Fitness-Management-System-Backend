@@ -14,8 +14,13 @@ from apps.billing.services.payment_confirmation import (
     dispatch_member_payment,
     dispatch_subscription_invoice,
 )
+from apps.billing.services.subscription_billing import (
+    subscription_invoice_period_label,
+    subscription_invoice_price_breakdown,
+)
 from apps.billing.views import SubscriptionSummaryView
 from apps.identity.models import User
+from apps.access.models import Role, RolePermission, UserRole
 from apps.membership.models import Member, MemberPackage, Payment
 from apps.reminder.models import Notification
 from apps.tenancy.models import (
@@ -105,10 +110,9 @@ class PlatformBillingTestBase(APITestCase):
                     "platform_credentials": {"store_id": "test", "store_passwd": "test"},
                 },
             )
-            if not cls.gateway.is_default_for_subscriptions:
-                cls.gateway.is_default_for_subscriptions = True
-                cls.gateway.platform_credentials = {"store_id": "test", "store_passwd": "test"}
-                cls.gateway.save()
+            cls.gateway.is_default_for_subscriptions = True
+            cls.gateway.platform_credentials = {"store_id": "test", "store_passwd": "test"}
+            cls.gateway.save(update_fields=["is_default_for_subscriptions", "platform_credentials", "updated_at"])
 
     def _create_invoice(self, **kwargs):
         defaults = {
@@ -123,6 +127,10 @@ class PlatformBillingTestBase(APITestCase):
             "billing_cycle": "monthly",
             "period_start": timezone.now(),
             "period_end": timezone.now() + timedelta(days=30),
+            "payment_type": TenantSubscriptionInvoice.PAYMENT_TYPE_PACKAGE,
+            "base_amount": Decimal("100"),
+            "adjustment_type": TenantSubscriptionInvoice.ADJUSTMENT_NONE,
+            "adjustment_amount": Decimal("0"),
         }
         defaults.update(kwargs)
         with schema_context("public"):
@@ -285,6 +293,27 @@ class SubscriptionSummaryViewTests(APITestCase):
                 tenant=self.tenant,
                 role="student",
             )
+            manager_role, _ = Role.objects.get_or_create(
+                slug="manager",
+                defaults={"name": "Manager", "description": "Manager", "color": "#2563eb"},
+            )
+            RolePermission.objects.get_or_create(
+                role=manager_role,
+                feature_key="subscriptions",
+                defaults={"permission_level": "view"},
+            )
+            self.manager = User.objects.create_user(
+                email="manager@summary.test",
+                password="StrongPass123!",
+                tenant=self.tenant,
+                role="student",
+            )
+            UserRole.objects.create(
+                user_id=self.manager.id,
+                user_email=self.manager.email,
+                role=manager_role,
+                assigned_by_email="admin@summary.test",
+            )
 
         self.factory = APIRequestFactory()
 
@@ -305,50 +334,170 @@ class SubscriptionSummaryViewTests(APITestCase):
         response = self._get_summary(self.staff)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_manager_with_subscriptions_permission_can_view_summary(self):
+        response = self._get_summary(self.manager)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("total_paid", response.data)
+
 
 class PlatformManualSubscriptionApiTests(PlatformBillingTestBase):
+    def _manual_payload(self, **overrides):
+        now = timezone.now()
+        payload = {
+            "tenant_id": self.tenant.id,
+            "package_slug": "growth",
+            "billing_cycle": "monthly",
+            "reference_note": "Bank transfer ref 123",
+            "period_start": now.isoformat(),
+            "period_end": (now + timedelta(days=30)).isoformat(),
+        }
+        payload.update(overrides)
+        if payload.get("payment_type", "package") != "package":
+            payload.pop("period_end", None)
+        return payload
+
     def test_manual_create_success(self):
         self.client.force_authenticate(user=self.platform_admin)
         res = self.client.post(
             "/api/v1/billing/subscription/payments/manual/",
-            {
-                "tenant_id": self.tenant.id,
-                "package_slug": "growth",
-                "billing_cycle": "monthly",
-                "reference_note": "Bank transfer ref 123",
-            },
+            self._manual_payload(),
             format="json",
             HTTP_HOST="testserver",
         )
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res.data["gateway_slug"], "manual")
+        self.assertEqual(res.data["payment_type"], "package")
         self.tenant.refresh_from_db()
         self.assertEqual(self.tenant.plan, "growth")
 
     def test_manual_create_missing_note(self):
         self.client.force_authenticate(user=self.platform_admin)
+        payload = self._manual_payload()
+        payload.pop("reference_note")
         res = self.client.post(
             "/api/v1/billing/subscription/payments/manual/",
-            {
-                "tenant_id": self.tenant.id,
-                "package_slug": "growth",
-                "billing_cycle": "monthly",
-            },
+            payload,
             format="json",
             HTTP_HOST="testserver",
         )
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_manual_create_missing_period(self):
+        self.client.force_authenticate(user=self.platform_admin)
+        payload = self._manual_payload()
+        payload.pop("period_start")
+        res = self.client.post(
+            "/api/v1/billing/subscription/payments/manual/",
+            payload,
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_manual_package_requires_period_end(self):
+        self.client.force_authenticate(user=self.platform_admin)
+        payload = self._manual_payload()
+        payload.pop("period_end")
+        res = self.client.post(
+            "/api/v1/billing/subscription/payments/manual/",
+            payload,
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_manual_setup_fee_rejects_period_end(self):
+        self.client.force_authenticate(user=self.platform_admin)
+        payload = self._manual_payload(
+            payment_type="setup_fee",
+            base_amount="50.00",
+            reference_note="Setup fee collected",
+        )
+        payload["period_end"] = (timezone.now() + timedelta(days=30)).isoformat()
+        res = self.client.post(
+            "/api/v1/billing/subscription/payments/manual/",
+            payload,
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_manual_setup_fee_one_time_payment(self):
+        self.client.force_authenticate(user=self.platform_admin)
+        payload = self._manual_payload(
+            payment_type="setup_fee",
+            base_amount="50.00",
+            reference_note="Setup fee collected",
+        )
+        res = self.client.post(
+            "/api/v1/billing/subscription/payments/manual/",
+            payload,
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertIsNone(res.data["period_end"])
+
+    def test_manual_setup_fee_does_not_activate_subscription(self):
+        original_plan = self.tenant.plan
+        self.client.force_authenticate(user=self.platform_admin)
+        res = self.client.post(
+            "/api/v1/billing/subscription/payments/manual/",
+            self._manual_payload(
+                payment_type="setup_fee",
+                base_amount="50.00",
+                reference_note="Setup fee collected",
+            ),
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data["payment_type"], "setup_fee")
+        self.assertEqual(Decimal(res.data["amount"]), Decimal("50.00"))
+        self.tenant.refresh_from_db()
+        self.assertEqual(self.tenant.plan, original_plan)
+
+    def test_manual_other_with_deduction(self):
+        self.client.force_authenticate(user=self.platform_admin)
+        res = self.client.post(
+            "/api/v1/billing/subscription/payments/manual/",
+            self._manual_payload(
+                payment_type="other",
+                custom_label="Custom onboarding",
+                base_amount="120.00",
+                adjustment_type="deduction",
+                adjustment_amount="20.00",
+                adjustment_reason="Promo credit",
+                reference_note="Misc charge",
+            ),
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data["custom_label"], "Custom onboarding")
+        self.assertEqual(Decimal(res.data["amount"]), Decimal("100.00"))
+
+    def test_manual_package_with_addition(self):
+        self.client.force_authenticate(user=self.platform_admin)
+        res = self.client.post(
+            "/api/v1/billing/subscription/payments/manual/",
+            self._manual_payload(
+                adjustment_type="addition",
+                adjustment_amount="25.00",
+                adjustment_reason="Pro-rated days",
+            ),
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Decimal(res.data["amount"]), Decimal("125.00"))
+        self.assertEqual(Decimal(res.data["base_amount"]), Decimal("100.00"))
+
     def test_manual_create_viewer_forbidden(self):
         self.client.force_authenticate(user=self.viewer)
         res = self.client.post(
             "/api/v1/billing/subscription/payments/manual/",
-            {
-                "tenant_id": self.tenant.id,
-                "package_slug": "growth",
-                "billing_cycle": "monthly",
-                "reference_note": "note",
-            },
+            self._manual_payload(reference_note="note"),
             format="json",
             HTTP_HOST="testserver",
         )
@@ -400,6 +549,46 @@ class PlatformGatewaySubscriptionApiTests(PlatformBillingTestBase):
         with schema_context("public"):
             self.gateway.is_default_for_subscriptions = True
             self.gateway.save()
+
+    @patch("apps.billing.services.subscription_billing.get_gateway")
+    def test_gateway_package_with_deduction(self, mock_get_gateway):
+        mock_svc = MagicMock()
+        mock_svc.initiate.return_value = {"gateway_url": "https://gateway.test/pay"}
+        mock_get_gateway.return_value = mock_svc
+
+        self.client.force_authenticate(user=self.platform_admin)
+        res = self.client.post(
+            "/api/v1/billing/subscription/payments/gateway/",
+            {
+                "tenant_id": self.tenant.id,
+                "package_slug": "growth",
+                "billing_cycle": "monthly",
+                "adjustment_type": "deduction",
+                "adjustment_amount": "10.00",
+                "adjustment_reason": "Loyalty discount",
+            },
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        with schema_context("public"):
+            invoice = TenantSubscriptionInvoice.objects.get(tran_id=res.data["tran_id"])
+            self.assertEqual(invoice.amount, Decimal("90.00"))
+
+    def test_gateway_rejects_setup_fee(self):
+        self.client.force_authenticate(user=self.platform_admin)
+        res = self.client.post(
+            "/api/v1/billing/subscription/payments/gateway/",
+            {
+                "tenant_id": self.tenant.id,
+                "package_slug": "growth",
+                "billing_cycle": "monthly",
+                "payment_type": "setup_fee",
+            },
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
 
 
 class PaymentConfirmationServiceTests(APITestCase):
@@ -464,23 +653,69 @@ class PaymentConfirmationServiceTests(APITestCase):
     @patch("apps.billing.services.payment_confirmation.create_notification")
     @patch("apps.billing.services.payment_confirmation.EmailMultiAlternatives")
     @patch("apps.billing.views._render_subscription_invoice_pdf", return_value=b"%PDF")
-    def test_dispatch_subscription_invoice(self, _pdf, mock_email_cls, mock_notify):
+    @patch("apps.billing.services.payment_confirmation.render_to_string", return_value="<html></html>")
+    def test_dispatch_subscription_invoice(self, mock_render, _pdf, mock_email_cls, mock_notify):
         with schema_context("public"):
             invoice = TenantSubscriptionInvoice.objects.create(
                 tenant=self.tenant,
                 package_slug="growth",
                 package_name="Growth",
-                amount=Decimal("100"),
+                amount=Decimal("90"),
+                base_amount=Decimal("100"),
                 currency="USD",
                 tran_id="MAN-SUB-001",
                 gateway_slug="manual",
                 status=TenantSubscriptionInvoice.STATUS_SUCCESS,
+                adjustment_type=TenantSubscriptionInvoice.ADJUSTMENT_DEDUCTION,
+                adjustment_amount=Decimal("10"),
+                adjustment_reason="Loyalty discount",
             )
             dispatch_subscription_invoice(invoice, ["email", "in_app"])
         mock_email_cls.return_value.send.assert_called_once()
         mock_notify.assert_called_once()
         args, kwargs = mock_notify.call_args
         self.assertEqual(kwargs.get("notification_type"), Notification.SUBSCRIPTION_PAYMENT_CONFIRMED)
+        context = mock_render.call_args[0][1]
+        self.assertEqual(context["original_price"], "USD 100.00")
+        self.assertEqual(context["adjustment_type_label"], "Deduction")
+        self.assertEqual(context["adjustment_amount"], "-USD 10.00")
+        self.assertEqual(context["adjustment_reason"], "Loyalty discount")
+        self.assertEqual(context["amount"], "USD 90.00")
+
+
+class SubscriptionInvoicePriceBreakdownTests(PlatformBillingTestBase):
+    def test_breakdown_includes_original_price_and_addition_reason(self):
+        invoice = self._create_invoice(
+            amount=Decimal("125"),
+            base_amount=Decimal("100"),
+            adjustment_type=TenantSubscriptionInvoice.ADJUSTMENT_ADDITION,
+            adjustment_amount=Decimal("25"),
+            adjustment_reason="Pro-rated days",
+        )
+        breakdown = subscription_invoice_price_breakdown(invoice)
+        self.assertEqual(breakdown["original_price"], "USD 100.00")
+        self.assertEqual(breakdown["adjustment_type_label"], "Addition")
+        self.assertEqual(breakdown["adjustment_amount"], "+USD 25.00")
+        self.assertEqual(breakdown["adjustment_reason"], "Pro-rated days")
+        self.assertEqual(breakdown["total"], "USD 125.00")
+
+    def test_breakdown_without_adjustment_uses_amount_as_original_price(self):
+        invoice = self._create_invoice(amount=Decimal("100"), base_amount=None)
+        breakdown = subscription_invoice_price_breakdown(invoice)
+        self.assertEqual(breakdown["original_price"], "USD 100.00")
+        self.assertEqual(breakdown["adjustment_type_label"], "")
+        self.assertEqual(breakdown["total"], "USD 100.00")
+
+    def test_period_label_one_time_payment(self):
+        invoice = self._create_invoice(
+            amount=Decimal("50"),
+            payment_type=TenantSubscriptionInvoice.PAYMENT_TYPE_SETUP_FEE,
+            base_amount=Decimal("50"),
+            period_end=None,
+        )
+        label = subscription_invoice_period_label(invoice)
+        self.assertIn("One-time payment", label)
+        self.assertNotIn("–", label.split("·")[0])
 
 
 class PlatformSubscriptionPaymentsListTests(PlatformBillingTestBase):
@@ -531,6 +766,16 @@ class PlatformSubscriptionPaymentsListTests(PlatformBillingTestBase):
         amounts = [Decimal(row["amount"]) for row in res.data["results"]]
         self.assertEqual(amounts, sorted(amounts, reverse=True))
 
+    def test_stats_follow_active_filters(self):
+        self.client.force_authenticate(user=self.platform_admin)
+        res = self.client.get(
+            "/api/v1/billing/subscription/payments/?status=success",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["count"], res.data["stats"]["successful_payments"])
+        self.assertEqual(res.data["stats"]["pending_payments"], 0)
+
 
 class PlatformSubscriptionPaymentCrudTests(PlatformBillingTestBase):
     def test_patch_manual_invoice(self):
@@ -544,6 +789,47 @@ class PlatformSubscriptionPaymentCrudTests(PlatformBillingTestBase):
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["amount"], "200.00")
+
+    def test_patch_change_payment_type_recalculates_tenant(self):
+        invoice = self._create_invoice(
+            amount=Decimal("100"),
+            payment_type=TenantSubscriptionInvoice.PAYMENT_TYPE_PACKAGE,
+            base_amount=Decimal("100"),
+        )
+        self.client.force_authenticate(user=self.platform_admin)
+        res = self.client.patch(
+            f"/api/v1/billing/subscription/payments/{invoice.id}/",
+            {
+                "payment_type": TenantSubscriptionInvoice.PAYMENT_TYPE_SETUP_FEE,
+                "base_amount": "75.00",
+            },
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["payment_type"], TenantSubscriptionInvoice.PAYMENT_TYPE_SETUP_FEE)
+        self.tenant.refresh_from_db()
+        self.assertEqual(self.tenant.plan, "")
+
+    def test_patch_updates_period_and_adjustment(self):
+        invoice = self._create_invoice(amount=Decimal("100"), base_amount=Decimal("100"))
+        start = timezone.now()
+        end = start + timedelta(days=45)
+        self.client.force_authenticate(user=self.platform_admin)
+        res = self.client.patch(
+            f"/api/v1/billing/subscription/payments/{invoice.id}/",
+            {
+                "period_start": start.isoformat(),
+                "period_end": end.isoformat(),
+                "adjustment_type": TenantSubscriptionInvoice.ADJUSTMENT_ADDITION,
+                "adjustment_amount": "15.00",
+                "adjustment_reason": "Extra support",
+            },
+            format="json",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(res.data["amount"]), Decimal("115.00"))
 
     def test_patch_pending_gateway_restricted(self):
         invoice = self._create_invoice(
@@ -575,7 +861,7 @@ class PlatformSubscriptionPaymentCrudTests(PlatformBillingTestBase):
         invoice = self._create_invoice(tran_id="DEL-MAN-001")
         self.client.force_authenticate(user=self.platform_admin)
         res = self.client.delete(
-            f"/api/v1/billing/subscription/payments/{invoice.id}/",
+            f"/api/v1/billing/subscription/payments/{invoice.id}/?confirm_success_delete=true",
             HTTP_HOST="testserver",
         )
         self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
@@ -622,6 +908,17 @@ class TenantSubscriptionAdminInvoiceTests(PlatformBillingTestBase):
                 tenant=cls.tenant,
                 role="admin",
             )
+
+    def test_tenant_admin_can_list_subscription_invoices(self):
+        invoice = self._create_invoice()
+        self.client.force_authenticate(user=self.tenant_admin)
+        res = self.client.get(
+            "/api/v1/billing/subscription/admin-invoices/",
+            HTTP_HOST="platbill.testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data), 1)
+        self.assertEqual(res.data[0]["id"], invoice.id)
 
     @patch("apps.billing.views._render_subscription_invoice_pdf", return_value=b"%PDF")
     def test_tenant_admin_can_view_subscription_invoice_pdf(self, _pdf):
