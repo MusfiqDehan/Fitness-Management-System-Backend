@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
 
 from apps.membership.models import Discount, DiscountCondition, DiscountUsage
+from utils.coupon_code import validate_coupon_code_format
 
 
 class DiscountConditionSerializer(serializers.ModelSerializer):
@@ -88,9 +90,10 @@ class DiscountSerializer(serializers.ModelSerializer):
         return True
 
     def validate_coupon_code(self, value):
-        if value is None or str(value).strip() == "":
-            return None
-        return str(value).strip().upper()
+        try:
+            return validate_coupon_code_format(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
 
     def validate(self, attrs):
         mode = attrs.get("application_mode", getattr(self.instance, "application_mode", None))
@@ -161,6 +164,12 @@ class DiscountPreviewSerializer(serializers.Serializer):
     selected_addon_names = serializers.ListField(
         child=serializers.CharField(), required=False, allow_null=True
     )
+
+    def validate_coupon_code(self, value):
+        try:
+            return validate_coupon_code_format(value) or ""
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
 
 
 class DiscountUsageSerializer(serializers.ModelSerializer):
