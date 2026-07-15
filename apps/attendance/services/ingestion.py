@@ -66,10 +66,17 @@ class ADMSIngestionService:
             elif event.event_type in {"USERINFO", "FP", "OPERLOG"}:
                 ADMSIngestionService._handle_device_user(device, event)
                 if event.event_type == "FP":
-                    FingerprintEnrollmentService.handle_fingerprint_ingested(
-                        device=device,
-                        device_uid=event.device_uid,
-                    )
+                    try:
+                        FingerprintEnrollmentService.handle_fingerprint_ingested(
+                            device=device,
+                            device_uid=event.device_uid,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "[INGESTION] FP ingest failed SN=%s uid=%s",
+                            device.device_sn,
+                            event.device_uid,
+                        )
 
             handled += 1
             logger.info(
