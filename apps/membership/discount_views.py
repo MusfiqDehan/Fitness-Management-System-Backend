@@ -91,8 +91,18 @@ class PublicValidateCouponAPIView(APIView):
             return Response({"detail": "Too many requests."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         cache.set(cache_key, hits + 1, timeout=60)
 
-        code = str(request.data.get("coupon_code") or "").strip()
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        from utils.coupon_code import validate_coupon_code_format
+
         package_id = request.data.get("package_id")
+        try:
+            code = validate_coupon_code_format(request.data.get("coupon_code"))
+        except DjangoValidationError as exc:
+            return Response(
+                {"valid": False, "detail": "; ".join(exc.messages)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if not code or not package_id:
             return Response(
                 {"valid": False, "detail": "coupon_code and package_id are required."},
