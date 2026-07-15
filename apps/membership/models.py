@@ -485,7 +485,7 @@ class Discount(BaseModel):
     application_mode = models.CharField(
         max_length=16, choices=APPLICATION_MODES, default=MODE_AUTOMATIC
     )
-    coupon_code = models.CharField(max_length=64, blank=True, null=True, db_index=True)
+    coupon_code = models.CharField(max_length=32, blank=True, null=True, db_index=True)
     priority = models.IntegerField(default=100)
     is_stackable = models.BooleanField(default=False)
     stack_group = models.CharField(max_length=64, blank=True, default="")
@@ -526,10 +526,17 @@ class Discount(BaseModel):
     def __str__(self):
         return f"{self.name} ({self.discount_type})"
 
+    def clean(self):
+        from utils.coupon_code import validate_coupon_code_format
+
+        super().clean()
+        self.coupon_code = validate_coupon_code_format(self.coupon_code)
+
     def save(self, *args, **kwargs):
+        from utils.coupon_code import validate_coupon_code_format
+
         if self.coupon_code is not None:
-            code = str(self.coupon_code).strip()
-            self.coupon_code = code.upper() if code else None
+            self.coupon_code = validate_coupon_code_format(self.coupon_code)
         super().save(*args, **kwargs)
 
 
@@ -581,7 +588,7 @@ class DiscountUsage(models.Model):
     payment = models.ForeignKey(
         Payment, on_delete=models.CASCADE, related_name="discount_usages"
     )
-    coupon_code_used = models.CharField(max_length=64, blank=True, default="")
+    coupon_code_used = models.CharField(max_length=32, blank=True, default="")
     amount_saved = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     meta = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
