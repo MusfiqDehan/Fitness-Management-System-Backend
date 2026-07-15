@@ -237,6 +237,9 @@ class EmailOrPhoneTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['tenant_schema'] = connection.schema_name
         tenant = getattr(connection, 'tenant', None)
         token['tenant_name'] = tenant.name if tenant is not None else None
+        from utils.jwt_sessions import embed_token_version
+
+        embed_token_version(token, user)
         return token
 
     def __init__(self, *args, **kwargs):
