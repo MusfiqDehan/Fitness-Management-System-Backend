@@ -23,6 +23,9 @@ from apps.tenancy.models import (
 )
 from apps.membership.models import Member, MemberPackage, Payment
 from apps.billing.models import TenantPaymentGateway, PaymentTransaction
+from django.core.exceptions import ValidationError as DjangoValidationError
+
+from utils.coupon_code import validate_coupon_code_format
 from utils.currency import convert_currency, normalize_currency_code
 
 
@@ -274,6 +277,12 @@ class PaymentSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     coupon_code = serializers.CharField(required=False, allow_blank=True, write_only=True, default="")
+
+    def validate_coupon_code(self, value):
+        try:
+            return validate_coupon_code_format(value) or ""
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
 
     def get_coverage_month_count(self, obj):
         return getattr(obj, "coverage_month_count", len(obj.coverage_months or []))
