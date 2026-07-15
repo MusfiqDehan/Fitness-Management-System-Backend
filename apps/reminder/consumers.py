@@ -64,19 +64,26 @@ class NotificationConsumer(SafeAsyncJsonWebsocketConsumer):
     def _get_user_from_token(self, token_value):
         from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
         from rest_framework_simplejwt.tokens import AccessToken
+        from utils.jwt_revocation import is_access_token_denied
 
         try:
             token = AccessToken(token_value)
+            if is_access_token_denied(token.get("jti")):
+                return None
             user_id = token["user_id"]
         except (TokenError, InvalidToken, KeyError):
             return None
         from django.contrib.auth import get_user_model
+        from utils.jwt_sessions import is_token_version_valid
 
         User = get_user_model()
         try:
-            return User.objects.get(pk=user_id)
+            user = User.objects.get(pk=user_id)
         except User.DoesNotExist:
             return None
+        if not is_token_version_valid(token, user):
+            return None
+        return user
 
     @database_sync_to_async
     def _get_schema_name(self):
