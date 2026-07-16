@@ -95,6 +95,12 @@ def invalidate_gym_profile_cache(sender, **kwargs):
         invalidate_timezone(schema_name)
 
 
+@receiver(post_save, sender="tenancy.PlatformGymProfile")
+def invalidate_platform_gym_profile_cache(sender, **kwargs):
+    schema_name = connection.schema_name or "public"
+    invalidate_public_branding(schema_name)
+
+
 @receiver(post_save, sender="reminder.Notification")
 @receiver(post_delete, sender="reminder.Notification")
 def invalidate_notification_count_on_notification_change(sender, instance, **kwargs):
