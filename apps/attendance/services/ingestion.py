@@ -355,6 +355,7 @@ class ADMSIngestionService:
                 member=member,
                 entry_method=entry_method,
                 device_id=device.device_sn,
+                device_uid=event.device_uid,
             )
             action = "checked_in"
 
