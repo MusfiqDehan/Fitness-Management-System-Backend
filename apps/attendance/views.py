@@ -503,10 +503,15 @@ class FingerprintUnlinkedListAPIView(ListAPIView):
 	serializer_class = DeviceUserSerializer
 	pagination_class = StandardPagination
 	filter_backends = [SearchFilter]
-	search_fields = ["device_uid", "name", "access_device__name"]
+	search_fields = ["device_uid", "name", "access_device__name", "card_number"]
 
 	def get_queryset(self):
-		queryset = DeviceUser.objects.filter(status=DeviceUser.STATUS_UNLINKED).select_related("member", "access_device")
+		queryset = DeviceUser.objects.exclude(status=DeviceUser.STATUS_DELETED).select_related(
+			"member", "access_device"
+		)
+		status_filter = (self.request.query_params.get("status") or "").strip().lower()
+		if status_filter in {DeviceUser.STATUS_UNLINKED, DeviceUser.STATUS_LINKED}:
+			queryset = queryset.filter(status=status_filter)
 		access_device_id = self.request.query_params.get("access_device_id")
 		if access_device_id:
 			queryset = queryset.filter(access_device_id=access_device_id)
@@ -529,9 +534,19 @@ class FingerprintLinkAPIView(APIView):
 			device_user.status = DeviceUser.STATUS_LINKED
 			device_user.save(update_fields=["member", "status", "last_seen_at"])
 
-			# Backward-compatible sync with legacy membership fingerprint identity.
-			member.fingerprint_id = device_user.device_uid
-			member.save(update_fields=["fingerprint_id"])
+			member_updates: list[str] = []
+			card = (device_user.card_number or "").strip()
+			if card and not (member.card_id or "").strip():
+				member.card_id = card
+				member_updates.append("card_id")
+
+			# Card-only identities must not overwrite fingerprint_id.
+			if not card:
+				member.fingerprint_id = device_user.device_uid
+				member_updates.append("fingerprint_id")
+
+			if member_updates:
+				member.save(update_fields=member_updates)
 
 		publish_attendance_event(
 			"fingerprint-linked",
