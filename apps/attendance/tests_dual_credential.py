@@ -71,12 +71,24 @@ class DualCredentialIngestionTests(TestCase):
             )
             att = Attendance.objects.get(member=member)
             self.assertEqual(att.entry_method, "card")
-            att.check_out_time = timezone.now()
-            att.save(update_fields=["check_out_time"])
 
             ADMSIngestionService.process(
                 device,
-                "TABLE=ATTLOG\n1001\t2026-01-11 11:12:30\t0\t1\t0\t0",
+                "TABLE=ATTLOG\n1001\t2026-01-11 10:14:00\t0\t1\t0\t0",
+            )
+            att.refresh_from_db()
+            self.assertIsNotNone(att.check_out_time)
+            self.assertEqual(Attendance.objects.filter(member=member).count(), 1)
+
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n1001\t2026-01-11 18:00:00\t0\t1\t0\t0",
+            )
+            self.assertEqual(Attendance.objects.filter(member=member).count(), 1)
+
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n1001\t2026-01-12 09:00:00\t0\t1\t0\t0",
             )
             att2 = Attendance.objects.filter(member=member, check_out_time__isnull=True).get()
             self.assertEqual(att2.entry_method, "fingerprint")
