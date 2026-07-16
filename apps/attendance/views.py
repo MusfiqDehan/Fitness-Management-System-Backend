@@ -26,6 +26,7 @@ from apps.access.permissions import HasFeatureMethodPermission
 from apps.membership.models import Attendance, Member
 from apps.tenancy.models import AccessDeviceRoute, Tenant
 from utils.pagination import StandardPagination
+from utils.cache_helpers import STATS_TTL, get_cached_value, stats_key, stats_scope_token
 from utils.tenancy_helpers import scope_queryset_by_branch_access
 from .models import AccessDevice, AttendanceIngestEvent, DeviceCredential, DeviceUser, FingerprintEnrollmentSession
 
@@ -48,6 +49,8 @@ from .services.enrollment import (
 )
 from .services.ingestion import ADMSIngestionService
 from .services.realtime import publish_attendance_event
+from .services.session import apply_member_punch
+from .services.stats import AttendanceStatsService
 from .serializers import (
 	AccessDeviceSerializer,
 	AttendanceLogSerializer,
@@ -128,21 +131,31 @@ class AccessCheckAPIView(APIView):
 				status=status.HTTP_403_FORBIDDEN,
 			)
 
-		# If member is already inside, next valid scan closes the session.
-		open_attendance = Attendance.objects.filter(
-			member=member,
-			check_out_time__isnull=True,
-		).first()
-		if open_attendance:
-			open_attendance.check_out_time = timezone.now()
-			open_attendance.save(update_fields=["check_out_time"])
+		entry_method = "card" if card_id else "fingerprint"
+		device_ref = device_id or (access_device.device_sn if access_device else None)
+		action = apply_member_punch(
+			member,
+			entry_method=entry_method,
+			device_id=device_ref,
+		)
+		if not action:
+			return Response(
+				{
+					"access": True,
+					"action": "ignored",
+					"message": "Duplicate scan ignored",
+					"member_name": member.full_name,
+				}
+			)
+
+		if action == "checked_out":
 			publish_attendance_event(
 				"attendance-updated",
 				{
 					"member_id": member.id,
 					"member_name": member.full_name,
 					"action": "checked_out",
-					"device_sn": access_device.device_sn if access_device else device_id,
+					"device_sn": device_ref,
 				},
 			)
 			return Response(
@@ -153,21 +166,6 @@ class AccessCheckAPIView(APIView):
 				}
 			)
 
-		# Keep anti-duplicate tap protection during migration window.
-		last_entry = Attendance.objects.filter(member=member).order_by("-check_in_time").first()
-		if last_entry:
-			time_diff = timezone.now() - last_entry.check_in_time
-			if time_diff < timedelta(seconds=20):
-				return Response(
-					{"access": False, "message": "Duplicate scan detected"},
-					status=status.HTTP_409_CONFLICT,
-				)
-
-		Attendance.objects.create(
-			member=member,
-			entry_method="card" if card_id else "fingerprint",
-			device_id=device_id or (access_device.device_sn if access_device else None),
-		)
 		try:
 			from apps.membership.services.class_attendance import ClassAttendanceService
 			ClassAttendanceService.try_match_member_check_in(member, timezone.now())
@@ -179,7 +177,7 @@ class AccessCheckAPIView(APIView):
 				"member_id": member.id,
 				"member_name": member.full_name,
 				"action": "checked_in",
-				"device_sn": access_device.device_sn if access_device else device_id,
+				"device_sn": device_ref,
 			},
 		)
 		return Response(
@@ -430,6 +428,41 @@ class AttendanceLogListAPIView(ListAPIView):
 			queryset = queryset.filter(check_out_time__isnull=False)
 
 		return queryset
+
+
+class AttendanceStatsAPIView(APIView):
+	feature_keys = ["members.attendance", "attendance.access_gate"]
+	permission_classes = [HasFeatureMethodPermission]
+
+	def get(self, request):
+		branch_filter = request.query_params.get("branch")
+		device_sn = (request.query_params.get("device_sn") or "").strip() or None
+		hourly_range = (request.query_params.get("hourly_range") or "today").strip().lower()
+		heatmap_range = (request.query_params.get("heatmap_range") or "this_year").strip().lower()
+		streak_range = (request.query_params.get("streak_range") or "this_year").strip().lower()
+
+		schema_name = connection.schema_name
+		scope = stats_scope_token(request.user, branch_filter)
+		cache_scope = (
+			f"{scope}:d={device_sn or ''}:h={hourly_range}:m={heatmap_range}:s={streak_range}"
+		)
+
+		def load():
+			return AttendanceStatsService.build_payload(
+				request.user,
+				branch_filter_id=branch_filter,
+				device_sn=device_sn,
+				hourly_range=hourly_range,
+				heatmap_range=heatmap_range,
+				streak_range=streak_range,
+			)
+
+		payload = get_cached_value(
+			stats_key(schema_name, "attendance_stats", cache_scope),
+			STATS_TTL,
+			load,
+		)
+		return Response(payload)
 
 
 class MemberAttendanceLogListAPIView(ListAPIView):
