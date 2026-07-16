@@ -218,6 +218,11 @@ class AttendanceApiFlowTests(TestCase):
 			self.assertEqual(response_in.status_code, status.HTTP_200_OK)
 			self.assertEqual(response_in.data["action"], "checked_in")
 
+			attendance = Attendance.objects.get(member=member)
+			Attendance.objects.filter(id=attendance.id).update(
+				check_in_time=timezone.now() - timedelta(seconds=61),
+			)
+
 			request_out = self.factory.post(
 				"/api/v1/attendance/access/check/",
 				{"card_id": "CARD-101", "device_sn": "ZKT-F18-API"},
