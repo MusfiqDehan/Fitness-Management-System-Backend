@@ -168,6 +168,27 @@ class FingerprintLinkSerializer(serializers.Serializer):
         attrs["member"] = Member.objects.filter(id=attrs["member_id"]).first()
         if not attrs["member"]:
             raise serializers.ValidationError({"member_id": "Member not found."})
+
+        device_user = attrs["device_user"]
+        member = attrs["member"]
+        existing = (
+            DeviceUser.objects.filter(
+                access_device=device_user.access_device,
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            .exclude(id=device_user.id)
+            .first()
+        )
+        if existing:
+            raise serializers.ValidationError(
+                {
+                    "member_id": (
+                        f"{member.full_name} is already linked to PIN {existing.device_uid} "
+                        f"on {device_user.access_device.name}. Unlink that PIN first."
+                    )
+                }
+            )
         return attrs
 
 
@@ -252,4 +273,5 @@ class AttendanceLogSerializer(serializers.ModelSerializer):
             "total_staying_time",
             "entry_method",
             "device_id",
+            "device_uid",
         )
