@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
 	AccessCheckAPIView,
 	AttendanceLogListAPIView,
+	AttendanceStatsAPIView,
 	BiometricDeviceProfileListAPIView,
 	CardProvisionAPIView,
 	DeviceActivateAPIView,
@@ -33,6 +34,7 @@ urlpatterns = [
 	path('access/members-inside/', MembersInsideAPIView.as_view(), name='access-members-inside'),
 	path('logs/my/', MemberAttendanceLogListAPIView.as_view(), name='logs-my-list'),
 	path('logs/', AttendanceLogListAPIView.as_view(), name='logs-list'),
+	path('stats/', AttendanceStatsAPIView.as_view(), name='stats'),
 	path('fingerprints/unlinked/', FingerprintUnlinkedListAPIView.as_view(), name='fingerprints-unlinked'),
 	path('fingerprints/link/', FingerprintLinkAPIView.as_view(), name='fingerprints-link'),
 	path('fingerprints/unlink/', FingerprintUnlinkAPIView.as_view(), name='fingerprints-unlink'),
