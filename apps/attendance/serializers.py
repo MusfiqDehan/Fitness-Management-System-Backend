@@ -116,9 +116,26 @@ class DeviceCredentialRotateSerializer(serializers.Serializer):
     secret = serializers.CharField(max_length=1024, write_only=True)
 
 
+def credential_types_for(device_user: DeviceUser) -> list[str]:
+    """Return credential labels for a device PIN slot: card, fingerprint, or both."""
+    types: list[str] = []
+    card = (getattr(device_user, "card_number", None) or "").strip()
+    if card:
+        types.append("card")
+
+    member = getattr(device_user, "member", None)
+    fingerprint_match = bool(
+        member is not None and (member.fingerprint_id or "") == device_user.device_uid
+    )
+    if not card or fingerprint_match:
+        types.append("fingerprint")
+    return types
+
+
 class DeviceUserSerializer(serializers.ModelSerializer):
     member_name = serializers.CharField(source="member.full_name", read_only=True)
     access_device_name = serializers.CharField(source="access_device.name", read_only=True)
+    credential_types = serializers.SerializerMethodField()
 
     class Meta:
         model = DeviceUser
@@ -131,11 +148,15 @@ class DeviceUserSerializer(serializers.ModelSerializer):
             "device_uid",
             "name",
             "card_number",
+            "credential_types",
             "status",
             "last_seen_at",
             "created_at",
         )
-        read_only_fields = ("last_seen_at", "created_at")
+        read_only_fields = ("last_seen_at", "created_at", "credential_types")
+
+    def get_credential_types(self, obj: DeviceUser) -> list[str]:
+        return credential_types_for(obj)
 
 
 class CardProvisionSerializer(serializers.Serializer):
