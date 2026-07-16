@@ -102,6 +102,59 @@ class ApplyMemberPunchTests(TestCase):
                     device_id="SN-1",
                     at=base + (DUPLICATE_PUNCH_WINDOW * 2) + timedelta(seconds=10),
                 ),
-                "checked_in",
+                None,
             )
+            self.assertEqual(Attendance.objects.filter(member=member).count(), 1)
+
+    def test_allows_new_check_in_on_next_day(self):
+        with schema_context(self.tenant.schema_name):
+            member = Member.objects.create(
+                full_name="Next Day Member",
+                phone_number="01700002004",
+                start_date=timezone.now().date(),
+            )
+            day_one = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0)
+            day_two = day_one + timedelta(days=1)
+
+            apply_member_punch(member, entry_method="fingerprint", device_id="SN-1", at=day_one)
+            apply_member_punch(
+                member,
+                entry_method="fingerprint",
+                device_id="SN-1",
+                at=day_one + DUPLICATE_PUNCH_WINDOW + timedelta(seconds=5),
+            )
+            action = apply_member_punch(
+                member,
+                entry_method="card",
+                device_id="SN-1",
+                at=day_two,
+            )
+
+            self.assertEqual(action, "checked_in")
             self.assertEqual(Attendance.objects.filter(member=member).count(), 2)
+
+    def test_ignores_check_in_when_daily_session_already_completed(self):
+        with schema_context(self.tenant.schema_name):
+            member = Member.objects.create(
+                full_name="Completed Day Member",
+                phone_number="01700002005",
+                start_date=timezone.now().date(),
+            )
+            base = timezone.now().replace(microsecond=0)
+
+            apply_member_punch(member, entry_method="fingerprint", device_id="SN-1", at=base)
+            apply_member_punch(
+                member,
+                entry_method="card",
+                device_id="SN-1",
+                at=base + DUPLICATE_PUNCH_WINDOW + timedelta(seconds=5),
+            )
+            extra = apply_member_punch(
+                member,
+                entry_method="fingerprint",
+                device_id="SN-1",
+                at=base + timedelta(hours=4),
+            )
+
+            self.assertIsNone(extra)
+            self.assertEqual(Attendance.objects.filter(member=member).count(), 1)
