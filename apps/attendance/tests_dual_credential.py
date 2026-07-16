@@ -3,6 +3,7 @@ from django.utils import timezone
 from django_tenants.utils import schema_context
 
 from apps.attendance.models import AccessDevice, DeviceUser
+from apps.attendance.serializers import FingerprintLinkSerializer
 from apps.attendance.services.card_provision import CardProvisionService
 from apps.attendance.services.enrollment import FingerprintEnrollmentService
 from apps.attendance.services.ingestion import ADMSIngestionService
@@ -155,6 +156,89 @@ class DualCredentialIngestionTests(TestCase):
             member.refresh_from_db()
             self.assertEqual(updated.status, "completed")
             self.assertEqual(member.fingerprint_id, session.device_uid)
+
+    def test_different_device_pins_resolve_to_different_members(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Gate",
+                device_sn="ZKT-MULTI-1",
+                device_profile="zkteco",
+                device_model="F18",
+                mode=AccessDevice.MODE_TCP_RELAY,
+            )
+            member_a = Member.objects.create(
+                full_name="Jubayer",
+                phone_number="01700001001",
+                start_date=timezone.now().date(),
+            )
+            member_b = Member.objects.create(
+                full_name="Baizid",
+                phone_number="01700001002",
+                start_date=timezone.now().date(),
+            )
+            DeviceUser.objects.create(
+                access_device=device,
+                device_uid="1",
+                member=member_a,
+                status=DeviceUser.STATUS_LINKED,
+                name="Jubayer",
+            )
+            DeviceUser.objects.create(
+                access_device=device,
+                device_uid="5",
+                member=member_b,
+                status=DeviceUser.STATUS_LINKED,
+                name="Baizid",
+            )
+
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n1\t2026-01-11 10:00:00\t0\t1\t0\t0",
+            )
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n5\t2026-01-11 10:05:00\t0\t1\t0\t0",
+            )
+
+            logs = list(Attendance.objects.order_by("check_in_time"))
+            self.assertEqual(len(logs), 2)
+            self.assertEqual(logs[0].member_id, member_a.id)
+            self.assertEqual(logs[0].device_uid, "1")
+            self.assertEqual(logs[1].member_id, member_b.id)
+            self.assertEqual(logs[1].device_uid, "5")
+
+    def test_fingerprint_link_rejects_second_pin_for_same_member_on_device(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Gate",
+                device_sn="ZKT-LINK-1",
+                device_profile="zkteco",
+                device_model="F18",
+            )
+            member = Member.objects.create(
+                full_name="Musfiq",
+                phone_number="01700001003",
+                start_date=timezone.now().date(),
+            )
+            linked = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="2",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            unlinked = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="3",
+                status=DeviceUser.STATUS_UNLINKED,
+            )
+
+            serializer = FingerprintLinkSerializer(
+                data={"device_user_id": unlinked.id, "member_id": member.id},
+            )
+            self.assertFalse(serializer.is_valid())
+            self.assertIn("member_id", serializer.errors)
+            linked.refresh_from_db()
+            self.assertEqual(linked.member_id, member.id)
 
     def test_card_provision_queues_userinfo(self):
         with schema_context(self.tenant.schema_name):
