@@ -252,6 +252,7 @@ class Attendance(BaseModel):
     check_out_time = models.DateTimeField(blank=True, null=True)
     entry_method = models.CharField(max_length=20, choices=ENTRY_METHOD)
     device_id = models.CharField(max_length=100, blank=True, null=True)
+    device_uid = models.CharField(max_length=64, blank=True, default="")
 
     class Meta:
         ordering = ['-check_in_time']
