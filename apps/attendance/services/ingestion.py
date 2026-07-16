@@ -13,6 +13,7 @@ from apps.membership.models import Attendance, Member
 from apps.attendance.models import AccessDevice, AttendanceIngestEvent, DeviceUser
 from apps.attendance.services.enrollment import FingerprintEnrollmentService
 from apps.attendance.services.realtime import publish_attendance_event
+from apps.attendance.services.session import apply_member_punch
 
 logger = logging.getLogger(__name__)
 
@@ -345,19 +346,15 @@ class ADMSIngestionService:
             publish_attendance_event("unlinked-fingerprint-scanned", payload)
             return
 
-        open_attendance = Attendance.objects.filter(member=member, check_out_time__isnull=True).first()
-        if open_attendance:
-            open_attendance.check_out_time = timezone.now()
-            open_attendance.save(update_fields=["check_out_time"])
-            action = "checked_out"
-        else:
-            Attendance.objects.create(
-                member=member,
-                entry_method=entry_method,
-                device_id=device.device_sn,
-                device_uid=event.device_uid,
-            )
-            action = "checked_in"
+        action = apply_member_punch(
+            member,
+            entry_method=entry_method,
+            device_id=device.device_sn,
+            device_uid=event.device_uid,
+            at=event.event_time or timezone.now(),
+        )
+        if not action:
+            return
 
         publish_attendance_event(
             "attendance-updated",
