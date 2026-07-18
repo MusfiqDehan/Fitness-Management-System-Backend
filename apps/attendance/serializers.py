@@ -132,6 +132,46 @@ def credential_types_for(device_user: DeviceUser) -> list[str]:
     return types
 
 
+def linked_device_users_for(member: Member) -> list[DeviceUser]:
+    """Return linked DeviceUsers for a member, preferring a Prefetch cache when present."""
+    cache = getattr(member, "_prefetched_objects_cache", None)
+    if cache is not None and "attendance_device_users" in cache:
+        return list(cache["attendance_device_users"])
+    return list(
+        member.attendance_device_users.filter(status=DeviceUser.STATUS_LINKED).order_by(
+            "device_uid", "id"
+        )
+    )
+
+
+def member_device_uids(member: Member) -> list[str]:
+    """Distinct device UIDs from linked DeviceUsers (stable order)."""
+    uids: list[str] = []
+    seen: set[str] = set()
+    for device_user in linked_device_users_for(member):
+        uid = (device_user.device_uid or "").strip()
+        if uid and uid not in seen:
+            seen.add(uid)
+            uids.append(uid)
+    return uids
+
+
+def member_credential_linked(member: Member) -> str:
+    """Aggregate linked DeviceUser credential types into none|card|fingerprint|both."""
+    types: set[str] = set()
+    for device_user in linked_device_users_for(member):
+        types.update(credential_types_for(device_user))
+    has_card = "card" in types
+    has_fingerprint = "fingerprint" in types
+    if has_card and has_fingerprint:
+        return "both"
+    if has_card:
+        return "card"
+    if has_fingerprint:
+        return "fingerprint"
+    return "none"
+
+
 class DeviceUserSerializer(serializers.ModelSerializer):
     member_name = serializers.CharField(source="member.full_name", read_only=True)
     access_device_name = serializers.CharField(source="access_device.name", read_only=True)
