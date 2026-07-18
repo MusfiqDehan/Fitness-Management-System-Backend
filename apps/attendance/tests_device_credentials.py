@@ -16,6 +16,7 @@ from apps.attendance.views import (
     FingerprintUnlinkAPIView,
     FingerprintUnlinkedListAPIView,
 )
+from apps.membership.filters import MemberFilter
 from apps.membership.models import Member
 from apps.membership.serializers import MemberSerializer
 from apps.tenancy.models import Domain, Feature, Tenant, TenantFeatureFlag
@@ -401,3 +402,101 @@ class DeviceCredentialListAndLinkTests(TestCase):
             data = MemberSerializer(member).data
             self.assertEqual(data["credential_linked"], "none")
             self.assertEqual(data["device_uids"], [])
+
+    def test_member_filter_gender_excludes_blank(self):
+        with schema_context(self.tenant.schema_name):
+            male = Member.objects.create(
+                full_name="Male Member",
+                phone_number="01700004001",
+                gender="male",
+                start_date=timezone.now().date(),
+            )
+            Member.objects.create(
+                full_name="Blank Gender",
+                phone_number="01700004002",
+                gender=None,
+                start_date=timezone.now().date(),
+            )
+            female = Member.objects.create(
+                full_name="Female Member",
+                phone_number="01700004003",
+                gender="female",
+                start_date=timezone.now().date(),
+            )
+
+            filtered = MemberFilter({"gender": "male"}, queryset=Member.objects.all()).qs
+            ids = set(filtered.values_list("id", flat=True))
+            self.assertIn(male.id, ids)
+            self.assertNotIn(female.id, ids)
+            self.assertEqual(len(ids & set(Member.objects.filter(gender__isnull=True).values_list("id", flat=True))), 0)
+
+            all_ids = set(MemberFilter({}, queryset=Member.objects.all()).qs.values_list("id", flat=True))
+            self.assertIn(male.id, all_ids)
+            self.assertIn(female.id, all_ids)
+            self.assertTrue(Member.objects.filter(gender__isnull=True, id__in=all_ids).exists())
+
+    def test_member_filter_credential_linked_values(self):
+        with schema_context(self.tenant.schema_name):
+            none_member = Member.objects.create(
+                full_name="None Creds",
+                phone_number="01700004010",
+                start_date=timezone.now().date(),
+            )
+            card_member = Member.objects.create(
+                full_name="Card Creds",
+                phone_number="01700004011",
+                start_date=timezone.now().date(),
+            )
+            fp_member = Member.objects.create(
+                full_name="FP Creds",
+                phone_number="01700004012",
+                fingerprint_id="91",
+                start_date=timezone.now().date(),
+            )
+            both_member = Member.objects.create(
+                full_name="Both Creds",
+                phone_number="01700004013",
+                fingerprint_id="92",
+                start_date=timezone.now().date(),
+            )
+
+            DeviceUser.objects.create(
+                access_device=self.device,
+                device_uid="90",
+                card_number="FILTER-CARD",
+                member=card_member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            DeviceUser.objects.create(
+                access_device=self.device,
+                device_uid="91",
+                card_number="",
+                member=fp_member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            DeviceUser.objects.create(
+                access_device=self.device,
+                device_uid="92",
+                card_number="FILTER-BOTH",
+                member=both_member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+
+            def ids_for(value: str) -> set[int]:
+                return set(
+                    MemberFilter({"credential_linked": value}, queryset=Member.objects.all()).qs.values_list(
+                        "id", flat=True
+                    )
+                )
+
+            self.assertIn(none_member.id, ids_for("none"))
+            self.assertNotIn(card_member.id, ids_for("none"))
+
+            self.assertIn(card_member.id, ids_for("card"))
+            self.assertNotIn(both_member.id, ids_for("card"))
+
+            self.assertIn(fp_member.id, ids_for("fingerprint"))
+            self.assertNotIn(card_member.id, ids_for("fingerprint"))
+
+            self.assertIn(both_member.id, ids_for("both"))
+            self.assertNotIn(fp_member.id, ids_for("both"))
