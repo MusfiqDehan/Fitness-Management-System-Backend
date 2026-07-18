@@ -304,6 +304,8 @@ class MemberSerializer(serializers.ModelSerializer):
     invitation_pending = serializers.SerializerMethodField()
     invitation_sent_at = serializers.DateTimeField(read_only=True)
     invitation_expires_at = serializers.DateTimeField(read_only=True)
+    credential_linked = serializers.SerializerMethodField()
+    device_uids = serializers.SerializerMethodField()
 
     class Meta:
         model = Member
@@ -313,6 +315,7 @@ class MemberSerializer(serializers.ModelSerializer):
             'member_package', 'member_package_id',
             'start_date', 'end_date', 'remaining_days', 'duration', 'duration_years', 'age', 'age_years',
             'card_id', 'fingerprint_id',
+            'credential_linked', 'device_uids',
             'emergency_contact_name', 'emergency_contact_phone',
             'relationship_with_member', 'notes',
             'payment_method', 'payment_status', 'photo',
@@ -327,6 +330,8 @@ class MemberSerializer(serializers.ModelSerializer):
             'remaining_days',
             'invitation_sent_at',
             'invitation_expires_at',
+            'credential_linked',
+            'device_uids',
         ]
 
     def get_duration(self, obj):
@@ -343,6 +348,16 @@ class MemberSerializer(serializers.ModelSerializer):
 
     def get_invitation_pending(self, obj):
         return bool(obj.invitation_token)
+
+    def get_credential_linked(self, obj):
+        from apps.attendance.serializers import member_credential_linked
+
+        return member_credential_linked(obj)
+
+    def get_device_uids(self, obj):
+        from apps.attendance.serializers import member_device_uids
+
+        return member_device_uids(obj)
 
     @staticmethod
     def _default_end_date(*, membership_type, member_package, start_date):
