@@ -5,9 +5,19 @@ from rest_framework import status
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.attendance.models import AccessDevice, DeviceUser
-from apps.attendance.serializers import DeviceUserSerializer, credential_types_for
-from apps.attendance.views import FingerprintLinkAPIView, FingerprintUnlinkedListAPIView
+from apps.attendance.serializers import (
+    DeviceUserSerializer,
+    credential_types_for,
+    member_credential_linked,
+    member_device_uids,
+)
+from apps.attendance.views import (
+    FingerprintLinkAPIView,
+    FingerprintUnlinkAPIView,
+    FingerprintUnlinkedListAPIView,
+)
 from apps.membership.models import Member
+from apps.membership.serializers import MemberSerializer
 from apps.tenancy.models import Domain, Feature, Tenant, TenantFeatureFlag
 from django.contrib.auth import get_user_model
 
@@ -251,3 +261,143 @@ class DeviceCredentialListAndLinkTests(TestCase):
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             member.refresh_from_db()
             self.assertEqual(member.fingerprint_id, "50")
+
+    def test_fingerprint_link_does_not_overwrite_existing_fingerprint_id(self):
+        with schema_context(self.tenant.schema_name):
+            member = Member.objects.create(
+                full_name="Keep FP",
+                phone_number="01700003005",
+                fingerprint_id="KEEP-FP",
+                start_date=timezone.now().date(),
+            )
+            device_user = DeviceUser.objects.create(
+                access_device=self.device,
+                device_uid="51",
+                card_number="",
+                status=DeviceUser.STATUS_UNLINKED,
+            )
+
+            request = self.factory.post(
+                "/api/v1/attendance/fingerprints/link/",
+                {"device_user_id": device_user.id, "member_id": member.id},
+                format="json",
+            )
+            force_authenticate(request, user=self.admin)
+            response = FingerprintLinkAPIView.as_view()(request)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            member.refresh_from_db()
+            self.assertEqual(member.fingerprint_id, "KEEP-FP")
+
+    def test_unlink_clears_matching_card_and_fingerprint(self):
+        with schema_context(self.tenant.schema_name):
+            member = Member.objects.create(
+                full_name="Unlink Me",
+                phone_number="01700003006",
+                card_id="CARD-X",
+                fingerprint_id="60",
+                start_date=timezone.now().date(),
+            )
+            device_user = DeviceUser.objects.create(
+                access_device=self.device,
+                device_uid="60",
+                card_number="CARD-X",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+
+            request = self.factory.post(
+                "/api/v1/attendance/fingerprints/unlink/",
+                {"device_user_id": device_user.id},
+                format="json",
+            )
+            force_authenticate(request, user=self.admin)
+            response = FingerprintUnlinkAPIView.as_view()(request)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            member.refresh_from_db()
+            device_user.refresh_from_db()
+            self.assertEqual(device_user.status, DeviceUser.STATUS_UNLINKED)
+            self.assertIsNone(member.card_id)
+            self.assertIsNone(member.fingerprint_id)
+
+    def test_unlink_keeps_card_when_another_linked_device_has_same_card(self):
+        with schema_context(self.tenant.schema_name):
+            other_device = AccessDevice.objects.create(
+                name="Gate B",
+                device_sn="SN-GATE-B",
+                mode=AccessDevice.MODE_ADMS,
+                is_active=True,
+            )
+            member = Member.objects.create(
+                full_name="Multi Device",
+                phone_number="01700003007",
+                card_id="SHARED-CARD",
+                start_date=timezone.now().date(),
+            )
+            first = DeviceUser.objects.create(
+                access_device=self.device,
+                device_uid="70",
+                card_number="SHARED-CARD",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            DeviceUser.objects.create(
+                access_device=other_device,
+                device_uid="71",
+                card_number="SHARED-CARD",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+
+            request = self.factory.post(
+                "/api/v1/attendance/fingerprints/unlink/",
+                {"device_user_id": first.id},
+                format="json",
+            )
+            force_authenticate(request, user=self.admin)
+            response = FingerprintUnlinkAPIView.as_view()(request)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            member.refresh_from_db()
+            self.assertEqual(member.card_id, "SHARED-CARD")
+
+    def test_member_serializer_credential_linked_and_device_uids(self):
+        with schema_context(self.tenant.schema_name):
+            member = Member.objects.create(
+                full_name="Agg Member",
+                phone_number="01700003008",
+                fingerprint_id="80",
+                start_date=timezone.now().date(),
+            )
+            DeviceUser.objects.create(
+                access_device=self.device,
+                device_uid="80",
+                card_number="AGG-CARD",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            DeviceUser.objects.create(
+                access_device=self.device,
+                device_uid="81",
+                card_number="",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+
+            self.assertEqual(member_credential_linked(member), "both")
+            self.assertEqual(member_device_uids(member), ["80", "81"])
+            data = MemberSerializer(member).data
+            self.assertEqual(data["credential_linked"], "both")
+            self.assertEqual(data["device_uids"], ["80", "81"])
+
+    def test_member_serializer_none_when_unlinked(self):
+        with schema_context(self.tenant.schema_name):
+            member = Member.objects.create(
+                full_name="No Link",
+                phone_number="01700003009",
+                start_date=timezone.now().date(),
+            )
+            data = MemberSerializer(member).data
+            self.assertEqual(data["credential_linked"], "none")
+            self.assertEqual(data["device_uids"], [])
