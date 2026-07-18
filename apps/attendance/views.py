@@ -9,6 +9,7 @@ from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import connection
 from django.db import transaction
+from django.db.models import Max
 from django.http import HttpResponse as PlainTextResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -61,6 +62,7 @@ from .serializers import (
 	FingerprintUnlinkSerializer,
 	FingerprintEnrollmentStartSerializer,
 	FingerprintEnrollmentSessionSerializer,
+	member_credential_linked,
 )
 
 
@@ -494,6 +496,47 @@ class MemberAttendanceLogListAPIView(ListAPIView):
 			queryset,
 			self.request.query_params,
 			default_mode="month",
+		)
+
+
+class MemberCredentialsAPIView(APIView):
+	"""Return the authenticated member's linked credentials and last-use timestamps."""
+
+	permission_classes = [IsAuthenticated]
+
+	_EMPTY = {
+		"credential_linked": "none",
+		"last_used_at": None,
+		"last_entry_method": None,
+		"last_fingerprint_used_at": None,
+		"last_card_used_at": None,
+	}
+
+	def get(self, request):
+		try:
+			member = request.user.member
+		except ObjectDoesNotExist:
+			return Response(self._EMPTY)
+
+		logs = Attendance.objects.filter(member=member)
+		last_fingerprint = logs.filter(entry_method="fingerprint").aggregate(
+			value=Max("check_in_time")
+		)["value"]
+		last_card = logs.filter(entry_method="card").aggregate(value=Max("check_in_time"))["value"]
+		latest = (
+			logs.order_by("-check_in_time")
+			.values("check_in_time", "entry_method")
+			.first()
+		)
+
+		return Response(
+			{
+				"credential_linked": member_credential_linked(member),
+				"last_used_at": latest["check_in_time"] if latest else None,
+				"last_entry_method": latest["entry_method"] if latest else None,
+				"last_fingerprint_used_at": last_fingerprint,
+				"last_card_used_at": last_card,
+			}
 		)
 
 
