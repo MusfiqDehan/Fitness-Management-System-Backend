@@ -17,8 +17,11 @@ from apps.attendance.services.session import apply_member_punch
 
 logger = logging.getLogger(__name__)
 
+# ZKTeco verify-type → Attendance.entry_method. Unknown codes default to fingerprint.
 VERIFY_TO_ENTRY_METHOD = {
+    1: "fingerprint",
     2: "card",
+    3: "card",  # password + card
 }
 
 
