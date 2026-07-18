@@ -11,7 +11,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.filters import SearchFilter, OrderingFilter
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.db import connection, transaction
 from django.utils import timezone
 from django.core.mail import EmailMultiAlternatives
@@ -508,8 +508,18 @@ class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
     ordering = ['id']
 
     def get_queryset(self):
+        from apps.attendance.models import DeviceUser
+
         queryset = super().get_queryset()
-        return self.scope_branch_queryset(queryset)
+        queryset = self.scope_branch_queryset(queryset)
+        return queryset.prefetch_related(
+            Prefetch(
+                'attendance_device_users',
+                queryset=DeviceUser.objects.filter(status=DeviceUser.STATUS_LINKED).order_by(
+                    'device_uid', 'id'
+                ),
+            )
+        )
 
     def _create(self, request):
         payload = request.data.copy()
