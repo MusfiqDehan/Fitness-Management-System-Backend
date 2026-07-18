@@ -540,8 +540,9 @@ class FingerprintLinkAPIView(APIView):
 				member.card_id = card
 				member_updates.append("card_id")
 
-			# Card-only identities must not overwrite fingerprint_id.
-			if not card:
+			# Fingerprint-only identities fill empty fingerprint_id (never overwrite).
+			# Card-only slots must not set fingerprint_id.
+			if not card and not (member.fingerprint_id or "").strip():
 				member.fingerprint_id = device_user.device_uid
 				member_updates.append("fingerprint_id")
 
@@ -570,15 +571,34 @@ class FingerprintUnlinkAPIView(APIView):
 		serializer.is_valid(raise_exception=True)
 		device_user = get_object_or_404(DeviceUser, id=serializer.validated_data["device_user_id"])
 		member = device_user.member
+		card = (device_user.card_number or "").strip()
+		device_uid = device_user.device_uid
 
 		with transaction.atomic():
+			remaining = (
+				DeviceUser.objects.filter(member=member, status=DeviceUser.STATUS_LINKED).exclude(
+					pk=device_user.pk
+				)
+				if member
+				else DeviceUser.objects.none()
+			)
+
 			device_user.member = None
 			device_user.status = DeviceUser.STATUS_UNLINKED
 			device_user.save(update_fields=["member", "status", "last_seen_at"])
 
-			if member and member.fingerprint_id == device_user.device_uid:
-				member.fingerprint_id = None
-				member.save(update_fields=["fingerprint_id"])
+			if member:
+				member_updates: list[str] = []
+				if card and (member.card_id or "").strip() == card:
+					if not remaining.filter(card_number=card).exists():
+						member.card_id = None
+						member_updates.append("card_id")
+				if (member.fingerprint_id or "").strip() == device_uid:
+					if not remaining.filter(device_uid=device_uid).exists():
+						member.fingerprint_id = None
+						member_updates.append("fingerprint_id")
+				if member_updates:
+					member.save(update_fields=member_updates)
 
 		publish_attendance_event(
 			"fingerprint-unlinked",
