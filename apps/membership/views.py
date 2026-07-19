@@ -515,7 +515,9 @@ class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
         return queryset.prefetch_related(
             Prefetch(
                 'attendance_device_users',
-                queryset=DeviceUser.objects.filter(status=DeviceUser.STATUS_LINKED).order_by(
+                queryset=DeviceUser.objects.filter(
+                    status__in=[DeviceUser.STATUS_LINKED, DeviceUser.STATUS_PENDING_DELETE]
+                ).order_by(
                     'device_uid', 'id'
                 ),
             )
