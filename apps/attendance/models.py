@@ -102,10 +102,12 @@ class DeviceCredential(models.Model):
 class DeviceUser(models.Model):
 	STATUS_UNLINKED = "unlinked"
 	STATUS_LINKED = "linked"
+	STATUS_PENDING_DELETE = "pending_delete"
 	STATUS_DELETED = "deleted"
 	STATUS_CHOICES = (
 		(STATUS_UNLINKED, "Unlinked"),
 		(STATUS_LINKED, "Linked"),
+		(STATUS_PENDING_DELETE, "Pending delete"),
 		(STATUS_DELETED, "Deleted"),
 	)
 
