@@ -70,6 +70,11 @@ def build_userinfo_command(
     return profile.build_userinfo_command(pin=pin, name=name, card=card)
 
 
+def build_delete_userinfo_command(pin: str) -> str:
+    """ADMS command to remove a user/PIN (fingerprint templates + card) from the device."""
+    return f"DATA DELETE USERINFO PIN={pin}"
+
+
 def build_remote_enroll_command(
     profile: BiometricDeviceProfile,
     *,
