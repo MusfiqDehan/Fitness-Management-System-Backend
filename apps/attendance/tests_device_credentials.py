@@ -12,6 +12,7 @@ from apps.attendance.serializers import (
     member_device_uids,
 )
 from apps.attendance.services.adms_commands import build_delete_userinfo_command
+from apps.attendance.services.device_user_delete import DeviceUserDeleteService
 from apps.attendance.views import (
     FingerprintDeleteAPIView,
     FingerprintLinkAPIView,
@@ -531,7 +532,7 @@ class DeviceCredentialListAndLinkTests(TestCase):
             self.assertIn("200", uids)
             self.assertNotIn("201", uids)
 
-    def test_delete_queues_command_for_adms_and_clears_member(self):
+    def test_delete_queues_pending_without_removing_from_list(self):
         with schema_context(self.tenant.schema_name):
             device = AccessDevice.objects.create(
                 name="ADMS Gate",
@@ -563,23 +564,115 @@ class DeviceCredentialListAndLinkTests(TestCase):
             response = FingerprintDeleteAPIView.as_view()(request)
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.data["status"], DeviceUser.STATUS_PENDING_DELETE)
             device_user.refresh_from_db()
             member.refresh_from_db()
             device.refresh_from_db()
+            self.assertEqual(device_user.status, DeviceUser.STATUS_PENDING_DELETE)
+            self.assertEqual(device_user.member_id, member.id)
+            self.assertEqual(member.card_id, "DEL-CARD")
+            self.assertEqual(member.fingerprint_id, "300")
+            self.assertEqual(member_credential_linked(member), "both")
+            self.assertEqual(member_device_uids(member), ["300"])
+            pending = device.meta_json.get("pending_commands") or []
+            self.assertTrue(
+                any(
+                    "DELETE USERINFO" in (c.get("cmd") or "")
+                    and "PIN=300" in (c.get("cmd") or "")
+                    and c.get("action") == "delete_user"
+                    for c in pending
+                )
+            )
+
+            list_request = self.factory.get("/api/v1/attendance/fingerprints/unlinked/")
+            force_authenticate(list_request, user=self.admin)
+            list_response = FingerprintUnlinkedListAPIView.as_view()(list_request)
+            listed_ids = {row["id"] for row in list_response.data["results"]}
+            self.assertIn(device_user.id, listed_ids)
+
+    def test_delete_ack_success_removes_from_fitssort(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="ADMS Gate",
+                device_sn="DEVCRED-DEL-ACK-OK",
+                mode=AccessDevice.MODE_ADMS,
+                is_active=True,
+            )
+            member = Member.objects.create(
+                full_name="Ack Delete",
+                phone_number="01700005011",
+                card_id="ACK-CARD",
+                fingerprint_id="310",
+                start_date=timezone.now().date(),
+            )
+            device_user = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="310",
+                card_number="ACK-CARD",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            queued = DeviceUserDeleteService.queue_delete(device_user=device_user, device=device)
+            cmd_id = str(queued[0]["id"])
+
+            updated = DeviceUserDeleteService.handle_command_ack(
+                device=device,
+                command_id=cmd_id,
+                return_code=0,
+            )
+
+            self.assertIsNotNone(updated)
+            device_user.refresh_from_db()
+            member.refresh_from_db()
             self.assertEqual(device_user.status, DeviceUser.STATUS_DELETED)
             self.assertIsNone(device_user.member_id)
             self.assertIsNone(member.card_id)
             self.assertIsNone(member.fingerprint_id)
             self.assertEqual(member_credential_linked(member), "none")
             self.assertEqual(member_device_uids(member), [])
-            pending = device.meta_json.get("pending_commands") or []
-            self.assertTrue(any("DELETE USERINFO" in (c.get("cmd") or "") and "PIN=300" in (c.get("cmd") or "") for c in pending))
 
             list_request = self.factory.get("/api/v1/attendance/fingerprints/unlinked/")
             force_authenticate(list_request, user=self.admin)
             list_response = FingerprintUnlinkedListAPIView.as_view()(list_request)
             listed_ids = {row["id"] for row in list_response.data["results"]}
             self.assertNotIn(device_user.id, listed_ids)
+
+    def test_delete_ack_failure_keeps_device_user(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="ADMS Gate",
+                device_sn="DEVCRED-DEL-ACK-FAIL",
+                mode=AccessDevice.MODE_ADMS,
+                is_active=True,
+            )
+            member = Member.objects.create(
+                full_name="Fail Delete",
+                phone_number="01700005012",
+                card_id="FAIL-CARD",
+                fingerprint_id="311",
+                start_date=timezone.now().date(),
+            )
+            device_user = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="311",
+                card_number="FAIL-CARD",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            queued = DeviceUserDeleteService.queue_delete(device_user=device_user, device=device)
+
+            DeviceUserDeleteService.handle_command_ack(
+                device=device,
+                command_id=str(queued[0]["id"]),
+                return_code=1,
+            )
+
+            device_user.refresh_from_db()
+            member.refresh_from_db()
+            self.assertEqual(device_user.status, DeviceUser.STATUS_LINKED)
+            self.assertEqual(device_user.member_id, member.id)
+            self.assertEqual(member.card_id, "FAIL-CARD")
+            self.assertEqual(member.fingerprint_id, "311")
 
     def test_delete_queues_command_for_tcp_relay(self):
         with schema_context(self.tenant.schema_name):
@@ -604,6 +697,8 @@ class DeviceCredentialListAndLinkTests(TestCase):
             response = FingerprintDeleteAPIView.as_view()(request)
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
+            device_user.refresh_from_db()
+            self.assertEqual(device_user.status, DeviceUser.STATUS_PENDING_DELETE)
             device.refresh_from_db()
             pending = device.meta_json.get("pending_commands") or []
             self.assertTrue(any("DELETE USERINFO PIN=301" in (c.get("cmd") or "") for c in pending))
@@ -634,7 +729,7 @@ class DeviceCredentialListAndLinkTests(TestCase):
             device_user.refresh_from_db()
             self.assertEqual(device_user.status, DeviceUser.STATUS_UNLINKED)
 
-    def test_delete_updates_member_linked_when_other_link_remains(self):
+    def test_delete_ack_updates_member_linked_when_other_link_remains(self):
         with schema_context(self.tenant.schema_name):
             device = AccessDevice.objects.create(
                 name="Multi Gate",
@@ -664,17 +759,38 @@ class DeviceCredentialListAndLinkTests(TestCase):
                 status=DeviceUser.STATUS_LINKED,
             )
 
-            request = self.factory.post(
-                "/api/v1/attendance/fingerprints/delete/",
-                {"device_user_id": to_delete.id},
-                format="json",
+            queued = DeviceUserDeleteService.queue_delete(device_user=to_delete, device=device)
+            DeviceUserDeleteService.handle_command_ack(
+                device=device,
+                command_id=str(queued[0]["id"]),
+                return_code=0,
             )
-            force_authenticate(request, user=self.admin)
-            response = FingerprintDeleteAPIView.as_view()(request)
 
-            self.assertEqual(response.status_code, status.HTTP_200_OK)
             member.refresh_from_db()
             self.assertEqual(member_credential_linked(member), "card")
             self.assertEqual(member_device_uids(member), ["401"])
             self.assertEqual(member.card_id, "KEEP-CARD")
             self.assertIsNone(member.fingerprint_id)
+
+    def test_delete_rejects_already_pending(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Pending Gate",
+                device_sn="DEVCRED-DEL-PENDING",
+                mode=AccessDevice.MODE_ADMS,
+                is_active=True,
+            )
+            device_user = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="320",
+                status=DeviceUser.STATUS_PENDING_DELETE,
+            )
+
+            request = self.factory.post(
+                "/api/v1/attendance/fingerprints/delete/",
+                {"device_user_id": device_user.id},
+                format="json",
+            )
+            force_authenticate(request, user=self.admin)
+            response = FingerprintDeleteAPIView.as_view()(request)
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
