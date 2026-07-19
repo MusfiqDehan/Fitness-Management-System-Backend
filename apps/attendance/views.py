@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 from .device_profiles import list_device_profiles
 from .services.adms_commands import (
 	build_attlog_sync_command,
+	build_delete_userinfo_command,
 	build_push_handshake_body,
 	dequeue_next_command,
 	parse_devicecmd_body,
@@ -58,6 +59,7 @@ from .serializers import (
 	CardProvisionSerializer,
 	DeviceCredentialRotateSerializer,
 	DeviceUserSerializer,
+	FingerprintDeleteSerializer,
 	FingerprintLinkSerializer,
 	FingerprintUnlinkSerializer,
 	FingerprintEnrollmentStartSerializer,
@@ -652,6 +654,67 @@ class FingerprintUnlinkAPIView(APIView):
 		)
 
 		return Response({"detail": "Fingerprint unlinked.", "device_user_id": device_user.id})
+
+
+class FingerprintDeleteAPIView(APIView):
+	feature_key = "attendance.fingerprints"
+	method_permission_map = {"POST": "edit"}
+	permission_classes = [HasFeatureMethodPermission]
+
+	def post(self, request):
+		serializer = FingerprintDeleteSerializer(data=request.data)
+		serializer.is_valid(raise_exception=True)
+		device_user = serializer.validated_data["device_user"]
+		device = serializer.validated_data["device"]
+		member = device_user.member
+		card = (device_user.card_number or "").strip()
+		device_uid = device_user.device_uid
+
+		with transaction.atomic():
+			remaining = (
+				DeviceUser.objects.filter(member=member, status=DeviceUser.STATUS_LINKED).exclude(
+					pk=device_user.pk
+				)
+				if member
+				else DeviceUser.objects.none()
+			)
+
+			device_user.member = None
+			device_user.status = DeviceUser.STATUS_DELETED
+			device_user.save(update_fields=["member", "status", "last_seen_at"])
+
+			if member:
+				member_updates: list[str] = []
+				if card and (member.card_id or "").strip() == card:
+					if not remaining.filter(card_number=card).exists():
+						member.card_id = None
+						member_updates.append("card_id")
+				if (member.fingerprint_id or "").strip() == device_uid:
+					if not remaining.filter(device_uid=device_uid).exists():
+						member.fingerprint_id = None
+						member_updates.append("fingerprint_id")
+				if member_updates:
+					member.save(update_fields=member_updates)
+
+			queued = queue_commands(device, [build_delete_userinfo_command(device_uid)])
+
+		publish_attendance_event(
+			"fingerprint-deleted",
+			{
+				"device_user_id": device_user.id,
+				"member_id": member.id if member else None,
+				"device_uid": device_uid,
+				"access_device_id": device.id,
+			},
+		)
+
+		return Response(
+			{
+				"detail": "Device user deleted.",
+				"device_user_id": device_user.id,
+				"queued_command_ids": [entry["id"] for entry in queued],
+			}
+		)
 
 
 class BiometricDeviceProfileListAPIView(APIView):
