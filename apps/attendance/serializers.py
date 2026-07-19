@@ -133,12 +133,13 @@ def credential_types_for(device_user: DeviceUser) -> list[str]:
 
 
 def linked_device_users_for(member: Member) -> list[DeviceUser]:
-    """Return linked DeviceUsers for a member, preferring a Prefetch cache when present."""
+    """Return linked/pending-delete DeviceUsers for a member (until hardware delete confirms)."""
+    active_statuses = {DeviceUser.STATUS_LINKED, DeviceUser.STATUS_PENDING_DELETE}
     cache = getattr(member, "_prefetched_objects_cache", None)
     if cache is not None and "attendance_device_users" in cache:
-        return list(cache["attendance_device_users"])
+        return [du for du in cache["attendance_device_users"] if du.status in active_statuses]
     return list(
-        member.attendance_device_users.filter(status=DeviceUser.STATUS_LINKED).order_by(
+        member.attendance_device_users.filter(status__in=active_statuses).order_by(
             "device_uid", "id"
         )
     )
@@ -273,6 +274,10 @@ class FingerprintDeleteSerializer(serializers.Serializer):
             raise serializers.ValidationError({"device_user_id": "Device user not found."})
         if device_user.status == DeviceUser.STATUS_DELETED:
             raise serializers.ValidationError({"device_user_id": "Device user already deleted."})
+        if device_user.status == DeviceUser.STATUS_PENDING_DELETE:
+            raise serializers.ValidationError(
+                {"device_user_id": "Device user delete is already pending device confirmation."}
+            )
         device = device_user.access_device
         if not device or not device.is_active:
             raise serializers.ValidationError({"device_user_id": "Access device is inactive."})
