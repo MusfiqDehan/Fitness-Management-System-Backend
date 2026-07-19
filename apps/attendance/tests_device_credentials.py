@@ -11,7 +11,9 @@ from apps.attendance.serializers import (
     member_credential_linked,
     member_device_uids,
 )
+from apps.attendance.services.adms_commands import build_delete_userinfo_command
 from apps.attendance.views import (
+    FingerprintDeleteAPIView,
     FingerprintLinkAPIView,
     FingerprintUnlinkAPIView,
     FingerprintUnlinkedListAPIView,
@@ -500,3 +502,179 @@ class DeviceCredentialListAndLinkTests(TestCase):
 
             self.assertIn(both_member.id, ids_for("both"))
             self.assertNotIn(fp_member.id, ids_for("both"))
+
+    def test_build_delete_userinfo_command(self):
+        self.assertEqual(build_delete_userinfo_command("42"), "DATA DELETE USERINFO PIN=42")
+
+    def test_list_filters_by_access_device_id(self):
+        with schema_context(self.tenant.schema_name):
+            other = AccessDevice.objects.create(name="Other Gate", device_sn="DEVCRED-OTHER")
+            DeviceUser.objects.create(
+                access_device=self.device,
+                device_uid="200",
+                status=DeviceUser.STATUS_UNLINKED,
+            )
+            DeviceUser.objects.create(
+                access_device=other,
+                device_uid="201",
+                status=DeviceUser.STATUS_UNLINKED,
+            )
+
+            request = self.factory.get(
+                f"/api/v1/attendance/fingerprints/unlinked/?access_device_id={self.device.id}"
+            )
+            force_authenticate(request, user=self.admin)
+            response = FingerprintUnlinkedListAPIView.as_view()(request)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            uids = {row["device_uid"] for row in response.data["results"]}
+            self.assertIn("200", uids)
+            self.assertNotIn("201", uids)
+
+    def test_delete_queues_command_for_adms_and_clears_member(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="ADMS Gate",
+                device_sn="DEVCRED-DEL-ADMS",
+                mode=AccessDevice.MODE_ADMS,
+                is_active=True,
+            )
+            member = Member.objects.create(
+                full_name="Delete Me",
+                phone_number="01700005001",
+                card_id="DEL-CARD",
+                fingerprint_id="300",
+                start_date=timezone.now().date(),
+            )
+            device_user = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="300",
+                card_number="DEL-CARD",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+
+            request = self.factory.post(
+                "/api/v1/attendance/fingerprints/delete/",
+                {"device_user_id": device_user.id},
+                format="json",
+            )
+            force_authenticate(request, user=self.admin)
+            response = FingerprintDeleteAPIView.as_view()(request)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            device_user.refresh_from_db()
+            member.refresh_from_db()
+            device.refresh_from_db()
+            self.assertEqual(device_user.status, DeviceUser.STATUS_DELETED)
+            self.assertIsNone(device_user.member_id)
+            self.assertIsNone(member.card_id)
+            self.assertIsNone(member.fingerprint_id)
+            self.assertEqual(member_credential_linked(member), "none")
+            self.assertEqual(member_device_uids(member), [])
+            pending = device.meta_json.get("pending_commands") or []
+            self.assertTrue(any("DELETE USERINFO" in (c.get("cmd") or "") and "PIN=300" in (c.get("cmd") or "") for c in pending))
+
+            list_request = self.factory.get("/api/v1/attendance/fingerprints/unlinked/")
+            force_authenticate(list_request, user=self.admin)
+            list_response = FingerprintUnlinkedListAPIView.as_view()(list_request)
+            listed_ids = {row["id"] for row in list_response.data["results"]}
+            self.assertNotIn(device_user.id, listed_ids)
+
+    def test_delete_queues_command_for_tcp_relay(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Relay Gate",
+                device_sn="DEVCRED-DEL-RELAY",
+                mode=AccessDevice.MODE_TCP_RELAY,
+                is_active=True,
+            )
+            device_user = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="301",
+                status=DeviceUser.STATUS_UNLINKED,
+            )
+
+            request = self.factory.post(
+                "/api/v1/attendance/fingerprints/delete/",
+                {"device_user_id": device_user.id},
+                format="json",
+            )
+            force_authenticate(request, user=self.admin)
+            response = FingerprintDeleteAPIView.as_view()(request)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            device.refresh_from_db()
+            pending = device.meta_json.get("pending_commands") or []
+            self.assertTrue(any("DELETE USERINFO PIN=301" in (c.get("cmd") or "") for c in pending))
+
+    def test_delete_rejects_inactive_device(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Off Gate",
+                device_sn="DEVCRED-DEL-OFF",
+                mode=AccessDevice.MODE_ADMS,
+                is_active=False,
+            )
+            device_user = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="302",
+                status=DeviceUser.STATUS_UNLINKED,
+            )
+
+            request = self.factory.post(
+                "/api/v1/attendance/fingerprints/delete/",
+                {"device_user_id": device_user.id},
+                format="json",
+            )
+            force_authenticate(request, user=self.admin)
+            response = FingerprintDeleteAPIView.as_view()(request)
+
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            device_user.refresh_from_db()
+            self.assertEqual(device_user.status, DeviceUser.STATUS_UNLINKED)
+
+    def test_delete_updates_member_linked_when_other_link_remains(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Multi Gate",
+                device_sn="DEVCRED-DEL-MULTI",
+                mode=AccessDevice.MODE_ADMS,
+                is_active=True,
+            )
+            member = Member.objects.create(
+                full_name="Keep One",
+                phone_number="01700005002",
+                card_id="KEEP-CARD",
+                fingerprint_id="400",
+                start_date=timezone.now().date(),
+            )
+            to_delete = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="400",
+                card_number="",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            DeviceUser.objects.create(
+                access_device=device,
+                device_uid="401",
+                card_number="KEEP-CARD",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+
+            request = self.factory.post(
+                "/api/v1/attendance/fingerprints/delete/",
+                {"device_user_id": to_delete.id},
+                format="json",
+            )
+            force_authenticate(request, user=self.admin)
+            response = FingerprintDeleteAPIView.as_view()(request)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            member.refresh_from_db()
+            self.assertEqual(member_credential_linked(member), "card")
+            self.assertEqual(member_device_uids(member), ["401"])
+            self.assertEqual(member.card_id, "KEEP-CARD")
+            self.assertIsNone(member.fingerprint_id)
