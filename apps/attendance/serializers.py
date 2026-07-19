@@ -262,6 +262,29 @@ class FingerprintUnlinkSerializer(serializers.Serializer):
         return value
 
 
+class FingerprintDeleteSerializer(serializers.Serializer):
+    device_user_id = serializers.IntegerField()
+
+    def validate(self, attrs):
+        device_user = DeviceUser.objects.select_related("access_device", "member").filter(
+            id=attrs["device_user_id"]
+        ).first()
+        if not device_user:
+            raise serializers.ValidationError({"device_user_id": "Device user not found."})
+        if device_user.status == DeviceUser.STATUS_DELETED:
+            raise serializers.ValidationError({"device_user_id": "Device user already deleted."})
+        device = device_user.access_device
+        if not device or not device.is_active:
+            raise serializers.ValidationError({"device_user_id": "Access device is inactive."})
+        if device.mode not in (AccessDevice.MODE_ADMS, AccessDevice.MODE_TCP_RELAY):
+            raise serializers.ValidationError(
+                {"device_user_id": "Delete requires ADMS or TCP Relay mode."}
+            )
+        attrs["device_user"] = device_user
+        attrs["device"] = device
+        return attrs
+
+
 class FingerprintEnrollmentStartSerializer(serializers.Serializer):
     member_id = serializers.IntegerField()
     access_device_id = serializers.IntegerField()
