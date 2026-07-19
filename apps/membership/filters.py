@@ -42,7 +42,7 @@ class MemberFilter(django_filters.FilterSet):
 
         linked = DeviceUser.objects.filter(
             member_id=OuterRef("pk"),
-            status=DeviceUser.STATUS_LINKED,
+            status__in=[DeviceUser.STATUS_LINKED, DeviceUser.STATUS_PENDING_DELETE],
         )
         has_card = Exists(linked.exclude(card_number=""))
         has_fingerprint = Exists(
