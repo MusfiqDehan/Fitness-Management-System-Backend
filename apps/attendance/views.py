@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 from .device_profiles import list_device_profiles
 from .services.adms_commands import (
 	build_attlog_sync_command,
-	build_delete_userinfo_command,
 	build_push_handshake_body,
 	dequeue_next_command,
 	parse_devicecmd_body,
@@ -43,6 +42,7 @@ from .services.adms_commands import (
 	lookup_queued_command,
 )
 from .services.card_provision import CardProvisionService
+from .services.device_user_delete import DeviceUserDeleteService
 from .services.enrollment import (
 	EnrollmentConflict,
 	EnrollmentNotSupported,
@@ -615,15 +615,26 @@ class FingerprintUnlinkAPIView(APIView):
 		serializer = FingerprintUnlinkSerializer(data=request.data)
 		serializer.is_valid(raise_exception=True)
 		device_user = get_object_or_404(DeviceUser, id=serializer.validated_data["device_user_id"])
+		if device_user.status == DeviceUser.STATUS_PENDING_DELETE:
+			return Response(
+				{"detail": "Cannot unlink while device delete is pending confirmation."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+		if device_user.status == DeviceUser.STATUS_DELETED:
+			return Response(
+				{"detail": "Device user already deleted."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
 		member = device_user.member
 		card = (device_user.card_number or "").strip()
 		device_uid = device_user.device_uid
 
 		with transaction.atomic():
 			remaining = (
-				DeviceUser.objects.filter(member=member, status=DeviceUser.STATUS_LINKED).exclude(
-					pk=device_user.pk
-				)
+				DeviceUser.objects.filter(
+					member=member,
+					status__in=[DeviceUser.STATUS_LINKED, DeviceUser.STATUS_PENDING_DELETE],
+				).exclude(pk=device_user.pk)
 				if member
 				else DeviceUser.objects.none()
 			)
@@ -666,52 +677,17 @@ class FingerprintDeleteAPIView(APIView):
 		serializer.is_valid(raise_exception=True)
 		device_user = serializer.validated_data["device_user"]
 		device = serializer.validated_data["device"]
-		member = device_user.member
-		card = (device_user.card_number or "").strip()
-		device_uid = device_user.device_uid
 
-		with transaction.atomic():
-			remaining = (
-				DeviceUser.objects.filter(member=member, status=DeviceUser.STATUS_LINKED).exclude(
-					pk=device_user.pk
-				)
-				if member
-				else DeviceUser.objects.none()
-			)
-
-			device_user.member = None
-			device_user.status = DeviceUser.STATUS_DELETED
-			device_user.save(update_fields=["member", "status", "last_seen_at"])
-
-			if member:
-				member_updates: list[str] = []
-				if card and (member.card_id or "").strip() == card:
-					if not remaining.filter(card_number=card).exists():
-						member.card_id = None
-						member_updates.append("card_id")
-				if (member.fingerprint_id or "").strip() == device_uid:
-					if not remaining.filter(device_uid=device_uid).exists():
-						member.fingerprint_id = None
-						member_updates.append("fingerprint_id")
-				if member_updates:
-					member.save(update_fields=member_updates)
-
-			queued = queue_commands(device, [build_delete_userinfo_command(device_uid)])
-
-		publish_attendance_event(
-			"fingerprint-deleted",
-			{
-				"device_user_id": device_user.id,
-				"member_id": member.id if member else None,
-				"device_uid": device_uid,
-				"access_device_id": device.id,
-			},
-		)
+		try:
+			queued = DeviceUserDeleteService.queue_delete(device_user=device_user, device=device)
+		except ValueError as exc:
+			return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 		return Response(
 			{
-				"detail": "Device user deleted.",
+				"detail": "Delete queued. Fitssort will remove this identity after the device confirms.",
 				"device_user_id": device_user.id,
+				"status": DeviceUser.STATUS_PENDING_DELETE,
 				"queued_command_ids": [entry["id"] for entry in queued],
 			}
 		)
@@ -1099,6 +1075,12 @@ class IclockDeviceCmdAPIView(PublicSchemaADMSDispatchMixin, APIView):
 
 			if command_id:
 				lookup_queued_command(device, command_id)
+				DeviceUserDeleteService.handle_command_ack(
+					device=device,
+					command_id=command_id,
+					return_code=return_code,
+					cmd_echo=cmd_echo,
+				)
 				FingerprintEnrollmentService.handle_command_ack(
 					device=device,
 					command_id=command_id,
