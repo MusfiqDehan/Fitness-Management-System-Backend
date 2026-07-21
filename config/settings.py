@@ -210,6 +210,17 @@ TENANT_FRONTEND_BASE_DOMAIN = os.environ.get('TENANT_FRONTEND_BASE_DOMAIN', TENA
 TENANT_FRONTEND_SCHEME = os.environ.get('TENANT_FRONTEND_SCHEME', 'http' if DEBUG else 'https').strip().lower() or ('http' if DEBUG else 'https')
 TENANT_FRONTEND_PORT = os.environ.get('TENANT_FRONTEND_PORT', '').strip()
 TENANT_ONBOARDING_LINKS_PUBLIC = os.environ.get('TENANT_ONBOARDING_LINKS_PUBLIC', 'false').lower() in ('true', '1')
+# Custom-domain routing targets shown in Settings after TXT verification.
+# Prefer CNAME → platform apex; fall back to a stable A record for the origin.
+CUSTOM_DOMAIN_CNAME_TARGET = (
+    os.environ.get('CUSTOM_DOMAIN_CNAME_TARGET', '') or PUBLIC_DOMAIN or TENANT_BASE_DOMAIN
+).strip().lower().rstrip('.')
+CUSTOM_DOMAIN_A_TARGET = os.environ.get('CUSTOM_DOMAIN_A_TARGET', '').strip()
+# Writable Traefik file-provider path for per-domain Host() ACME routers.
+TRAEFIK_CUSTOM_DOMAINS_PATH = os.environ.get(
+    'TRAEFIK_CUSTOM_DOMAINS_PATH',
+    '/traefik-dynamic/custom-domains.yml',
+).strip()
 # Public URL of this backend used to build payment-gateway callback URLs.
 # Must be the real Django port — NOT the Vite proxy port.
 # Local dev default: http://localhost:8021
