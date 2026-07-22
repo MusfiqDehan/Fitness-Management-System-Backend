@@ -23,7 +23,7 @@ from .serializers import (
     DashboardBlogSerializer,
 )
 
-from apps.access.permissions import HasFeatureMethodPermission
+from .permissions import HasCmsFeatureMethodPermission
 
 
 class ListModelAPIView(GenericAPIView):
@@ -82,7 +82,7 @@ class SiteBannerBaseAPIView(GenericAPIView):
     feature_key = 'cms.banners'
     queryset = SiteBanner.objects.all().order_by('position', 'created_at')
     serializer_class = SiteBannerSerializer
-    permission_classes = [HasFeatureMethodPermission]
+    permission_classes = [HasCmsFeatureMethodPermission]
     filter_backends = [SearchFilter]
     search_fields = ['title', 'subtitle']
 
@@ -133,7 +133,7 @@ class PromoBannerBaseAPIView(GenericAPIView):
     feature_key = 'cms.banners'
     queryset = PromoBanner.objects.all().order_by('-updated_at', '-created_at')
     serializer_class = PromoBannerSerializer
-    permission_classes = [HasFeatureMethodPermission]
+    permission_classes = [HasCmsFeatureMethodPermission]
     filter_backends = [SearchFilter]
     search_fields = ['title', 'subtitle', 'link_url', 'alt_text']
 
@@ -189,7 +189,7 @@ class PageContentBaseAPIView(GenericAPIView):
     feature_key = 'cms.blogs'
     queryset = PageContent.objects.all().order_by('page_name')
     serializer_class = PageContentSerializer
-    permission_classes = [HasFeatureMethodPermission]
+    permission_classes = [HasCmsFeatureMethodPermission]
     filter_backends = [SearchFilter]
     search_fields = ['page_name', 'title', 'subtitle']
 
@@ -235,7 +235,7 @@ class BlogCategoryBaseAPIView(GenericAPIView):
     feature_key = 'cms.blogs'
     queryset = BlogCategory.objects.order_by('id')
     serializer_class = BlogCategorySerializer
-    permission_classes = [HasFeatureMethodPermission]
+    permission_classes = [HasCmsFeatureMethodPermission]
 
 
 class BlogCategoryListAPIView(ListModelAPIView, BlogCategoryBaseAPIView):
@@ -266,7 +266,7 @@ class DashboardBlogBaseAPIView(GenericAPIView):
     feature_key = 'cms.blogs'
     queryset = Blog.objects.select_related('category', 'author').order_by('-created_at')
     serializer_class = DashboardBlogSerializer
-    permission_classes = [HasFeatureMethodPermission]
+    permission_classes = [HasCmsFeatureMethodPermission]
     filter_backends = [SearchFilter]
     filterset_fields = ['status', 'category', 'is_show_on_home_page']
     search_fields = ['title', 'slug', 'excerpt', 'description', 'category__name']
