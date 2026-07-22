@@ -38,7 +38,17 @@ def apply_paid_payment(payment: Payment, *, previous_status: str | None = None) 
     if coverage_count < 1:
         coverage_count = 1
 
-    base = member.end_date if member.end_date and member.end_date >= today else today
+    payment_date = payment.payment_date
+    if timezone.is_aware(payment_date):
+        payment_day = timezone.localtime(payment_date).date()
+    else:
+        payment_day = payment_date.date() if hasattr(payment_date, "date") else today
+
+    if member.end_date and member.end_date >= today:
+        base = member.end_date
+    else:
+        base = payment_day or today
+
     extra_days = 0
     for usage in payment.discount_usages.all():
         meta = usage.meta or {}
