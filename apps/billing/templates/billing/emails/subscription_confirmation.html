@@ -1,6 +1,16 @@
 <p>Hello {{ tenant_name }},</p>
 <p>Your subscription payment has been confirmed.</p>
-<p>Package: <strong>{{ package_name }}</strong><br>
-Amount: <strong>{{ amount }}</strong><br>
-Reference: <strong>{{ tran_id }}</strong></p>
+<p>
+  Payment type: <strong>{{ payment_type }}</strong><br>
+  Description: <strong>{{ description }}</strong><br>
+  Package plan: <strong>{{ package_name }}</strong><br>
+  Period: <strong>{{ period_label }}</strong><br>
+  Original price: <strong>{{ original_price }}</strong><br>
+  {% if adjustment_type_label %}
+  {{ adjustment_type_label }}: <strong>{{ adjustment_amount }}</strong><br>
+  Reason: <strong>{{ adjustment_reason }}</strong><br>
+  {% endif %}
+  Total amount: <strong>{{ amount }}</strong><br>
+  Reference: <strong>{{ tran_id }}</strong>
+</p>
 <p>Thank you for choosing Fitssort.</p>

@@ -1,5 +1,15 @@
 from django.contrib import admin
-from .models import Member, MemberPackage, Attendance, Payment, GymClass, GymSchedule
+from .models import (
+    Member,
+    MemberPackage,
+    Attendance,
+    Payment,
+    GymClass,
+    GymSchedule,
+    Discount,
+    DiscountCondition,
+    DiscountUsage,
+)
 
 
 class AttendanceInline(admin.TabularInline):
@@ -75,3 +85,36 @@ class GymScheduleAdmin(admin.ModelAdmin):
     list_display = ('title', 'day_of_week', 'start_time', 'end_time', 'instructor', 'capacity')
     list_filter = ('day_of_week',)
     search_fields = ('title', 'instructor')
+
+class DiscountConditionInline(admin.TabularInline):
+    model = DiscountCondition
+    extra = 0
+
+
+@admin.register(Discount)
+class DiscountAdmin(admin.ModelAdmin):
+    list_display = (
+        'name',
+        'discount_type',
+        'application_mode',
+        'coupon_code',
+        'priority',
+        'show_list_price',
+        'show_percent_badge',
+        'is_active',
+    )
+    list_filter = (
+        'discount_type',
+        'application_mode',
+        'show_list_price',
+        'show_percent_badge',
+        'is_active',
+    )
+    search_fields = ('name', 'coupon_code')
+    inlines = [DiscountConditionInline]
+
+
+@admin.register(DiscountUsage)
+class DiscountUsageAdmin(admin.ModelAdmin):
+    list_display = ('discount', 'member', 'payment', 'amount_saved', 'coupon_code_used', 'created_at')
+    search_fields = ('coupon_code_used', 'discount__name')

@@ -68,6 +68,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField(default=False)  # allows admin access in Django admin
     email_verified = models.BooleanField(default=False)
     password_set_at = models.DateTimeField(null=True, blank=True)
+    token_version = models.PositiveIntegerField(
+        default=1,
+        help_text="Incremented on password change to invalidate all outstanding JWTs.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -161,10 +161,26 @@ def dispatch_subscription_invoice(invoice, channels: list[str] | None, *, actor=
     if tenant is None:
         return
 
+    from apps.billing.services.subscription_billing import (
+        subscription_invoice_description,
+        subscription_invoice_period_label,
+        subscription_invoice_price_breakdown,
+        subscription_payment_type_label,
+    )
+
     tenant_schema = tenant.schema_name
-    amount = f"{invoice.currency} {invoice.amount}"
     package_name = invoice.package_name or invoice.package_slug
+    description = subscription_invoice_description(invoice)
+    payment_type = subscription_payment_type_label(invoice.payment_type)
     actor_name = getattr(actor, "email", "") or "Platform Admin"
+    price_breakdown = subscription_invoice_price_breakdown(invoice)
+    amount = price_breakdown["total"]
+    period_label = subscription_invoice_period_label(invoice)
+
+    base_amount = price_breakdown["original_price"]
+    adjustment_type_label = price_breakdown["adjustment_type_label"]
+    adjustment_amount = price_breakdown["adjustment_amount"]
+    adjustment_reason = price_breakdown["adjustment_reason"]
 
     with schema_context(tenant_schema):
         if "email" in active:
@@ -177,13 +193,31 @@ def dispatch_subscription_invoice(invoice, channels: list[str] | None, *, actor=
                     context = {
                         "tenant_name": tenant.name,
                         "package_name": package_name,
+                        "description": description,
+                        "payment_type": payment_type,
+                        "period_label": period_label,
+                        "original_price": base_amount,
+                        "adjustment_type_label": adjustment_type_label,
+                        "adjustment_amount": adjustment_amount,
+                        "adjustment_reason": adjustment_reason,
                         "amount": amount,
                         "tran_id": invoice.tran_id,
                     }
                     html_body = render_to_string("billing/emails/subscription_confirmation.html", context)
                     text_body = (
                         f"Subscription payment confirmed for {tenant.name}.\n"
-                        f"Package: {package_name}\nAmount: {amount}\nRef: {invoice.tran_id}"
+                        f"Payment type: {payment_type}\n"
+                        f"Description: {description}\n"
+                        f"Package plan: {package_name}\n"
+                        f"Period: {period_label}\n"
+                        f"Original price: {base_amount}\n"
+                        + (
+                            f"{adjustment_type_label}: {adjustment_amount}\n"
+                            f"Reason: {adjustment_reason}\n"
+                            if adjustment_type_label
+                            else ""
+                        )
+                        + f"Total: {amount}\nRef: {invoice.tran_id}"
                     )
                     from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@gym.local")
                     email = EmailMultiAlternatives(
@@ -203,7 +237,7 @@ def dispatch_subscription_invoice(invoice, channels: list[str] | None, *, actor=
                 create_notification(
                     notification_type=Notification.SUBSCRIPTION_PAYMENT_CONFIRMED,
                     title="Subscription payment confirmed",
-                    message=f"{package_name} — {amount} ({invoice.tran_id})",
+                    message=f"{payment_type}: {description} — {amount} ({invoice.tran_id})",
                     actor_name=actor_name,
                     target_type="subscription_invoice",
                     target_id=str(invoice.id),

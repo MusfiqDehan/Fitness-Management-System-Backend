@@ -91,8 +91,8 @@ class FingerprintEnrollmentService:
 		user,
 		fingerprint_slot: int = 0,
 	) -> FingerprintEnrollmentSession:
-		if device.mode != AccessDevice.MODE_ADMS:
-			raise EnrollmentNotSupported("Remote enrollment requires an ADMS-mode device.")
+		if device.mode not in (AccessDevice.MODE_ADMS, AccessDevice.MODE_TCP_RELAY):
+			raise EnrollmentNotSupported("Remote enrollment requires ADMS or TCP Relay mode.")
 		if not device.is_active:
 			raise EnrollmentNotSupported("Access device is inactive.")
 
@@ -117,7 +117,12 @@ class FingerprintEnrollmentService:
 			created_by=user if getattr(user, "is_authenticated", False) else None,
 		)
 
-		userinfo_cmd = build_userinfo_command(profile, pin=device_uid, name=member.full_name)
+		userinfo_cmd = build_userinfo_command(
+			profile,
+			pin=device_uid,
+			name=member.full_name,
+			card=member.card_id or "",
+		)
 		enroll_cmd = build_remote_enroll_command(
 			profile,
 			pin=device_uid,
@@ -255,6 +260,14 @@ class FingerprintEnrollmentService:
 				},
 			)
 		elif cmd_text.startswith("ENROLL_FP"):
+			if device.mode == AccessDevice.MODE_TCP_RELAY:
+				# LAN agent confirms template on device; complete without waiting for FP push.
+				session.save(update_fields=["command_trace", "updated_at"])
+				linked = cls.handle_fingerprint_ingested(
+					device=device,
+					device_uid=session.device_uid,
+				)
+				return linked or session
 			session.status = FingerprintEnrollmentSession.STATUS_AWAITING_SCAN
 			cls._publish(
 				"enrollment-awaiting-scan",
@@ -302,6 +315,23 @@ class FingerprintEnrollmentService:
 			return session
 
 		member = session.member
+		conflict = Member.objects.filter(fingerprint_id=device_uid).exclude(id=member.id).first()
+		if conflict:
+			session.status = FingerprintEnrollmentSession.STATUS_FAILED
+			session.failure_reason = (
+				f"Device PIN {device_uid} is already linked to {conflict.full_name}."
+			)
+			session.save(update_fields=["status", "failure_reason", "updated_at"])
+			cls._publish(
+				"enrollment-failed",
+				{
+					"session_id": session.id,
+					"member_id": session.member_id,
+					"reason": session.failure_reason,
+				},
+			)
+			return session
+
 		device_user, _ = DeviceUser.objects.get_or_create(
 			access_device=device,
 			device_uid=device_uid,

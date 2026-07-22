@@ -218,6 +218,11 @@ class AttendanceApiFlowTests(TestCase):
 			self.assertEqual(response_in.status_code, status.HTTP_200_OK)
 			self.assertEqual(response_in.data["action"], "checked_in")
 
+			attendance = Attendance.objects.get(member=member)
+			Attendance.objects.filter(id=attendance.id).update(
+				check_in_time=timezone.now() - timedelta(seconds=61),
+			)
+
 			request_out = self.factory.post(
 				"/api/v1/attendance/access/check/",
 				{"card_id": "CARD-101", "device_sn": "ZKT-F18-API"},
@@ -634,7 +639,8 @@ class FingerprintUnlinkedListPaginationTests(TestCase):
 		response = self._get_unlinked("?page=2&page_size=5")
 
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
-		self.assertEqual(response.data["count"], 12)
+		# 12 unlinked + 1 linked (deleted excluded)
+		self.assertEqual(response.data["count"], 13)
 		self.assertEqual(response.data["page"], 2)
 		self.assertEqual(response.data["page_size"], 5)
 		self.assertEqual(response.data["total_pages"], 3)
@@ -652,17 +658,25 @@ class FingerprintUnlinkedListPaginationTests(TestCase):
 		self.assertEqual(uid_response.data["count"], 1)
 		self.assertEqual(uid_response.data["results"][0]["device_uid"], "UID-001")
 
-	def test_unlinked_list_scoping_unchanged(self):
+	def test_list_includes_linked_and_supports_unlinked_filter(self):
 		response = self._get_unlinked()
 
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
-		self.assertEqual(response.data["count"], 12)
-		self.assertTrue(all(row["status"] == DeviceUser.STATUS_UNLINKED for row in response.data["results"]))
-		self.assertNotIn("LINKED-999", [row["device_uid"] for row in response.data["results"]])
+		self.assertEqual(response.data["count"], 13)
+		self.assertIn("LINKED-999", [row["device_uid"] for row in response.data["results"]])
+
+		unlinked_only = self._get_unlinked("?status=unlinked")
+		self.assertEqual(unlinked_only.status_code, status.HTTP_200_OK)
+		self.assertEqual(unlinked_only.data["count"], 12)
+		self.assertTrue(
+			all(row["status"] == DeviceUser.STATUS_UNLINKED for row in unlinked_only.data["results"])
+		)
+		self.assertNotIn("LINKED-999", [row["device_uid"] for row in unlinked_only.data["results"]])
 
 		filtered = self._get_unlinked(f"?access_device_id={self.device_a.id}")
 		self.assertEqual(filtered.status_code, status.HTTP_200_OK)
-		self.assertEqual(filtered.data["count"], 6)
+		# 6 unlinked on device_a + 1 linked
+		self.assertEqual(filtered.data["count"], 7)
 		self.assertTrue(all(row["access_device_name"] == "Front Gate" for row in filtered.data["results"]))
 
 
@@ -753,7 +767,10 @@ class RemoteFingerprintEnrollmentTests(TestCase):
 		zkteco = next(row for row in response.data if row["key"] == "zkteco")
 		stellar = next(row for row in response.data if row["key"] == "stellar")
 		self.assertTrue(zkteco["supports_remote_enroll"])
+		self.assertTrue(zkteco.get("supports_card", True))
+		self.assertTrue(zkteco.get("supports_fingerprint", True))
 		self.assertFalse(stellar["supports_remote_enroll"])
+		self.assertFalse(stellar.get("supports_card", False))
 
 	@patch("apps.attendance.services.enrollment.publish_attendance_event")
 	def test_start_enrollment_queues_profile_commands(self, mock_publish):

@@ -2,6 +2,16 @@ import decimal
 
 from utils.cache_helpers import get_platform_settings_cached
 
+# Display-only preference codes that share an ISO/rate currency.
+CURRENCY_CODE_ALIASES = {
+    "BDTT": "BDT",  # BDT — ৳
+}
+
+
+def normalize_currency_code(code: str | None) -> str:
+    normalized = (code or "USD").strip().upper()
+    return CURRENCY_CODE_ALIASES.get(normalized, normalized)
+
 
 def convert_currency(amount: decimal.Decimal, from_currency: str, to_currency: str) -> decimal.Decimal:
     """Dynamically converts direct amount from one currency to another using PlatformSettings.
@@ -12,8 +22,8 @@ def convert_currency(amount: decimal.Decimal, from_currency: str, to_currency: s
     if not amount:
         return decimal.Decimal("0.00")
 
-    from_currency = (from_currency or "USD").upper()
-    to_currency = (to_currency or "USD").upper()
+    from_currency = normalize_currency_code(from_currency)
+    to_currency = normalize_currency_code(to_currency)
 
     if from_currency == to_currency:
         return amount
@@ -37,7 +47,7 @@ def convert_currency(amount: decimal.Decimal, from_currency: str, to_currency: s
     }
     for k, v in rates.items():
         try:
-            matrix[k.upper()] = decimal.Decimal(str(v))
+            matrix[normalize_currency_code(k)] = decimal.Decimal(str(v))
         except (ValueError, TypeError, decimal.InvalidOperation):
             pass
 

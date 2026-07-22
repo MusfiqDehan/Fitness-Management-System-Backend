@@ -46,14 +46,19 @@ class MobileAwareTenantMainMiddleware(TenantMainMiddleware):
         if not raw:
             return None
         try:
-            # AccessToken() verifies the signature and expiry. An invalid or
-            # expired token yields no hint (the request will 401 downstream).
             from rest_framework_simplejwt.tokens import AccessToken
 
             token = AccessToken(raw)
         except Exception:
             return None
+        if self._is_access_denied(token):
+            return None
         return token.get("tenant_schema") or None
+
+    def _is_access_denied(self, token) -> bool:
+        from utils.jwt_revocation import is_access_token_denied
+
+        return is_access_token_denied(token.get("jti"))
 
     def _schema_from_header(self, request):
         schema = (request.META.get("HTTP_X_TENANT_SCHEMA") or "").strip().lower()

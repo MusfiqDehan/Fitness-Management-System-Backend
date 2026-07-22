@@ -25,6 +25,8 @@ x-backend-image: &backend-image
   volumes:
     - backend_static:/app/staticfiles
     - backend_media:/app/media
+    # Traefik watches this dir; backend writes Host() routers for custom-domain ACME.
+    - /opt/shared/traefik/dynamic:/traefik-dynamic
   networks:
     - app_network
     - traefik_proxy

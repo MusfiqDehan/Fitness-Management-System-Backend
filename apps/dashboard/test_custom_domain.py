@@ -43,6 +43,20 @@ class DomainValidationTests(SimpleTestCase):
         _, error = _validate_domain("acme.fitssort.com")
         self.assertNotEqual(error, "")
 
+    def test_accepts_apex_domain(self):
+        domain, error = _validate_domain("yourcompany.com")
+        self.assertEqual(error, "")
+        self.assertEqual(domain, "yourcompany.com")
+
+    def test_relative_txt_host(self):
+        from apps.dashboard.custom_domain_views import _relative_txt_host
+
+        self.assertEqual(_relative_txt_host("example.com"), "_fitssort-verify")
+        self.assertEqual(
+            _relative_txt_host("hello-gym.musfiqdehan.com"),
+            "_fitssort-verify.hello-gym",
+        )
+
     def test_rejects_bare_tld(self):
         _, error = _validate_domain("localhost")
         self.assertNotEqual(error, "")
@@ -99,6 +113,77 @@ class DnsVerificationTests(SimpleTestCase):
         ok, error = verify_txt_record("_fitssort-verify.gym.example.com", "")
         self.assertFalse(ok)
         self.assertNotEqual(error, "")
+
+
+class RoutingCheckTests(SimpleTestCase):
+    def _patch_resolver(self, *, cname=None, a=None, cname_exc=None, a_exc=None):
+        resolver = mock.Mock()
+
+        def _resolve(name, rdtype, *args, **kwargs):
+            if rdtype == "CNAME":
+                if cname_exc is not None:
+                    raise cname_exc
+                answers = []
+                if cname is not None:
+                    rdata = mock.Mock()
+                    rdata.target = cname
+                    answers = [rdata]
+                return answers
+            if rdtype == "A":
+                if a_exc is not None:
+                    raise a_exc
+                answers = []
+                if a is not None:
+                    rdata = mock.Mock()
+                    rdata.__str__ = mock.Mock(return_value=str(a))
+                    answers = [rdata]
+                return answers
+            raise AssertionError(f"Unexpected rdtype {rdtype}")
+
+        resolver.resolve.side_effect = _resolve
+        return mock.patch(
+            "apps.tenancy.dns_verification.dns.resolver.Resolver",
+            return_value=resolver,
+        )
+
+    def test_cname_match_is_ready(self):
+        from apps.tenancy.dns_verification import check_domain_routing
+
+        with self._patch_resolver(cname="fitssort.com."):
+            ok, error = check_domain_routing(
+                "gym.example.com", cname_target="fitssort.com", a_target="1.2.3.4"
+            )
+        self.assertTrue(ok)
+        self.assertEqual(error, "")
+
+    def test_a_match_is_ready(self):
+        from apps.tenancy.dns_verification import check_domain_routing
+        import dns.resolver
+
+        with self._patch_resolver(cname_exc=dns.resolver.NoAnswer(), a="185.202.223.12"):
+            ok, error = check_domain_routing(
+                "gym.example.com",
+                cname_target="fitssort.com",
+                a_target="185.202.223.12",
+            )
+        self.assertTrue(ok)
+        self.assertEqual(error, "")
+
+    def test_missing_routing_is_advisory(self):
+        from apps.tenancy.dns_verification import check_domain_routing
+        import dns.resolver
+
+        with self._patch_resolver(
+            cname_exc=dns.resolver.NXDOMAIN(),
+            a_exc=dns.resolver.NXDOMAIN(),
+        ):
+            ok, error = check_domain_routing(
+                "gym.example.com",
+                cname_target="fitssort.com",
+                a_target="185.202.223.12",
+            )
+        self.assertFalse(ok)
+        self.assertIn("does not point", error)
 
 
 class EffectiveEnablementTests(SimpleTestCase):

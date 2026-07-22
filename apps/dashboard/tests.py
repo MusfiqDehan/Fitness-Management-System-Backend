@@ -3,6 +3,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 from rest_framework.test import APITestCase
+from unittest.mock import patch
 
 from apps.identity.models import User
 from apps.quick_action.models import BlogCategory, Category, ClassSchedule, Contact, GymClass
@@ -253,15 +254,20 @@ class GymPreferencesAPITests(APITestCase):
 			is_staff=True,
 		)
 
-	def test_get_preferences_returns_topbar_defaults(self):
+	@patch('apps.access.utils.tenant_has_feature', return_value=True)
+	def test_get_preferences_returns_topbar_defaults(self, _mock_feature):
 		self.client.force_authenticate(user=self.admin_user)
 		response = self.client.get(reverse('dashboard:settings-preferences'))
 
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
 		self.assertFalse(response.data['topbar_show_date'])
 		self.assertTrue(response.data['topbar_show_description'])
+		self.assertFalse(response.data['payment_auto_delete_credentials_enabled'])
+		self.assertIsNone(response.data['payment_cleanup_run_at_1'])
+		self.assertIsNone(response.data['payment_cleanup_run_at_2'])
 
-	def test_patch_topbar_show_date_only(self):
+	@patch('apps.access.utils.tenant_has_feature', return_value=True)
+	def test_patch_topbar_show_date_only(self, _mock_feature):
 		from apps.dashboard.models import GymPreferences
 
 		GymPreferences.objects.update_or_create(
@@ -280,7 +286,8 @@ class GymPreferencesAPITests(APITestCase):
 		self.assertTrue(response.data['topbar_show_date'])
 		self.assertTrue(response.data['topbar_show_description'])
 
-	def test_patch_topbar_show_description_only(self):
+	@patch('apps.access.utils.tenant_has_feature', return_value=True)
+	def test_patch_topbar_show_description_only(self, _mock_feature):
 		from apps.dashboard.models import GymPreferences
 
 		GymPreferences.objects.update_or_create(
@@ -298,3 +305,44 @@ class GymPreferencesAPITests(APITestCase):
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
 		self.assertTrue(response.data['topbar_show_date'])
 		self.assertFalse(response.data['topbar_show_description'])
+
+	@patch('apps.access.utils.tenant_has_feature', return_value=False)
+	def test_get_preferences_forbidden_without_feature(self, _mock_feature):
+		self.client.force_authenticate(user=self.admin_user)
+		response = self.client.get(reverse('dashboard:settings-preferences'))
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	@patch('apps.access.utils.tenant_has_feature', return_value=False)
+	def test_patch_preferences_forbidden_without_feature(self, _mock_feature):
+		self.client.force_authenticate(user=self.admin_user)
+		response = self.client.patch(
+			reverse('dashboard:settings-preferences'),
+			{'topbar_show_date': True},
+			format='json',
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	@patch('apps.access.utils.tenant_has_feature', return_value=True)
+	def test_patch_payment_cleanup_requires_both_slots_when_enabled(self, _mock_feature):
+		self.client.force_authenticate(user=self.admin_user)
+		response = self.client.patch(
+			reverse('dashboard:settings-preferences'),
+			{'payment_auto_delete_credentials_enabled': True},
+			format='json',
+		)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	@patch('apps.access.utils.tenant_has_feature', return_value=True)
+	def test_patch_payment_cleanup_rejects_identical_slots(self, _mock_feature):
+		self.client.force_authenticate(user=self.admin_user)
+		same = '2026-08-01T10:00:00Z'
+		response = self.client.patch(
+			reverse('dashboard:settings-preferences'),
+			{
+				'payment_auto_delete_credentials_enabled': True,
+				'payment_cleanup_run_at_1': same,
+				'payment_cleanup_run_at_2': same,
+			},
+			format='json',
+		)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

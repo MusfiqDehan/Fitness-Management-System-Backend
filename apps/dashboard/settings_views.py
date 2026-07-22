@@ -13,6 +13,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.access.permissions import HasFeatureMethodPermission
 from apps.identity.serializers import CurrentUserSerializer, CurrentUserUpdateSerializer
 from apps.membership.models import Member
 from utils.cache_helpers import (
@@ -139,7 +140,14 @@ class NotificationPreferencesAPIView(APIView):
 # ---------------------------------------------------------------
 
 class GymPreferencesAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    """Tenant gym preferences including Payment Configurations.
+
+    Both GET and PATCH require ``settings.preferences`` (view / edit).
+    Shell consumers must tolerate 403 when the feature is disabled.
+    """
+
+    feature_key = "settings.preferences"
+    permission_classes = [IsAuthenticated, HasFeatureMethodPermission]
 
     def _obj(self):
         obj, _ = GymPreferences.objects.get_or_create(pk=1)
@@ -285,9 +293,9 @@ class ChangePasswordAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        request.user.set_password(new_password)
-        request.user.password_set_at = dj_timezone.now()
-        request.user.save(update_fields=["password", "password_set_at"])
+        from utils.password_change import change_user_password
+
+        change_user_password(request.user, new_password)
         return Response({"detail": "Password changed successfully."})
 
 
@@ -462,4 +470,12 @@ class PublicGymBrandingView(APIView):
             PUBLIC_BRANDING_TTL,
             load,
         )
-        return Response(payload)
+        # Feature flags are resolved fresh (not cached with branding) so plan /
+        # override toggles hide public coupon fields immediately.
+        discount_enabled = False
+        tenant = getattr(request, "tenant", None)
+        if tenant is not None:
+            from apps.tenancy.services import tenant_has_feature
+
+            discount_enabled = tenant_has_feature(tenant, "discount")
+        return Response({**payload, "discount_enabled": discount_enabled})

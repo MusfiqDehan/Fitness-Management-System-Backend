@@ -1,4 +1,7 @@
 from django.urls import path
+
+from apps.identity.views import LogoutAPIView
+
 from .views import (
 	TenantSelfRegistrationAPIView,
 	SuperadminInvitationAPIView,
@@ -50,6 +53,7 @@ urlpatterns = [
 	# Public onboarding and auth APIs
 	path('register/', TenantSelfRegistrationAPIView.as_view(), name='tenant-register'),
 	path('auth/login/', TenantAuthenticationAPIView.as_view(), name='tenant-auth-login'),
+	path('auth/logout/', LogoutAPIView.as_view(), name='tenant-auth-logout'),
 	path('tokens/validate/', InvitationValidationAPIView.as_view(), name='tenant-token-validate'),
 	path('password/setup/', PasswordSetupAPIView.as_view(), name='tenant-password-setup'),
 	path('password/reset/request/', PasswordResetRequestAPIView.as_view(), name='tenant-password-reset-request'),

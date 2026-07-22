@@ -102,10 +102,12 @@ class DeviceCredential(models.Model):
 class DeviceUser(models.Model):
 	STATUS_UNLINKED = "unlinked"
 	STATUS_LINKED = "linked"
+	STATUS_PENDING_DELETE = "pending_delete"
 	STATUS_DELETED = "deleted"
 	STATUS_CHOICES = (
 		(STATUS_UNLINKED, "Unlinked"),
 		(STATUS_LINKED, "Linked"),
+		(STATUS_PENDING_DELETE, "Pending delete"),
 		(STATUS_DELETED, "Deleted"),
 	)
 
@@ -123,6 +125,7 @@ class DeviceUser(models.Model):
 	)
 	device_uid = models.CharField(max_length=64)
 	name = models.CharField(max_length=120, null=True, blank=True)
+	card_number = models.CharField(max_length=64, blank=True, default="")
 	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_UNLINKED)
 	last_seen_at = models.DateTimeField(auto_now=True)
 	created_at = models.DateTimeField(auto_now_add=True)

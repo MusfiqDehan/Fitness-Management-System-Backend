@@ -2,7 +2,9 @@ from django.urls import path
 from .views import (
 	AccessCheckAPIView,
 	AttendanceLogListAPIView,
+	AttendanceStatsAPIView,
 	BiometricDeviceProfileListAPIView,
+	CardProvisionAPIView,
 	DeviceActivateAPIView,
 	DeviceCredentialRotateAPIView,
 	DeviceDeactivateAPIView,
@@ -15,6 +17,7 @@ from .views import (
 	FingerprintEnrollmentCancelAPIView,
 	FingerprintEnrollmentDetailAPIView,
 	FingerprintEnrollmentStartAPIView,
+	FingerprintDeleteAPIView,
 	FingerprintLinkAPIView,
 	FingerprintUnlinkAPIView,
 	FingerprintUnlinkedListAPIView,
@@ -23,6 +26,7 @@ from .views import (
 	IclockGetRequestAPIView,
 	MembersInsideAPIView,
 	MemberAttendanceLogListAPIView,
+	MemberCredentialsAPIView,
 )
 
 app_name = 'attendance'
@@ -31,13 +35,17 @@ urlpatterns = [
 	path('access/check/', AccessCheckAPIView.as_view(), name='access-check'),
 	path('access/members-inside/', MembersInsideAPIView.as_view(), name='access-members-inside'),
 	path('logs/my/', MemberAttendanceLogListAPIView.as_view(), name='logs-my-list'),
+	path('me/credentials/', MemberCredentialsAPIView.as_view(), name='me-credentials'),
 	path('logs/', AttendanceLogListAPIView.as_view(), name='logs-list'),
+	path('stats/', AttendanceStatsAPIView.as_view(), name='stats'),
 	path('fingerprints/unlinked/', FingerprintUnlinkedListAPIView.as_view(), name='fingerprints-unlinked'),
 	path('fingerprints/link/', FingerprintLinkAPIView.as_view(), name='fingerprints-link'),
 	path('fingerprints/unlink/', FingerprintUnlinkAPIView.as_view(), name='fingerprints-unlink'),
+	path('fingerprints/delete/', FingerprintDeleteAPIView.as_view(), name='fingerprints-delete'),
 	path('fingerprints/enroll/', FingerprintEnrollmentStartAPIView.as_view(), name='fingerprints-enroll-start'),
 	path('fingerprints/enroll/<int:pk>/', FingerprintEnrollmentDetailAPIView.as_view(), name='fingerprints-enroll-detail'),
 	path('fingerprints/enroll/<int:pk>/cancel/', FingerprintEnrollmentCancelAPIView.as_view(), name='fingerprints-enroll-cancel'),
+	path('cards/provision/', CardProvisionAPIView.as_view(), name='cards-provision'),
 	path('device-profiles/', BiometricDeviceProfileListAPIView.as_view(), name='device-profiles'),
 	path('devices/', DeviceRegistryListCreateAPIView.as_view(), name='device-list-create'),
 	path('devices/<int:pk>/', DeviceRegistryDetailAPIView.as_view(), name='device-detail'),

@@ -34,6 +34,7 @@ from .class_detail_views import (
     MyClassEnrollmentsAPIView,
     MyClassAttendanceAPIView,
 )
+from .discount_views import DiscountView, DiscountPreviewAPIView, PublicValidateCouponAPIView
 
 app_name = 'membership'
 
@@ -95,4 +96,10 @@ urlpatterns = [
     path('public/complete-registration/', CompleteMemberRegistrationAPIView.as_view(), name='complete-registration'),
     path('public/gym-classes/', PublicGymClassListAPIView.as_view(), name='public-gymclass-list'),
     path('public/gym-schedules/', PublicGymScheduleListAPIView.as_view(), name='public-gymschedule-list'),
+
+    # ========== Discounts ==========
+    path('discounts/preview/', DiscountPreviewAPIView.as_view(), name='discount-preview'),
+    path('discounts/validate-coupon/', PublicValidateCouponAPIView.as_view(), name='discount-validate-coupon'),
+    path('discounts/', DiscountView.as_view(), name='discount-list'),
+    path('discounts/<int:pk>/', DiscountView.as_view(), name='discount-detail'),
 ]

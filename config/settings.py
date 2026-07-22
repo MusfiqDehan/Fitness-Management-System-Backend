@@ -80,6 +80,7 @@ SHARED_APPS = [
     'drf_spectacular',
     'apps.crm.apps.CrmConfig',
     'apps.reminder.apps.ReminderConfig',
+    'apps.cms.apps.CmsConfig',
 ]
 
 # Apps whose tables are replicated inside EACH tenant schema
@@ -210,6 +211,17 @@ TENANT_FRONTEND_BASE_DOMAIN = os.environ.get('TENANT_FRONTEND_BASE_DOMAIN', TENA
 TENANT_FRONTEND_SCHEME = os.environ.get('TENANT_FRONTEND_SCHEME', 'http' if DEBUG else 'https').strip().lower() or ('http' if DEBUG else 'https')
 TENANT_FRONTEND_PORT = os.environ.get('TENANT_FRONTEND_PORT', '').strip()
 TENANT_ONBOARDING_LINKS_PUBLIC = os.environ.get('TENANT_ONBOARDING_LINKS_PUBLIC', 'false').lower() in ('true', '1')
+# Custom-domain routing targets shown in Settings after TXT verification.
+# Prefer CNAME → platform apex; fall back to a stable A record for the origin.
+CUSTOM_DOMAIN_CNAME_TARGET = (
+    os.environ.get('CUSTOM_DOMAIN_CNAME_TARGET', '') or PUBLIC_DOMAIN or TENANT_BASE_DOMAIN
+).strip().lower().rstrip('.')
+CUSTOM_DOMAIN_A_TARGET = os.environ.get('CUSTOM_DOMAIN_A_TARGET', '').strip()
+# Writable Traefik file-provider path for per-domain Host() ACME routers.
+TRAEFIK_CUSTOM_DOMAINS_PATH = os.environ.get(
+    'TRAEFIK_CUSTOM_DOMAINS_PATH',
+    '/traefik-dynamic/custom-domains.yml',
+).strip()
 # Public URL of this backend used to build payment-gateway callback URLs.
 # Must be the real Django port — NOT the Vite proxy port.
 # Local dev default: http://localhost:8021
@@ -379,6 +391,12 @@ CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = int(os.environ.get('CELERY_TASK_TIME_LIMIT', '300'))
 CELERY_TASK_SOFT_TIME_LIMIT = int(os.environ.get('CELERY_TASK_SOFT_TIME_LIMIT', '240'))
+CELERY_BEAT_SCHEDULE = {
+    "expired-member-credential-cleanup": {
+        "task": "attendance.run_expired_member_credential_cleanup",
+        "schedule": 300.0,  # every 5 minutes; acts only when a slot is due
+    },
+}
 
 # Django cache (Redis DB 2 — separate from Celery broker/results)
 _redis_cache_url = os.environ.get('REDIS_CACHE_URL', '').strip()
@@ -422,7 +440,7 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         # "rest_framework.authentication.SessionAuthentication",
         # "rest_framework.authentication.TokenAuthentication",
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "utils.jwt_authentication.RevocationAwareJWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         # "rest_framework.permissions.IsAuthenticated",
@@ -467,8 +485,9 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 10,
 }
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=2),   
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7), 
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 # user model

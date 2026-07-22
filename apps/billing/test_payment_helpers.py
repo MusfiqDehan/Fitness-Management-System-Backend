@@ -55,10 +55,15 @@ class LineItemsAndAddOnsHelperTests(TestCase):
                 {"type": "package", "name": "Gold", "amount": "2000"},
                 {"type": "addon", "name": "PT", "amount": "500"},
                 {"type": "custom", "name": "Adj", "amount": "0"},
+                {"type": "discount", "name": "SAVE", "amount": "100"},
             ]
         )
         self.assertEqual(items[0]["amount"], "2000.00")
-        self.assertEqual(len(items), 3)
+        self.assertEqual(len(items), 4)
+        from apps.billing.services.line_items import total_from_line_items
+        from decimal import Decimal
+
+        self.assertEqual(total_from_line_items(items), Decimal("2400.00"))
 
     def test_package_add_ons_legacy_string(self):
         self.assertEqual(

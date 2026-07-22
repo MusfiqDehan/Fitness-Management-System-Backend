@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 
+from django.conf import settings
 from django.utils import timezone as dj_timezone
 from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework import status
@@ -24,6 +25,7 @@ from rest_framework.views import APIView
 
 from apps.access.permissions import HasFeatureMethodPermission
 from apps.tenancy.dns_verification import (
+    check_domain_routing,
     generate_verification_token,
     verify_txt_record,
 )
@@ -61,6 +63,51 @@ def _validate_domain(value: str) -> tuple[str, str]:
     return domain, ""
 
 
+def _relative_txt_host(domain: str) -> str:
+    """DNS Name field relative to a typical zone (last two labels).
+
+    Example: ``gym.example.com`` → ``_fitssort-verify.gym``;
+    ``example.com`` → ``_fitssort-verify``.
+    Providers that want the FQDN should use ``verification_record_name``.
+    """
+    prefix = CustomDomainRequest.VERIFICATION_RECORD_PREFIX
+    parts = _normalize_domain(domain).split(".")
+    if len(parts) <= 2:
+        return prefix
+    return f"{prefix}.{'.'.join(parts[:-2])}"
+
+
+def _is_apex_domain(domain: str) -> bool:
+    """Heuristic: two labels means apex (e.g. example.com). Prefer A over CNAME."""
+    return len(_normalize_domain(domain).split(".")) == 2
+
+
+def _routing_targets() -> tuple[str, str, str]:
+    """Return ``(preferred_type, cname_target, a_target)`` from settings."""
+    cname = (
+        getattr(settings, "CUSTOM_DOMAIN_CNAME_TARGET", "") or ""
+    ).strip().lower().rstrip(".")
+    a_target = (getattr(settings, "CUSTOM_DOMAIN_A_TARGET", "") or "").strip()
+    preferred = "CNAME" if cname else ("A" if a_target else "CNAME")
+    return preferred, cname, a_target
+
+
+def _routing_fields(domain: str = "") -> dict:
+    preferred, cname, a_target = _routing_targets()
+    # Apex hostnames usually cannot use CNAME — prefer A when available.
+    if domain and _is_apex_domain(domain) and a_target:
+        preferred = "A"
+    value = a_target if preferred == "A" else cname
+    return {
+        "routing_record_type": preferred,
+        "routing_record_name": domain or "",
+        "routing_record_value": value,
+        "routing_cname_target": cname,
+        "routing_a_target": a_target,
+        "is_apex": bool(domain) and _is_apex_domain(domain),
+    }
+
+
 def _serialize_request(req: CustomDomainRequest | None, *, enabled: bool) -> dict:
     if req is None:
         return {
@@ -68,21 +115,44 @@ def _serialize_request(req: CustomDomainRequest | None, *, enabled: bool) -> dic
             "domain": "",
             "status": None,
             "verification_record_name": "",
+            "verification_record_host": "",
             "verification_token": "",
             "verification_record_type": "TXT",
             "verified_at": None,
             "last_error": "",
+            "routing_ready": False,
+            "ssl_ready": False,
+            **_routing_fields(""),
         }
-    return {
+
+    data = {
         "enabled": enabled,
         "domain": req.domain,
         "status": req.status,
         "verification_record_name": req.verification_record_name,
+        "verification_record_host": _relative_txt_host(req.domain),
         "verification_token": req.verification_token,
         "verification_record_type": "TXT",
         "verified_at": req.verified_at.isoformat() if req.verified_at else None,
         "last_error": req.last_error,
+        "routing_ready": False,
+        # SSL is provisioned automatically once DNS points here; same readiness signal.
+        "ssl_ready": False,
+        **_routing_fields(req.domain),
     }
+
+    if req.status == CustomDomainRequest.STATUS_VERIFIED and req.domain:
+        _, cname, a_target = _routing_targets()
+        ready, message = check_domain_routing(
+            req.domain, cname_target=cname, a_target=a_target
+        )
+        data["routing_ready"] = ready
+        data["ssl_ready"] = ready
+        # Advisory only — never overwrite a hard verification failure message.
+        if not ready and not data["last_error"]:
+            data["last_error"] = message
+
+    return data
 
 
 class CustomDomainAPIView(APIView):
@@ -169,6 +239,10 @@ class CustomDomainAPIView(APIView):
                 },
             )
             data = _serialize_request(req, enabled=True)
+        from apps.tenancy.traefik_custom_domains import sync_traefik_custom_domains
+
+        # Drop stale Traefik Host() routers if a previous verified alias was replaced.
+        sync_traefik_custom_domains()
         return Response(data, status=status.HTTP_201_CREATED)
 
     def delete(self, request):
@@ -182,6 +256,9 @@ class CustomDomainAPIView(APIView):
                     tenant=tenant, domain=req.domain, is_primary=False
                 ).delete()
             CustomDomainRequest.objects.filter(tenant=tenant).delete()
+        from apps.tenancy.traefik_custom_domains import sync_traefik_custom_domains
+
+        sync_traefik_custom_domains()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -237,4 +314,7 @@ class CustomDomainVerifyAPIView(APIView):
             req.verified_at = dj_timezone.now()
             req.save(update_fields=["status", "last_error", "verified_at", "updated_at"])
             data = _serialize_request(req, enabled=True)
+        from apps.tenancy.traefik_custom_domains import sync_traefik_custom_domains
+
+        sync_traefik_custom_domains()
         return Response(data)

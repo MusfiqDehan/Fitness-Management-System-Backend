@@ -23,7 +23,13 @@ def get_pending_commands(device: AccessDevice) -> list[dict]:
     return list(meta.get("pending_commands", []))
 
 
-def queue_commands(device: AccessDevice, commands: list[str], *, session_id: int | None = None) -> list[dict]:
+def queue_commands(
+    device: AccessDevice,
+    commands: list[str],
+    *,
+    session_id: int | None = None,
+    entry_extra: dict | None = None,
+) -> list[dict]:
     """Append ADMS commands to device pending queue."""
     meta = dict(device.meta_json or {})
     pending = list(meta.get("pending_commands", []))
@@ -35,6 +41,8 @@ def queue_commands(device: AccessDevice, commands: list[str], *, session_id: int
         entry = {"id": cmd_id, "cmd": cmd}
         if session_id is not None:
             entry["session_id"] = session_id
+        if entry_extra:
+            entry.update(entry_extra)
         pending.append(entry)
         command_index[str(cmd_id)] = entry
         queued.append(entry)
@@ -60,8 +68,19 @@ def dequeue_next_command(device: AccessDevice) -> dict | None:
     return next_cmd
 
 
-def build_userinfo_command(profile: BiometricDeviceProfile, *, pin: str, name: str) -> str:
-    return profile.build_userinfo_command(pin=pin, name=name)
+def build_userinfo_command(
+    profile: BiometricDeviceProfile,
+    *,
+    pin: str,
+    name: str,
+    card: str = "",
+) -> str:
+    return profile.build_userinfo_command(pin=pin, name=name, card=card)
+
+
+def build_delete_userinfo_command(pin: str) -> str:
+    """ADMS command to remove a user/PIN (fingerprint templates + card) from the device."""
+    return f"DATA DELETE USERINFO PIN={pin}"
 
 
 def build_remote_enroll_command(

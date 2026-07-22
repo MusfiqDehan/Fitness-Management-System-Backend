@@ -1262,6 +1262,9 @@ class TenantAuthenticationAPIView(APIView):
 			refresh["tenant_schema"] = tenant.schema_name
 			refresh["tenant_name"] = tenant.name
 			refresh["tenant_domain"] = domain_name
+			from utils.jwt_sessions import embed_token_version
+
+			embed_token_version(refresh, user)
 
 			access = refresh.access_token
 			access["tenant_schema"] = tenant.schema_name
@@ -1737,9 +1740,9 @@ class ChangePasswordView(APIView):
 				status=status.HTTP_400_BAD_REQUEST,
 			)
 
-		request.user.set_password(new_password)
-		request.user.password_set_at = timezone.now()
-		request.user.save(update_fields=["password", "password_set_at"])
+		from utils.password_change import change_user_password
+
+		change_user_password(request.user, new_password)
 		return Response({"detail": "Password changed successfully."})
 
 

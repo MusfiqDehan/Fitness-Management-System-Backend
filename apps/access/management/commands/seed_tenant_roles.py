@@ -37,6 +37,7 @@ PREDEFINED_TENANT_ROLES = {
             "members": "edit",
             "members.attendance": "edit",
             "members.packages": "edit",
+            "discount": "edit",
             "attendance.devices": "edit",
             "attendance.access_gate": "edit",
             "attendance.fingerprints": "edit",
@@ -97,6 +98,7 @@ PREDEFINED_TENANT_ROLES = {
             "members": "edit",
             "members.attendance": "edit",
             "members.packages": "view",
+            "discount": "view",
             "attendance.devices": "edit",
             "attendance.access_gate": "edit",
             "attendance.fingerprints": "edit",
@@ -116,6 +118,7 @@ PREDEFINED_TENANT_ROLES = {
 FULL_ACCESS_FEATURE_KEYS = [
     "dashboard",
     "members", "members.attendance", "members.packages",
+    "discount",
     "attendance.devices", "attendance.access_gate", "attendance.fingerprints", "attendance.iclock",
     "instructors",
     "classes", "classes.bookings",
@@ -125,7 +128,7 @@ FULL_ACCESS_FEATURE_KEYS = [
     "cms.banners", "cms.blogs",
     "branches",
     "reports", "reminders",
-    "settings", "permissions", "email_config", "public_website", "custom_domain",
+    "settings", "settings.preferences", "permissions", "email_config", "public_website", "custom_domain",
 ]
 
 

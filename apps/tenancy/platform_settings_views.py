@@ -6,17 +6,24 @@ users hit via apps.dashboard, but backed by public-schema singleton
 models so Platform Admin users can manage their own gym profile,
 preferences, and notification settings without touching tenant data.
 
-All views require the platform.settings permission module.
+Public branding (AllowAny) mirrors the tenant PublicGymBrandingView URL.
+Authenticated gym-profile GET is available to any logged-in platform user;
+mutations still require platform.settings edit.
 """
 import os
 import uuid
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
+from django.db import connection
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from apps.dashboard.settings_views import serialize_gym_branding
+from utils.cache_helpers import PUBLIC_BRANDING_TTL, get_cached_value, public_branding_key
 
 from .models import (
     PlatformGymPreferences,
@@ -40,6 +47,30 @@ _UPLOAD_MAX_SIZE_MB = 100
 
 
 # ---------------------------------------------------------------
+# Public Gym Branding (public schema)
+# ---------------------------------------------------------------
+
+class PlatformPublicGymBrandingView(APIView):
+    """GET /api/v1/cms/public/site-settings/ — public read of platform branding."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        schema_name = connection.schema_name
+
+        def load():
+            profile = PlatformGymProfile.objects.filter(pk=1).first()
+            return serialize_gym_branding(profile)
+
+        payload = get_cached_value(
+            public_branding_key(schema_name),
+            PUBLIC_BRANDING_TTL,
+            load,
+        )
+        return Response({**payload, "discount_enabled": False})
+
+
+# ---------------------------------------------------------------
 # Gym Profile
 # ---------------------------------------------------------------
 
@@ -48,7 +79,9 @@ class PlatformGymProfileView(APIView):
 
     def get_permissions(self):
         if self.request.method in ('GET', 'HEAD', 'OPTIONS'):
-            return [_SETTINGS_VIEW()]
+            # Branding/timezone consumers (Sidebar, useTimezone) need read access
+            # for every authenticated platform role — not only settings editors.
+            return [IsAuthenticated()]
         return [_SETTINGS_EDIT()]
 
     def _obj(self):

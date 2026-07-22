@@ -9,19 +9,22 @@ class BiometricDeviceProfile:
     label: str
     manufacturer: str
     supports_remote_enroll: bool
+    supports_fingerprint: bool
+    supports_card: bool
     max_users: int
     max_fingers_per_user: int
     push_trans_flag: str
     remote_enroll_command_template: str
 
-    def build_userinfo_command(self, *, pin: str, name: str) -> str:
+    def build_userinfo_command(self, *, pin: str, name: str, card: str = "") -> str:
         safe_name = (name or "").replace("\t", " ").strip()[:40]
+        safe_card = (card or "").replace("\t", " ").strip()[:64]
         return (
             f"DATA UPDATE USERINFO PIN={pin}\t"
             f"Name={safe_name}\t"
             f"Pri=0\t"
             f"Passwd=\t"
-            f"Card=\t"
+            f"Card={safe_card}\t"
             f"Grp=1\t"
             f"TZ=0000000100000000\t"
             f"Verify=-1"
@@ -45,6 +48,8 @@ DEVICE_PROFILES: dict[str, BiometricDeviceProfile] = {
         label="ZKTeco",
         manufacturer="ZKTeco",
         supports_remote_enroll=True,
+        supports_fingerprint=True,
+        supports_card=True,
         max_users=3000,
         max_fingers_per_user=10,
         push_trans_flag=_DEFAULT_TRANS_FLAG,
@@ -55,6 +60,8 @@ DEVICE_PROFILES: dict[str, BiometricDeviceProfile] = {
         label="Stellar",
         manufacturer="Stellar",
         supports_remote_enroll=False,
+        supports_fingerprint=False,
+        supports_card=False,
         max_users=0,
         max_fingers_per_user=0,
         push_trans_flag="",

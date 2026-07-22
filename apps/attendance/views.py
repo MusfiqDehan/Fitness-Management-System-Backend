@@ -9,6 +9,7 @@ from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import connection
 from django.db import transaction
+from django.db.models import Max
 from django.http import HttpResponse as PlainTextResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -26,6 +27,7 @@ from apps.access.permissions import HasFeatureMethodPermission
 from apps.membership.models import Attendance, Member
 from apps.tenancy.models import AccessDeviceRoute, Tenant
 from utils.pagination import StandardPagination
+from utils.cache_helpers import STATS_TTL, get_cached_value, stats_key, stats_scope_token
 from utils.tenancy_helpers import scope_queryset_by_branch_access
 from .models import AccessDevice, AttendanceIngestEvent, DeviceCredential, DeviceUser, FingerprintEnrollmentSession
 
@@ -39,6 +41,8 @@ from .services.adms_commands import (
 	queue_commands,
 	lookup_queued_command,
 )
+from .services.card_provision import CardProvisionService
+from .services.device_user_delete import DeviceUserDeleteService
 from .services.enrollment import (
 	EnrollmentConflict,
 	EnrollmentNotSupported,
@@ -47,15 +51,20 @@ from .services.enrollment import (
 )
 from .services.ingestion import ADMSIngestionService
 from .services.realtime import publish_attendance_event
+from .services.session import apply_member_punch
+from .services.stats import AttendanceStatsService
 from .serializers import (
 	AccessDeviceSerializer,
 	AttendanceLogSerializer,
+	CardProvisionSerializer,
 	DeviceCredentialRotateSerializer,
 	DeviceUserSerializer,
+	FingerprintDeleteSerializer,
 	FingerprintLinkSerializer,
 	FingerprintUnlinkSerializer,
 	FingerprintEnrollmentStartSerializer,
 	FingerprintEnrollmentSessionSerializer,
+	member_credential_linked,
 )
 
 
@@ -126,21 +135,31 @@ class AccessCheckAPIView(APIView):
 				status=status.HTTP_403_FORBIDDEN,
 			)
 
-		# If member is already inside, next valid scan closes the session.
-		open_attendance = Attendance.objects.filter(
-			member=member,
-			check_out_time__isnull=True,
-		).first()
-		if open_attendance:
-			open_attendance.check_out_time = timezone.now()
-			open_attendance.save(update_fields=["check_out_time"])
+		entry_method = "card" if card_id else "fingerprint"
+		device_ref = device_id or (access_device.device_sn if access_device else None)
+		action = apply_member_punch(
+			member,
+			entry_method=entry_method,
+			device_id=device_ref,
+		)
+		if not action:
+			return Response(
+				{
+					"access": True,
+					"action": "ignored",
+					"message": "Duplicate scan ignored",
+					"member_name": member.full_name,
+				}
+			)
+
+		if action == "checked_out":
 			publish_attendance_event(
 				"attendance-updated",
 				{
 					"member_id": member.id,
 					"member_name": member.full_name,
 					"action": "checked_out",
-					"device_sn": access_device.device_sn if access_device else device_id,
+					"device_sn": device_ref,
 				},
 			)
 			return Response(
@@ -151,21 +170,6 @@ class AccessCheckAPIView(APIView):
 				}
 			)
 
-		# Keep anti-duplicate tap protection during migration window.
-		last_entry = Attendance.objects.filter(member=member).order_by("-check_in_time").first()
-		if last_entry:
-			time_diff = timezone.now() - last_entry.check_in_time
-			if time_diff < timedelta(seconds=20):
-				return Response(
-					{"access": False, "message": "Duplicate scan detected"},
-					status=status.HTTP_409_CONFLICT,
-				)
-
-		Attendance.objects.create(
-			member=member,
-			entry_method="card" if card_id else "fingerprint",
-			device_id=device_id or (access_device.device_sn if access_device else None),
-		)
 		try:
 			from apps.membership.services.class_attendance import ClassAttendanceService
 			ClassAttendanceService.try_match_member_check_in(member, timezone.now())
@@ -177,7 +181,7 @@ class AccessCheckAPIView(APIView):
 				"member_id": member.id,
 				"member_name": member.full_name,
 				"action": "checked_in",
-				"device_sn": access_device.device_sn if access_device else device_id,
+				"device_sn": device_ref,
 			},
 		)
 		return Response(
@@ -430,6 +434,41 @@ class AttendanceLogListAPIView(ListAPIView):
 		return queryset
 
 
+class AttendanceStatsAPIView(APIView):
+	feature_keys = ["members.attendance", "attendance.access_gate"]
+	permission_classes = [HasFeatureMethodPermission]
+
+	def get(self, request):
+		branch_filter = request.query_params.get("branch")
+		device_sn = (request.query_params.get("device_sn") or "").strip() or None
+		hourly_range = (request.query_params.get("hourly_range") or "today").strip().lower()
+		heatmap_range = (request.query_params.get("heatmap_range") or "this_year").strip().lower()
+		streak_range = (request.query_params.get("streak_range") or "this_year").strip().lower()
+
+		schema_name = connection.schema_name
+		scope = stats_scope_token(request.user, branch_filter)
+		cache_scope = (
+			f"{scope}:d={device_sn or ''}:h={hourly_range}:m={heatmap_range}:s={streak_range}"
+		)
+
+		def load():
+			return AttendanceStatsService.build_payload(
+				request.user,
+				branch_filter_id=branch_filter,
+				device_sn=device_sn,
+				hourly_range=hourly_range,
+				heatmap_range=heatmap_range,
+				streak_range=streak_range,
+			)
+
+		payload = get_cached_value(
+			stats_key(schema_name, "attendance_stats", cache_scope),
+			STATS_TTL,
+			load,
+		)
+		return Response(payload)
+
+
 class MemberAttendanceLogListAPIView(ListAPIView):
 	permission_classes = [IsAuthenticated]
 	serializer_class = AttendanceLogSerializer
@@ -462,16 +501,62 @@ class MemberAttendanceLogListAPIView(ListAPIView):
 		)
 
 
+class MemberCredentialsAPIView(APIView):
+	"""Return the authenticated member's linked credentials and last-use timestamps."""
+
+	permission_classes = [IsAuthenticated]
+
+	_EMPTY = {
+		"credential_linked": "none",
+		"last_used_at": None,
+		"last_entry_method": None,
+		"last_fingerprint_used_at": None,
+		"last_card_used_at": None,
+	}
+
+	def get(self, request):
+		try:
+			member = request.user.member
+		except ObjectDoesNotExist:
+			return Response(self._EMPTY)
+
+		logs = Attendance.objects.filter(member=member)
+		last_fingerprint = logs.filter(entry_method="fingerprint").aggregate(
+			value=Max("check_in_time")
+		)["value"]
+		last_card = logs.filter(entry_method="card").aggregate(value=Max("check_in_time"))["value"]
+		latest = (
+			logs.order_by("-check_in_time")
+			.values("check_in_time", "entry_method")
+			.first()
+		)
+
+		return Response(
+			{
+				"credential_linked": member_credential_linked(member),
+				"last_used_at": latest["check_in_time"] if latest else None,
+				"last_entry_method": latest["entry_method"] if latest else None,
+				"last_fingerprint_used_at": last_fingerprint,
+				"last_card_used_at": last_card,
+			}
+		)
+
+
 class FingerprintUnlinkedListAPIView(ListAPIView):
 	feature_key = "attendance.fingerprints"
 	permission_classes = [HasFeatureMethodPermission]
 	serializer_class = DeviceUserSerializer
 	pagination_class = StandardPagination
 	filter_backends = [SearchFilter]
-	search_fields = ["device_uid", "name", "access_device__name"]
+	search_fields = ["device_uid", "name", "access_device__name", "card_number"]
 
 	def get_queryset(self):
-		queryset = DeviceUser.objects.filter(status=DeviceUser.STATUS_UNLINKED).select_related("member", "access_device")
+		queryset = DeviceUser.objects.exclude(status=DeviceUser.STATUS_DELETED).select_related(
+			"member", "access_device"
+		)
+		status_filter = (self.request.query_params.get("status") or "").strip().lower()
+		if status_filter in {DeviceUser.STATUS_UNLINKED, DeviceUser.STATUS_LINKED}:
+			queryset = queryset.filter(status=status_filter)
 		access_device_id = self.request.query_params.get("access_device_id")
 		if access_device_id:
 			queryset = queryset.filter(access_device_id=access_device_id)
@@ -494,9 +579,20 @@ class FingerprintLinkAPIView(APIView):
 			device_user.status = DeviceUser.STATUS_LINKED
 			device_user.save(update_fields=["member", "status", "last_seen_at"])
 
-			# Backward-compatible sync with legacy membership fingerprint identity.
-			member.fingerprint_id = device_user.device_uid
-			member.save(update_fields=["fingerprint_id"])
+			member_updates: list[str] = []
+			card = (device_user.card_number or "").strip()
+			if card and not (member.card_id or "").strip():
+				member.card_id = card
+				member_updates.append("card_id")
+
+			# Fingerprint-only identities fill empty fingerprint_id (never overwrite).
+			# Card-only slots must not set fingerprint_id.
+			if not card and not (member.fingerprint_id or "").strip():
+				member.fingerprint_id = device_user.device_uid
+				member_updates.append("fingerprint_id")
+
+			if member_updates:
+				member.save(update_fields=member_updates)
 
 		publish_attendance_event(
 			"fingerprint-linked",
@@ -519,16 +615,46 @@ class FingerprintUnlinkAPIView(APIView):
 		serializer = FingerprintUnlinkSerializer(data=request.data)
 		serializer.is_valid(raise_exception=True)
 		device_user = get_object_or_404(DeviceUser, id=serializer.validated_data["device_user_id"])
+		if device_user.status == DeviceUser.STATUS_PENDING_DELETE:
+			return Response(
+				{"detail": "Cannot unlink while device delete is pending confirmation."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+		if device_user.status == DeviceUser.STATUS_DELETED:
+			return Response(
+				{"detail": "Device user already deleted."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
 		member = device_user.member
+		card = (device_user.card_number or "").strip()
+		device_uid = device_user.device_uid
 
 		with transaction.atomic():
+			remaining = (
+				DeviceUser.objects.filter(
+					member=member,
+					status__in=[DeviceUser.STATUS_LINKED, DeviceUser.STATUS_PENDING_DELETE],
+				).exclude(pk=device_user.pk)
+				if member
+				else DeviceUser.objects.none()
+			)
+
 			device_user.member = None
 			device_user.status = DeviceUser.STATUS_UNLINKED
 			device_user.save(update_fields=["member", "status", "last_seen_at"])
 
-			if member and member.fingerprint_id == device_user.device_uid:
-				member.fingerprint_id = None
-				member.save(update_fields=["fingerprint_id"])
+			if member:
+				member_updates: list[str] = []
+				if card and (member.card_id or "").strip() == card:
+					if not remaining.filter(card_number=card).exists():
+						member.card_id = None
+						member_updates.append("card_id")
+				if (member.fingerprint_id or "").strip() == device_uid:
+					if not remaining.filter(device_uid=device_uid).exists():
+						member.fingerprint_id = None
+						member_updates.append("fingerprint_id")
+				if member_updates:
+					member.save(update_fields=member_updates)
 
 		publish_attendance_event(
 			"fingerprint-unlinked",
@@ -539,6 +665,32 @@ class FingerprintUnlinkAPIView(APIView):
 		)
 
 		return Response({"detail": "Fingerprint unlinked.", "device_user_id": device_user.id})
+
+
+class FingerprintDeleteAPIView(APIView):
+	feature_key = "attendance.fingerprints"
+	method_permission_map = {"POST": "edit"}
+	permission_classes = [HasFeatureMethodPermission]
+
+	def post(self, request):
+		serializer = FingerprintDeleteSerializer(data=request.data)
+		serializer.is_valid(raise_exception=True)
+		device_user = serializer.validated_data["device_user"]
+		device = serializer.validated_data["device"]
+
+		try:
+			queued = DeviceUserDeleteService.queue_delete(device_user=device_user, device=device)
+		except ValueError as exc:
+			return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+		return Response(
+			{
+				"detail": "Delete queued. Fitssort will remove this identity after the device confirms.",
+				"device_user_id": device_user.id,
+				"status": DeviceUser.STATUS_PENDING_DELETE,
+				"queued_command_ids": [entry["id"] for entry in queued],
+			}
+		)
 
 
 class BiometricDeviceProfileListAPIView(APIView):
@@ -552,6 +704,8 @@ class BiometricDeviceProfileListAPIView(APIView):
 				"label": profile.label,
 				"manufacturer": profile.manufacturer,
 				"supports_remote_enroll": profile.supports_remote_enroll,
+				"supports_fingerprint": profile.supports_fingerprint,
+				"supports_card": profile.supports_card,
 				"max_users": profile.max_users,
 				"max_fingers_per_user": profile.max_fingers_per_user,
 			}
@@ -623,6 +777,58 @@ class FingerprintEnrollmentCancelAPIView(APIView):
 		session = get_object_or_404(FingerprintEnrollmentSession, pk=pk)
 		session = FingerprintEnrollmentService.cancel_enrollment(session)
 		return Response(FingerprintEnrollmentSessionSerializer(session).data)
+
+
+class CardProvisionAPIView(APIView):
+	feature_key = "attendance.fingerprints"
+	method_permission_map = {"POST": "edit"}
+	permission_classes = [HasFeatureMethodPermission]
+
+	def post(self, request):
+		serializer = CardProvisionSerializer(data=request.data)
+		serializer.is_valid(raise_exception=True)
+		member = serializer.validated_data["member"]
+		device = serializer.validated_data["device"]
+
+		members_qs = Member.objects.filter(id=member.id)
+		members_qs = scope_queryset_by_branch_access(
+			members_qs,
+			request.user,
+			branch_field="branch_id",
+		)
+		if not members_qs.exists():
+			return Response({"detail": "Member not found or not accessible."}, status=status.HTTP_404_NOT_FOUND)
+
+		try:
+			result = CardProvisionService.provision(
+				member=member,
+				device=device,
+				user=request.user,
+			)
+		except EnrollmentNotSupported as exc:
+			return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+		except EnrollmentServiceError as exc:
+			return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+		publish_attendance_event(
+			"card-provisioned",
+			{
+				"member_id": member.id,
+				"member_name": member.full_name,
+				"access_device_id": device.id,
+				"device_uid": result["device_uid"],
+				"card_id": result["card_id"],
+				"device_user_id": result["device_user_id"],
+			},
+		)
+		return Response(
+			{
+				"detail": "Card provision queued.",
+				**{k: v for k, v in result.items() if k != "queued_commands"},
+				"queued_command_ids": [c["id"] for c in result["queued_commands"]],
+			},
+			status=status.HTTP_201_CREATED,
+		)
 
 
 class PublicSchemaADMSDispatchMixin:
@@ -869,6 +1075,12 @@ class IclockDeviceCmdAPIView(PublicSchemaADMSDispatchMixin, APIView):
 
 			if command_id:
 				lookup_queued_command(device, command_id)
+				DeviceUserDeleteService.handle_command_ack(
+					device=device,
+					command_id=command_id,
+					return_code=return_code,
+					cmd_echo=cmd_echo,
+				)
 				FingerprintEnrollmentService.handle_command_ack(
 					device=device,
 					command_id=command_id,

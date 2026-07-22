@@ -1,0 +1,275 @@
+from django.test import SimpleTestCase, TestCase
+from django.utils import timezone
+from django_tenants.utils import schema_context
+
+from apps.attendance.models import AccessDevice, DeviceUser
+from apps.attendance.serializers import FingerprintLinkSerializer
+from apps.attendance.services.card_provision import CardProvisionService
+from apps.attendance.services.enrollment import FingerprintEnrollmentService
+from apps.attendance.services.ingestion import ADMSIngestionService
+from apps.membership.models import Attendance, Member
+from apps.tenancy.models import Domain, Tenant
+
+
+class DualCredentialParseTests(SimpleTestCase):
+    def test_parse_attlog_verify_columns(self):
+        body = "\n".join(
+            [
+                "TABLE=ATTLOG",
+                "1001\t2026-01-11 10:12:30\t0\t2\t0\t0",
+                "1001\t2026-01-11 10:13:30\t0\t1\t0\t0",
+            ]
+        )
+        events = ADMSIngestionService._parse_body(body)
+        self.assertEqual(events[0].verify_mode, 2)
+        self.assertEqual(events[1].verify_mode, 1)
+        self.assertEqual(ADMSIngestionService.entry_method_for_verify(2), "card")
+        self.assertEqual(ADMSIngestionService.entry_method_for_verify(1), "fingerprint")
+
+
+class DualCredentialIngestionTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.tenant = Tenant(
+            schema_name="dualcred",
+            name="Dual Cred Gym",
+        )
+        cls.tenant.save()
+        Domain.objects.get_or_create(
+            domain="dualcred.testserver",
+            tenant=cls.tenant,
+            defaults={"is_primary": True},
+        )
+
+    def test_card_and_fingerprint_entry_methods(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Gate",
+                device_sn="ZKT-DUAL-1",
+                device_profile="zkteco",
+                device_model="K40",
+                mode=AccessDevice.MODE_TCP_RELAY,
+            )
+            member = Member.objects.create(
+                full_name="Dual Member",
+                phone_number="01700000999",
+                fingerprint_id="1001",
+                card_id="RFID-9",
+                start_date=timezone.now().date(),
+            )
+            DeviceUser.objects.create(
+                access_device=device,
+                device_uid="1001",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+                card_number="RFID-9",
+            )
+
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n1001\t2026-01-11 10:12:30\t0\t2\t0\t0",
+            )
+            att = Attendance.objects.get(member=member)
+            self.assertEqual(att.entry_method, "card")
+
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n1001\t2026-01-11 10:14:00\t0\t1\t0\t0",
+            )
+            att.refresh_from_db()
+            self.assertIsNotNone(att.check_out_time)
+            self.assertEqual(Attendance.objects.filter(member=member).count(), 1)
+
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n1001\t2026-01-11 18:00:00\t0\t1\t0\t0",
+            )
+            self.assertEqual(Attendance.objects.filter(member=member).count(), 1)
+
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n1001\t2026-01-12 09:00:00\t0\t1\t0\t0",
+            )
+            att2 = Attendance.objects.filter(member=member, check_out_time__isnull=True).get()
+            self.assertEqual(att2.entry_method, "fingerprint")
+
+    def test_userinfo_stores_card_number(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Gate",
+                device_sn="ZKT-DUAL-2",
+                device_profile="zkteco",
+                device_model="K40",
+            )
+            ADMSIngestionService.process(
+                device,
+                "TABLE=USERINFO\nPIN=1001\tName=Jane\tCard=RFID-9",
+            )
+            user = DeviceUser.objects.get(access_device=device, device_uid="1001")
+            self.assertEqual(user.card_number, "RFID-9")
+            self.assertEqual(user.name, "Jane")
+
+    def test_tcp_relay_enrollment_allowed(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Relay Gate",
+                device_sn="ZKT-RELAY-1",
+                device_profile="zkteco",
+                device_model="K40",
+                mode=AccessDevice.MODE_TCP_RELAY,
+                is_active=True,
+            )
+            member = Member.objects.create(
+                full_name="Enroll Me",
+                phone_number="01700000888",
+                start_date=timezone.now().date(),
+            )
+            session = FingerprintEnrollmentService.start_enrollment(
+                member=member,
+                device=device,
+                user=None,
+            )
+            self.assertEqual(session.status, "queued")
+            meta = device.meta_json or {}
+            pending = meta.get("pending_commands") or []
+            self.assertTrue(any("USERINFO" in (c.get("cmd") or "") for c in pending))
+
+    def test_tcp_relay_enroll_ack_completes_session(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Relay Gate",
+                device_sn="ZKT-RELAY-ACK",
+                device_profile="zkteco",
+                device_model="K40",
+                mode=AccessDevice.MODE_TCP_RELAY,
+                is_active=True,
+            )
+            member = Member.objects.create(
+                full_name="Ack Member",
+                phone_number="01700000666",
+                start_date=timezone.now().date(),
+            )
+            session = FingerprintEnrollmentService.start_enrollment(
+                member=member,
+                device=device,
+                user=None,
+            )
+            device.refresh_from_db()
+            enroll_cmd = next(
+                c for c in (device.meta_json or {}).get("pending_commands", [])
+                if (c.get("cmd") or "").startswith("ENROLL_FP")
+            )
+            updated = FingerprintEnrollmentService.handle_command_ack(
+                device=device,
+                command_id=str(enroll_cmd["id"]),
+                return_code=0,
+                cmd_echo="DATA",
+            )
+            member.refresh_from_db()
+            self.assertEqual(updated.status, "completed")
+            self.assertEqual(member.fingerprint_id, session.device_uid)
+
+    def test_different_device_pins_resolve_to_different_members(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Gate",
+                device_sn="ZKT-MULTI-1",
+                device_profile="zkteco",
+                device_model="F18",
+                mode=AccessDevice.MODE_TCP_RELAY,
+            )
+            member_a = Member.objects.create(
+                full_name="Jubayer",
+                phone_number="01700001001",
+                start_date=timezone.now().date(),
+            )
+            member_b = Member.objects.create(
+                full_name="Baizid",
+                phone_number="01700001002",
+                start_date=timezone.now().date(),
+            )
+            DeviceUser.objects.create(
+                access_device=device,
+                device_uid="1",
+                member=member_a,
+                status=DeviceUser.STATUS_LINKED,
+                name="Jubayer",
+            )
+            DeviceUser.objects.create(
+                access_device=device,
+                device_uid="5",
+                member=member_b,
+                status=DeviceUser.STATUS_LINKED,
+                name="Baizid",
+            )
+
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n1\t2026-01-11 10:00:00\t0\t1\t0\t0",
+            )
+            ADMSIngestionService.process(
+                device,
+                "TABLE=ATTLOG\n5\t2026-01-11 10:05:00\t0\t1\t0\t0",
+            )
+
+            logs = list(Attendance.objects.order_by("check_in_time"))
+            self.assertEqual(len(logs), 2)
+            self.assertEqual(logs[0].member_id, member_a.id)
+            self.assertEqual(logs[0].device_uid, "1")
+            self.assertEqual(logs[1].member_id, member_b.id)
+            self.assertEqual(logs[1].device_uid, "5")
+
+    def test_fingerprint_link_rejects_second_pin_for_same_member_on_device(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Gate",
+                device_sn="ZKT-LINK-1",
+                device_profile="zkteco",
+                device_model="F18",
+            )
+            member = Member.objects.create(
+                full_name="Musfiq",
+                phone_number="01700001003",
+                start_date=timezone.now().date(),
+            )
+            linked = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="2",
+                member=member,
+                status=DeviceUser.STATUS_LINKED,
+            )
+            unlinked = DeviceUser.objects.create(
+                access_device=device,
+                device_uid="3",
+                status=DeviceUser.STATUS_UNLINKED,
+            )
+
+            serializer = FingerprintLinkSerializer(
+                data={"device_user_id": unlinked.id, "member_id": member.id},
+            )
+            self.assertFalse(serializer.is_valid())
+            self.assertIn("member_id", serializer.errors)
+            linked.refresh_from_db()
+            self.assertEqual(linked.member_id, member.id)
+
+    def test_card_provision_queues_userinfo(self):
+        with schema_context(self.tenant.schema_name):
+            device = AccessDevice.objects.create(
+                name="Relay Gate",
+                device_sn="ZKT-CARD-1",
+                device_profile="zkteco",
+                device_model="K40",
+                mode=AccessDevice.MODE_TCP_RELAY,
+                is_active=True,
+            )
+            member = Member.objects.create(
+                full_name="Card Me",
+                phone_number="01700000777",
+                card_id="CARD-55",
+                start_date=timezone.now().date(),
+            )
+            result = CardProvisionService.provision(member=member, device=device)
+            self.assertEqual(result["card_id"], "CARD-55")
+            device.refresh_from_db()
+            cmds = (device.meta_json or {}).get("pending_commands") or []
+            self.assertTrue(any("Card=CARD-55" in (c.get("cmd") or "") for c in cmds))

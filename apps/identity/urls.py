@@ -1,12 +1,11 @@
 from django.urls import path
-from rest_framework_simplejwt.views import (
-    TokenRefreshView,
-)
+from utils.jwt_refresh import RevocationAwareTokenRefreshView
 from .views import (
     RegisterView,
     CurrentUserAPIView,
     InstructorListAPIView,
     EmailOrPhoneTokenObtainPairView,
+    LogoutAPIView,
 )
 
 app_name = 'identity'
@@ -14,7 +13,8 @@ app_name = 'identity'
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
     path('login/', EmailOrPhoneTokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('logout/', LogoutAPIView.as_view(), name='token_logout'),
+    path('refresh/', RevocationAwareTokenRefreshView.as_view(), name='token_refresh'),
     path('me/', CurrentUserAPIView.as_view(), name='current-user'),
     path('instructors/', InstructorListAPIView.as_view(), name='instructor-list'),
 ]

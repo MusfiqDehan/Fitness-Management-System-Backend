@@ -26,6 +26,7 @@ from apps.tenancy.platform_settings_views import (
     PlatformGymPreferencesView,
     PlatformNotificationPreferencesView,
     PlatformFileUploadView,
+    PlatformPublicGymBrandingView,
 )
 
 urlpatterns = [
@@ -36,6 +37,13 @@ urlpatterns = [
     path('api/v1/health/tenant/', tenant_health, name='tenant-health'),
     path('api/v1/health/live/', liveness_health, name='liveness-health'),
     path('api/v1/health/ready/', readiness_health, name='readiness-health'),
+
+    # Public platform branding — same URL shape as tenant PublicGymBrandingView.
+    # Must stay above the cms.urls include so it is not shadowed by CMS PageContent routes.
+    path('api/v1/cms/public/site-settings/', PlatformPublicGymBrandingView.as_view(), name='platform-public-gym-branding'),
+
+    # Dual-schema CMS (blogs/banners) — same paths as tenant ROOT_URLCONF.
+    path('api/v1/cms/', include(('apps.cms.urls', 'cms'), namespace='cms')),
 
     # Public control-plane authentication
     path('api/v1/identity/', include(('apps.identity.urls', 'identity'), namespace='public-identity')),

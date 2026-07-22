@@ -11,7 +11,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.filters import SearchFilter, OrderingFilter
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.db import connection, transaction
 from django.utils import timezone
 from django.core.mail import EmailMultiAlternatives
@@ -508,8 +508,20 @@ class MemberView(BranchScopedListMixin, MemberActions, ModelCRUDView):
     ordering = ['id']
 
     def get_queryset(self):
+        from apps.attendance.models import DeviceUser
+
         queryset = super().get_queryset()
-        return self.scope_branch_queryset(queryset)
+        queryset = self.scope_branch_queryset(queryset)
+        return queryset.prefetch_related(
+            Prefetch(
+                'attendance_device_users',
+                queryset=DeviceUser.objects.filter(
+                    status__in=[DeviceUser.STATUS_LINKED, DeviceUser.STATUS_PENDING_DELETE]
+                ).order_by(
+                    'device_uid', 'id'
+                ),
+            )
+        )
 
     def _create(self, request):
         payload = request.data.copy()
@@ -918,12 +930,79 @@ class PublicMemberRegistrationAPIView(APIView):
                         .order_by('-created_at')
                         .first()
                     )
+                    from django.core.exceptions import ValidationError as DjangoValidationError
+
+                    from utils.coupon_code import validate_coupon_code_format
+
+                    try:
+                        coupon_code = validate_coupon_code_format(
+                            request.data.get('coupon_code')
+                        ) or ''
+                    except DjangoValidationError as exc:
+                        raise ValueError('; '.join(exc.messages)) from exc
+                    apply_result = None
+                    tenant = getattr(request, 'tenant', None)
+                    feature_on = False
+                    if tenant is not None:
+                        from apps.tenancy.services import tenant_has_feature
+
+                        feature_on = tenant_has_feature(tenant, 'discount')
+
                     if package_payment is None and member.member_package is not None:
+                        amount = member.member_package.price
+                        line_items = []
+                        if feature_on:
+                            from apps.membership.services.discount_engine import (
+                                apply_discounts_for_payment,
+                                record_discount_usages,
+                            )
+
+                            apply_result = apply_discounts_for_payment(
+                                package=member.member_package,
+                                member=member,
+                                coverage_months=[],
+                                coupon_code=coupon_code or None,
+                                feature_enabled=True,
+                            )
+                            if apply_result is not None:
+                                amount = apply_result.total
+                                line_items = apply_result.line_items
                         package_payment = Payment.objects.create(
                             member=member,
                             payment_type='package',
-                            amount=member.member_package.price,
+                            amount=amount,
+                            line_items=line_items,
                         )
+                        if apply_result is not None:
+                            record_discount_usages(
+                                payment=package_payment,
+                                apply_result=apply_result,
+                                coupon_code=coupon_code or None,
+                            )
+                    elif package_payment is not None and feature_on and member.member_package is not None:
+                        from apps.membership.services.discount_engine import (
+                            apply_discounts_for_payment,
+                            record_discount_usages,
+                        )
+
+                        apply_result = apply_discounts_for_payment(
+                            package=member.member_package,
+                            member=member,
+                            coverage_months=package_payment.coverage_months or [],
+                            coupon_code=coupon_code or None,
+                            feature_enabled=True,
+                        )
+                        if apply_result is not None and apply_result.applied:
+                            package_payment.amount = apply_result.total
+                            package_payment.line_items = apply_result.line_items
+                            package_payment.save(
+                                update_fields=['amount', 'line_items', 'updated_at']
+                            )
+                            record_discount_usages(
+                                payment=package_payment,
+                                apply_result=apply_result,
+                                coupon_code=coupon_code or None,
+                            )
 
                     if package_payment is None:
                         raise ValueError('Could not prepare package payment for checkout.')

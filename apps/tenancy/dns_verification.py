@@ -7,6 +7,9 @@ keeps using their existing subdomain.
 
 The actual routable ``Domain`` row is only created once verification succeeds,
 so unverified domains can never resolve to a tenant schema.
+
+After TXT verification, the hostname must also point at the platform (A or
+CNAME). That routing check is advisory — it does not block verification.
 """
 from __future__ import annotations
 
@@ -35,6 +38,14 @@ def _strip_quotes(value: str) -> str:
     return value.strip().strip('"').strip()
 
 
+def _make_resolver():
+    resolver = dns.resolver.Resolver(configure=False)
+    resolver.nameservers = list(_PUBLIC_NAMESERVERS)
+    resolver.lifetime = _LOOKUP_TIMEOUT_SECONDS
+    resolver.timeout = _LOOKUP_TIMEOUT_SECONDS
+    return resolver
+
+
 def verify_txt_record(record_name: str, expected_token: str) -> tuple[bool, str]:
     """Check whether ``record_name`` publishes a TXT record == ``expected_token``.
 
@@ -46,10 +57,7 @@ def verify_txt_record(record_name: str, expected_token: str) -> tuple[bool, str]
     if not expected_token:
         return False, "Missing verification token."
 
-    resolver = dns.resolver.Resolver(configure=False)
-    resolver.nameservers = list(_PUBLIC_NAMESERVERS)
-    resolver.lifetime = _LOOKUP_TIMEOUT_SECONDS
-    resolver.timeout = _LOOKUP_TIMEOUT_SECONDS
+    resolver = _make_resolver()
 
     try:
         answers = resolver.resolve(record_name, "TXT")
@@ -73,3 +81,64 @@ def verify_txt_record(record_name: str, expected_token: str) -> tuple[bool, str]
             return True, ""
 
     return False, "Verification record found but the token did not match. Please re-copy the exact value."
+
+
+def _normalize_host(value: str) -> str:
+    return (value or "").strip().lower().rstrip(".")
+
+
+def check_domain_routing(
+    domain: str,
+    *,
+    cname_target: str = "",
+    a_target: str = "",
+) -> tuple[bool, str]:
+    """Soft-check whether ``domain`` already points at the platform.
+
+    Returns ``(ready, message)``. ``ready`` is True when a CNAME matches
+    ``cname_target`` or an A record matches ``a_target``. Failures are advisory
+    (empty targets skip that check).
+    """
+    hostname = _normalize_host(domain)
+    expected_cname = _normalize_host(cname_target)
+    expected_a = (a_target or "").strip()
+
+    if not hostname:
+        return False, "Missing domain."
+    if not expected_cname and not expected_a:
+        return False, "Routing target is not configured."
+    if not _DNS_AVAILABLE:
+        return False, "DNS lookup is temporarily unavailable."
+
+    resolver = _make_resolver()
+
+    if expected_cname:
+        try:
+            answers = resolver.resolve(hostname, "CNAME")
+            for rdata in answers:
+                target = _normalize_host(str(rdata.target))
+                if target == expected_cname:
+                    return True, ""
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.DNSException):
+            pass
+
+    if expected_a:
+        try:
+            answers = resolver.resolve(hostname, "A")
+            for rdata in answers:
+                if str(rdata).strip() == expected_a:
+                    return True, ""
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.DNSException):
+            pass
+
+    if expected_cname and expected_a:
+        hint = f"Add a CNAME to {expected_cname} or an A record to {expected_a}."
+    elif expected_cname:
+        hint = f"Add a CNAME pointing to {expected_cname}."
+    else:
+        hint = f"Add an A record pointing to {expected_a}."
+
+    return False, (
+        "Ownership is verified, but this domain does not point at Fitssort yet. "
+        f"{hint}"
+    )

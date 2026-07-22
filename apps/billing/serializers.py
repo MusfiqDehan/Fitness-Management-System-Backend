@@ -23,7 +23,10 @@ from apps.tenancy.models import (
 )
 from apps.membership.models import Member, MemberPackage, Payment
 from apps.billing.models import TenantPaymentGateway, PaymentTransaction
-from utils.currency import convert_currency
+from django.core.exceptions import ValidationError as DjangoValidationError
+
+from utils.coupon_code import validate_coupon_code_format
+from utils.currency import convert_currency, normalize_currency_code
 
 
 class FeatureSerializer(serializers.ModelSerializer):
@@ -145,7 +148,8 @@ class PackageSerializer(serializers.ModelSerializer):
 
         if settings and candidate:
             if settings.enable_currency_conversion:
-                self._display_currency_cache = candidate if candidate in matrix else "USD"
+                supported = candidate in matrix or normalize_currency_code(candidate) in matrix
+                self._display_currency_cache = candidate if supported else "USD"
             else:
                 # Conversion disabled: keep amount as-is, only switch currency label.
                 self._display_currency_cache = candidate
@@ -272,6 +276,13 @@ class PaymentSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    coupon_code = serializers.CharField(required=False, allow_blank=True, write_only=True, default="")
+
+    def validate_coupon_code(self, value):
+        try:
+            return validate_coupon_code_format(value) or ""
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
 
     def get_coverage_month_count(self, obj):
         return getattr(obj, "coverage_month_count", len(obj.coverage_months or []))
@@ -316,6 +327,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'coverage_months',
             'coverage_month_count',
             'line_items',
+            'coupon_code',
             'is_paid',
             'is_active',
             'is_published',
@@ -394,6 +406,60 @@ class PaymentSerializer(serializers.ModelSerializer):
         if 'line_items' in attrs:
             attrs['line_items'] = normalize_line_items(attrs.get('line_items') or [])
 
+        coupon_code = (attrs.get('coupon_code') or '').strip()
+        tenant = self.context.get('tenant') or getattr(
+            self.context.get('request'), 'tenant', None
+        )
+        feature_on = False
+        if tenant is not None:
+            from apps.tenancy.services import tenant_has_feature
+
+            feature_on = tenant_has_feature(tenant, 'discount')
+
+        if feature_on:
+            member = attrs.get('member')
+            if member is None and self.instance is not None:
+                member = self.instance.member
+            package = attrs.get('member_package_id_write')
+            if package is None and member is not None:
+                package = getattr(member, 'member_package', None)
+            if package is not None and member is not None:
+                from apps.membership.services.discount_engine import apply_discounts_for_payment
+
+                selected_addon_names = None
+                line_items = attrs.get('line_items')
+                if line_items:
+                    selected_addon_names = [
+                        i['name'] for i in line_items if str(i.get('type')) == 'addon'
+                    ]
+                result = apply_discounts_for_payment(
+                    package=package,
+                    member=member,
+                    coverage_months=attrs.get('coverage_months'),
+                    selected_addon_names=selected_addon_names,
+                    coupon_code=coupon_code or None,
+                    existing_line_items=line_items,
+                    feature_enabled=True,
+                )
+                if result is not None:
+                    # Always sync amount/line items from the engine so dashboard
+                    # totals match automatic + coupon discounts (or full price).
+                    customs = [
+                        i for i in (line_items or [])
+                        if str(i.get('type')) == 'custom'
+                    ]
+                    attrs['line_items'] = normalize_line_items(result.line_items + customs)
+                    attrs['amount'] = result.total
+                    if result.applied:
+                        self._pending_discount_result = result
+                        self._pending_discount_coupon = coupon_code
+                    else:
+                        self._pending_discount_result = None
+                        self._pending_discount_coupon = None
+        elif coupon_code:
+            # Feature off — ignore coupon silently
+            attrs.pop('coupon_code', None)
+
         # Multiple paid payments for the same member/month are allowed
         # (e.g. partial top-ups). The payments table groups them by member.
 
@@ -404,6 +470,20 @@ class PaymentSerializer(serializers.ModelSerializer):
 
         from apps.billing.services.member_renewal import apply_paid_payment
         from apps.billing.services.payment_confirmation import dispatch_member_payment
+
+        apply_result = getattr(self, '_pending_discount_result', None)
+        coupon_code = getattr(self, '_pending_discount_coupon', None)
+        if apply_result is not None:
+            from apps.membership.services.discount_engine import record_discount_usages
+
+            record_discount_usages(
+                payment=payment,
+                apply_result=apply_result,
+                coupon_code=coupon_code,
+            )
+            if apply_result.extra_duration_days:
+                # Stash on payment note meta via usages; renewal reads usages
+                pass
 
         apply_paid_payment(payment, previous_status=previous_status)
 
@@ -435,6 +515,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         notify_channels = validated_data.pop("notify_channels", [])
         member_package = validated_data.pop("member_package_id_write", None)
         validated_data.pop("invoice_no", None)
+        validated_data.pop("coupon_code", None)
         payment = super().create(validated_data)
         if member_package is not None:
             self._sync_member_package(payment.member, member_package)
@@ -446,6 +527,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         notify_channels = validated_data.pop("notify_channels", [])
         member_package = validated_data.pop("member_package_id_write", serializers.empty)
         validated_data.pop("invoice_no", None)
+        validated_data.pop("coupon_code", None)
         previous_status = instance.payment_status
         payment = super().update(instance, validated_data)
         if member_package is not serializers.empty and member_package is not None:
@@ -581,11 +663,19 @@ class PlatformSubscriptionPaymentUpdateSerializer(serializers.ModelSerializer):
             "billing_cycle",
             "period_start",
             "period_end",
+            "payment_type",
+            "custom_label",
+            "base_amount",
+            "adjustment_type",
+            "adjustment_amount",
+            "adjustment_reason",
             "reference_note",
             "notify_channels",
         ]
 
     def validate(self, attrs):
+        from apps.billing.services.subscription_billing import validate_charge_metadata
+
         instance = self.instance
         if instance is None:
             return attrs
@@ -606,13 +696,50 @@ class PlatformSubscriptionPaymentUpdateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "Pending gateway invoices may only be set to cancelled or failed."
                 )
+            return attrs
+
+        payment_type = attrs.get("payment_type", instance.payment_type)
+        custom_label = attrs.get("custom_label", instance.custom_label)
+        base_amount = attrs.get("base_amount", instance.base_amount)
+        adjustment_type = attrs.get("adjustment_type", instance.adjustment_type)
+        adjustment_amount = attrs.get("adjustment_amount", instance.adjustment_amount)
+        adjustment_reason = attrs.get("adjustment_reason", instance.adjustment_reason)
+        period_start = attrs.get("period_start", instance.period_start)
+        period_end = attrs.get("period_end", instance.period_end)
+        if payment_type != instance.PAYMENT_TYPE_PACKAGE:
+            period_end = None
+            if "period_end" in attrs:
+                attrs["period_end"] = None
+
+        try:
+            validate_charge_metadata(
+                payment_type=payment_type,
+                custom_label=custom_label or "",
+                base_amount=base_amount,
+                adjustment_type=adjustment_type,
+                adjustment_amount=adjustment_amount,
+                adjustment_reason=adjustment_reason or "",
+                period_start=period_start,
+                period_end=period_end,
+                require_period=False,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
         return attrs
 
     def update(self, instance, validated_data):
+        from apps.billing.services.subscription_billing import (
+            compute_final_amount,
+            maybe_activate_tenant_subscription,
+            recalc_tenant_subscription,
+        )
+
         reference_note = validated_data.pop("reference_note", None)
         notify_channels = validated_data.pop("notify_channels", None)
         previous_status = instance.status
+        previous_payment_type = instance.payment_type
+        amount_explicit = "amount" in validated_data
 
         if reference_note is not None:
             gw_resp = dict(instance.gateway_response or {})
@@ -622,16 +749,33 @@ class PlatformSubscriptionPaymentUpdateSerializer(serializers.ModelSerializer):
         for field, value in validated_data.items():
             setattr(instance, field, value)
 
+        if instance.payment_type != instance.PAYMENT_TYPE_PACKAGE:
+            instance.period_end = None
+
+        if not amount_explicit:
+            base = instance.base_amount if instance.base_amount is not None else instance.amount
+            instance.amount = compute_final_amount(
+                base,
+                instance.adjustment_type,
+                instance.adjustment_amount,
+            )
+
         if instance.status == instance.STATUS_SUCCESS and not instance.validated_at:
             instance.validated_at = timezone.now()
 
         instance.save()
         instance.refresh_from_db()
 
-        if instance.status == instance.STATUS_SUCCESS and previous_status != instance.STATUS_SUCCESS:
-            from apps.billing.services.subscription_billing import activate_tenant_subscription
+        payment_type_changed = previous_payment_type != instance.payment_type
+        became_success = (
+            instance.status == instance.STATUS_SUCCESS
+            and previous_status != instance.STATUS_SUCCESS
+        )
 
-            activate_tenant_subscription(instance)
+        if payment_type_changed and instance.status == instance.STATUS_SUCCESS:
+            recalc_tenant_subscription(instance.tenant)
+        elif became_success:
+            maybe_activate_tenant_subscription(instance)
 
         if notify_channels:
             from apps.billing.services.payment_confirmation import dispatch_subscription_invoice
@@ -653,6 +797,14 @@ class TenantSubscriptionInvoiceSerializer(serializers.Serializer):
     gateway_slug = serializers.CharField(read_only=True)
     status = serializers.CharField(read_only=True)
     billing_cycle = serializers.CharField(read_only=True)
+    payment_type = serializers.CharField(read_only=True)
+    custom_label = serializers.CharField(read_only=True)
+    base_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True, allow_null=True
+    )
+    adjustment_type = serializers.CharField(read_only=True)
+    adjustment_amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    adjustment_reason = serializers.CharField(read_only=True)
     is_trial = serializers.BooleanField(read_only=True)
     period_start = serializers.DateTimeField(read_only=True)
     period_end = serializers.DateTimeField(read_only=True)
