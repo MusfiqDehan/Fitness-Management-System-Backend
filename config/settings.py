@@ -390,6 +390,12 @@ CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = int(os.environ.get('CELERY_TASK_TIME_LIMIT', '300'))
 CELERY_TASK_SOFT_TIME_LIMIT = int(os.environ.get('CELERY_TASK_SOFT_TIME_LIMIT', '240'))
+CELERY_BEAT_SCHEDULE = {
+    "expired-member-credential-cleanup": {
+        "task": "attendance.run_expired_member_credential_cleanup",
+        "schedule": 300.0,  # every 5 minutes; acts only when a slot is due
+    },
+}
 
 # Django cache (Redis DB 2 — separate from Celery broker/results)
 _redis_cache_url = os.environ.get('REDIS_CACHE_URL', '').strip()
