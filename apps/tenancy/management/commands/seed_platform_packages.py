@@ -45,6 +45,7 @@ CORE_FEATURES = [
     ("reports", "Reports & Analytics", None),
     ("reminders", "Reminders & Notifications", None),
     ("settings", "Settings", None),
+    ("settings.preferences", "Preferences", "settings"),
     ("permissions", "Roles & Permissions", None),
     # Gated capability without a sidebar entry (controls custom-domain self-service).
     ("email_config", "Email Config", None),
@@ -97,7 +98,7 @@ PACKAGES = {
             "instructors", "classes", "reports",
             "payments", "payments.invoices", "subscriptions",
             "crm.contacts", "crm.inquiries",
-            "settings", "email_config",
+            "settings", "settings.preferences", "email_config",
         ],
     },
     "growth": {
@@ -143,7 +144,7 @@ PACKAGES = {
             "payments", "payments.invoices", "payments.gateways", "subscriptions",
             "crm.contacts", "crm.inquiries",
             "cms.banners", "cms.blogs",
-            "branches", "reports", "settings", "permissions", "email_config", "public_website",
+            "branches", "reports", "settings", "settings.preferences", "permissions", "email_config", "public_website",
             "custom_domain",
         ],
     },
