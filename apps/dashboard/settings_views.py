@@ -13,6 +13,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.access.permissions import HasFeatureMethodPermission
 from apps.identity.serializers import CurrentUserSerializer, CurrentUserUpdateSerializer
 from apps.membership.models import Member
 from utils.cache_helpers import (
@@ -139,7 +140,14 @@ class NotificationPreferencesAPIView(APIView):
 # ---------------------------------------------------------------
 
 class GymPreferencesAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    """Tenant gym preferences including Payment Configurations.
+
+    Both GET and PATCH require ``settings.preferences`` (view / edit).
+    Shell consumers must tolerate 403 when the feature is disabled.
+    """
+
+    feature_key = "settings.preferences"
+    permission_classes = [IsAuthenticated, HasFeatureMethodPermission]
 
     def _obj(self):
         obj, _ = GymPreferences.objects.get_or_create(pk=1)
