@@ -179,6 +179,7 @@ TENANT_REGISTRY: list[RegistryItem] = [
             {"key": "email_config", "name": "Email Config", "route": None, "icon": "Mail"},
             {"key": "public_website", "name": "Landing Page Setup", "route": None, "icon": "Monitor"},
             {"key": "custom_domain", "name": "Custom Domain", "route": None, "icon": "Globe"},
+            {"key": "settings.preferences", "name": "Preferences", "route": None, "icon": "Globe"},
             {"key": "permissions",   "name": "Rules & Permission", "route": "/permissions", "icon": "ShieldCheck"},
             {"key": "settings",      "name": "Settings",           "route": "/settings",    "icon": "Settings"},
         ],
