@@ -234,6 +234,8 @@ class PageContentSerializer(serializers.ModelSerializer):
 # ---- Blog Serializers ----
 
 class BlogCategorySerializer(serializers.ModelSerializer):
+    slug = serializers.SlugField(read_only=True)
+
     def validate_name(self, value):
         normalized_value = value.strip()
         if not normalized_value:
@@ -251,6 +253,7 @@ class BlogCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = BlogCategory
         fields = ['id', 'name', 'slug']
+        read_only_fields = ['id', 'slug']
 
 
 class BlogListSerializer(serializers.ModelSerializer):
