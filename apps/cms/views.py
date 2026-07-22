@@ -42,8 +42,11 @@ class CreateModelAPIView(GenericAPIView):
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        instance = serializer.save()
-        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+        self.perform_create(serializer)
+        return Response(self.get_serializer(serializer.instance).data, status=status.HTTP_201_CREATED)
+
+    def perform_create(self, serializer):
+        serializer.save()
 
 
 class RetrieveModelAPIView(GenericAPIView):
@@ -63,8 +66,11 @@ class UpdateModelAPIView(GenericAPIView):
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        updated_instance = serializer.save()
-        return Response(self.get_serializer(updated_instance).data)
+        self.perform_update(serializer)
+        return Response(self.get_serializer(serializer.instance).data)
+
+    def perform_update(self, serializer):
+        serializer.save()
 
 
 class DestroyModelAPIView(GenericAPIView):
