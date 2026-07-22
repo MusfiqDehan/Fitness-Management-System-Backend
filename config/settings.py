@@ -80,6 +80,7 @@ SHARED_APPS = [
     'drf_spectacular',
     'apps.crm.apps.CrmConfig',
     'apps.reminder.apps.ReminderConfig',
+    'apps.cms.apps.CmsConfig',
 ]
 
 # Apps whose tables are replicated inside EACH tenant schema
