@@ -80,6 +80,18 @@ PLATFORM_REGISTRY: list[RegistryItem] = [
                 "icon": "Settings",
             },
             {
+                "key": "platform.cms.blogs",
+                "name": "Blog Manager",
+                "route": "/blogs",
+                "icon": "Rows3",
+            },
+            {
+                "key": "platform.cms.banners",
+                "name": "Banner Manager",
+                "route": "/banners",
+                "icon": "MonitorPlay",
+            },
+            {
                 "key": "platform.features",
                 "name": "Feature Registry",
                 "route": None,
