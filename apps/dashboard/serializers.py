@@ -62,9 +62,46 @@ class GymPreferencesSerializer(serializers.ModelSerializer):
             "theme",
             "topbar_show_date",
             "topbar_show_description",
+            "payment_auto_delete_credentials_enabled",
+            "payment_cleanup_run_at_1",
+            "payment_cleanup_run_at_2",
             "updated_at",
         ]
         read_only_fields = ["id", "updated_at"]
+
+    def validate(self, attrs):
+        enabled = attrs.get(
+            "payment_auto_delete_credentials_enabled",
+            getattr(self.instance, "payment_auto_delete_credentials_enabled", False)
+            if self.instance
+            else False,
+        )
+        run_at_1 = attrs.get(
+            "payment_cleanup_run_at_1",
+            getattr(self.instance, "payment_cleanup_run_at_1", None) if self.instance else None,
+        )
+        run_at_2 = attrs.get(
+            "payment_cleanup_run_at_2",
+            getattr(self.instance, "payment_cleanup_run_at_2", None) if self.instance else None,
+        )
+        if enabled:
+            if run_at_1 is None or run_at_2 is None:
+                raise serializers.ValidationError(
+                    {
+                        "payment_auto_delete_credentials_enabled": (
+                            "Both cleanup run times are required when auto-delete is enabled."
+                        )
+                    }
+                )
+            if run_at_1 == run_at_2:
+                raise serializers.ValidationError(
+                    {
+                        "payment_cleanup_run_at_2": (
+                            "Cleanup run times must be distinct."
+                        )
+                    }
+                )
+        return attrs
 
 
 class ReminderTemplateSerializer(serializers.ModelSerializer):
