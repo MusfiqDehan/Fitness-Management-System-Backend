@@ -91,6 +91,9 @@ class GymPreferences(models.Model):
     theme = models.CharField(max_length=20, choices=THEME_CHOICES, default="light")
     topbar_show_date = models.BooleanField(default=False)
     topbar_show_description = models.BooleanField(default=True)
+    payment_auto_delete_credentials_enabled = models.BooleanField(default=False)
+    payment_cleanup_run_at_1 = models.DateTimeField(null=True, blank=True)
+    payment_cleanup_run_at_2 = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
