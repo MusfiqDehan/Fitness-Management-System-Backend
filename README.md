@@ -1,4 +1,4 @@
-# Gym Management System — Backend
+# FitSSort — Backend
 
 Django REST API for the Fitssort / FitHive gym management SaaS platform.
 
