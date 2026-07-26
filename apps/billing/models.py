@@ -130,6 +130,13 @@ class Expense(BaseModel):
     receiver = models.CharField(max_length=255, blank=True, default="")
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     expense_date = models.DateField()
+    voucher_no = models.CharField(
+        max_length=40,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="Expense voucher number assigned on create (e.g. EXP-000001).",
+    )
     category = models.ForeignKey(
         ExpenseCategory,
         on_delete=models.PROTECT,
