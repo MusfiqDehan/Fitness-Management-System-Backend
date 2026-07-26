@@ -9,6 +9,7 @@ from apps.billing.services.expenses import (
     replace_expense_attachments,
     validate_attachment_file_url,
 )
+from apps.billing.services.expense_voucher import ensure_expense_voucher_no
 
 
 class ExpenseCategorySerializer(serializers.ModelSerializer):
@@ -59,6 +60,7 @@ class ExpenseSerializer(serializers.ModelSerializer):
             "receiver",
             "amount",
             "expense_date",
+            "voucher_no",
             "category",
             "category_name",
             "branch",
@@ -68,7 +70,14 @@ class ExpenseSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "category_name", "branch_name", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "voucher_no",
+            "category_name",
+            "branch_name",
+            "created_at",
+            "updated_at",
+        ]
 
     def validate_amount(self, value):
         if value is None or value <= 0:
@@ -82,16 +91,18 @@ class ExpenseSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         attachments_data = validated_data.pop("attachments", [])
+        validated_data.pop("voucher_no", None)
         expense = Expense.objects.create(**validated_data)
         if attachments_data:
             replace_expense_attachments(expense, attachments_data)
-        return expense
+        return ensure_expense_voucher_no(expense)
 
     def update(self, instance, validated_data):
         attachments_data = validated_data.pop("attachments", None)
+        validated_data.pop("voucher_no", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
         if attachments_data is not None:
             replace_expense_attachments(instance, attachments_data)
-        return instance
+        return ensure_expense_voucher_no(instance)
