@@ -14,8 +14,13 @@ from apps.billing.expense_views import (
     ExpenseAPIView,
     ExpenseCategoryAPIView,
     ExpenseSummaryAPIView,
+    ExpenseVoucherPdfAPIView,
 )
 from apps.billing.models import Expense, ExpenseCategory
+from apps.billing.services.expense_voucher import (
+    ensure_expense_voucher_no,
+    render_expense_voucher_pdf,
+)
 from apps.billing.services.expenses import (
     assert_category_can_be_deleted,
     assert_category_name_unique,
@@ -205,6 +210,7 @@ class ExpenseManagerAPITests(APITestCase):
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
             self.assertEqual(len(response.data["attachments"]), 1)
             self.assertEqual(response.data["attachments"][0]["kind"], "receipt")
+            self.assertTrue(str(response.data["voucher_no"]).startswith("EXP-"))
 
             list_req = self._auth(
                 self.factory.get("/api/v1/billing/expenses/?page_size=1")
@@ -418,3 +424,42 @@ class ExpenseManagerAPITests(APITestCase):
             qs = scope_expense_queryset(Expense.objects.all(), self.admin)
             summary = build_expense_summary(qs)
             self.assertIn("total_expenses", summary)
+
+    def test_voucher_assigned_and_pdf_preview_download(self):
+        with schema_context(self.tenant.schema_name):
+            cat = ExpenseCategory.objects.create(name="VoucherCat")
+            expense = Expense.objects.create(
+                title="Office chairs",
+                amount=Decimal("400.00"),
+                expense_date=date.today(),
+                category=cat,
+                receiver="Furniture Co",
+            )
+            ensure_expense_voucher_no(expense)
+            expense.refresh_from_db()
+            self.assertEqual(expense.voucher_no, f"EXP-{expense.id:06d}")
+
+            pdf_bytes = render_expense_voucher_pdf(
+                expense, "Test Gym", "Admin User"
+            )
+            self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+            preview_req = self._auth(
+                self.factory.get(f"/api/v1/billing/expenses/{expense.id}/voucher/")
+            )
+            preview = ExpenseVoucherPdfAPIView.as_view()(preview_req, pk=expense.id)
+            self.assertEqual(preview.status_code, status.HTTP_200_OK)
+            self.assertEqual(preview["Content-Type"], "application/pdf")
+            self.assertIn("inline", preview["Content-Disposition"])
+
+            download_req = self._auth(
+                self.factory.get(
+                    f"/api/v1/billing/expenses/{expense.id}/voucher/?download=1"
+                )
+            )
+            download = ExpenseVoucherPdfAPIView.as_view()(
+                download_req, pk=expense.id
+            )
+            self.assertEqual(download.status_code, status.HTTP_200_OK)
+            self.assertIn("attachment", download["Content-Disposition"])
+            self.assertIn(expense.voucher_no, download["Content-Disposition"])
