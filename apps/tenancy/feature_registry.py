@@ -160,6 +160,7 @@ TENANT_REGISTRY: list[RegistryItem] = [
             {"key": "payments.gateways", "name": "Payment Gateways",  "route": "/payment-gateways", "icon": "Landmark"},
             {"key": "members.packages",  "name": "Packages",          "route": "/packages",         "icon": "Boxes"},
             {"key": "discount",          "name": "Discounts",         "route": "/discounts",        "icon": "Percent"},
+            {"key": "expenses",          "name": "Expenses",          "route": "/expenses",         "icon": "Wallet"},
             {"key": "reminders",         "name": "Reminders",         "route": "/reminders",        "icon": "Bell"},
         ],
     },
