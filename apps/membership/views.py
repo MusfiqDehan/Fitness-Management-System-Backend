@@ -1579,9 +1579,10 @@ class AttendanceView(BranchScopedListMixin, ModelCRUDView):
 # =============================================================================
 
 class PaymentAnalyticsAPIView(APIView):
-    """GET /membership/payments/analytics/?period=today|weekly|monthly"""
+    """GET /membership/payments/analytics/?period=today|weekly|monthly|custom&from_date=&to_date="""
     permission_classes = [HasFeatureMethodPermission]
     feature_key = 'payments'
+    MAX_CUSTOM_TREND_BUCKETS = 36
 
     def get(self, request):
         from django.db.models import Sum, Count
@@ -1592,17 +1593,36 @@ class PaymentAnalyticsAPIView(APIView):
         period = request.query_params.get('period', 'monthly').lower()
         today = now().date()
 
-        if period == 'today':
-            start = today
-        elif period == 'weekly':
-            start = today - timedelta(days=7)
-        elif period == 'monthly':
-            start = today.replace(day=1)
+        custom_start = None
+        custom_end = None
+        if period == 'custom':
+            raw_from = request.query_params.get('from_date')
+            raw_to = request.query_params.get('to_date')
+            try:
+                custom_start = dt_date.fromisoformat(raw_from) if raw_from else None
+                custom_end = dt_date.fromisoformat(raw_to) if raw_to else None
+            except ValueError:
+                custom_start = None
+                custom_end = None
+            if custom_start and custom_end and custom_start > custom_end:
+                custom_start, custom_end = custom_end, custom_start
+
+        has_custom_range = period == 'custom' and custom_start and custom_end
+
+        if has_custom_range:
+            start = custom_start
+            date_filter = {'payment_date__date__gte': custom_start, 'payment_date__date__lte': custom_end}
         else:
-            start = today.replace(day=1)
+            if period == 'today':
+                start = today
+            elif period == 'weekly':
+                start = today - timedelta(days=7)
+            else:
+                start = today.replace(day=1)
+            date_filter = {'payment_date__date__gte': start}
 
         qs = scope_queryset_by_branch_access(
-            Payment.objects.filter(payment_date__date__gte=start, is_deleted=False),
+            Payment.objects.filter(is_deleted=False, **date_filter),
             request.user,
             branch_field='member__branch_id',
             branch_filter_id=request.query_params.get('branch'),
@@ -1650,7 +1670,8 @@ class PaymentAnalyticsAPIView(APIView):
         current_month_collected = current_month_qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
 
         # Previous period for trend
-        delta = (today - start).days or 1
+        period_end = custom_end if has_custom_range else today
+        delta = (period_end - start).days or 1
         prev_start = start - timedelta(days=delta)
         prev_qs = scope_queryset_by_branch_access(
             Payment.objects.filter(payment_date__date__gte=prev_start, payment_date__date__lt=start, is_deleted=False),
@@ -1679,7 +1700,10 @@ class PaymentAnalyticsAPIView(APIView):
         ]
 
         # Revenue trend bars
-        revenue_trend = self._build_revenue_trend(period, today)
+        revenue_trend = self._build_revenue_trend(
+            period, today, start=custom_start if has_custom_range else None,
+            end=custom_end if has_custom_range else None,
+        )
 
         # Overdue member count
         overdue_count = Member.objects.filter(
@@ -1704,13 +1728,37 @@ class PaymentAnalyticsAPIView(APIView):
             'revenue_trend': revenue_trend,
         })
 
-    def _build_revenue_trend(self, period, today):
+    def _build_revenue_trend(self, period, today, start=None, end=None):
         from django.db.models import Sum
         from datetime import timedelta
         from decimal import Decimal
+        from apps.billing.models import Expense
+        from apps.billing.services.expenses import scope_expense_queryset
+
+        branch_filter_id = self.request.query_params.get('branch')
+
+        def expense_total(**date_filter):
+            qs = scope_expense_queryset(
+                Expense.objects.all(),
+                self.request.user,
+                branch_filter_id=branch_filter_id,
+            ).filter(**date_filter)
+            return qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+
+        def bucket(label, income, expense):
+            revenue = income - expense
+            return {
+                'label': label,
+                'value': float(income),
+                'income': float(income),
+                'expense': float(expense),
+                'revenue': float(revenue),
+            }
 
         results = []
         if period == 'today':
+            # Expense records only carry a date, not a time-of-day, so an
+            # hourly expense/revenue split isn't meaningful — income-only bars.
             for hour in [6, 9, 12, 15, 18, 21]:
                 label = f"{hour}{'a' if hour < 12 else 'p'}"
                 qs = Payment.objects.filter(
@@ -1719,22 +1767,46 @@ class PaymentAnalyticsAPIView(APIView):
                     payment_date__hour__lt=hour + 3,
                     payment_status='paid', is_deleted=False,
                 )
-                total = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
-                results.append({'label': label, 'value': float(total)})
+                income = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                results.append(bucket(label, income, Decimal('0')))
         elif period == 'weekly':
             for i in range(7):
                 d = today - timedelta(days=6 - i)
                 qs = Payment.objects.filter(payment_date__date=d, payment_status='paid', is_deleted=False)
-                total = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
-                results.append({'label': d.strftime('%a'), 'value': float(total)})
+                income = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                expense = expense_total(expense_date=d)
+                results.append(bucket(d.strftime('%a'), income, expense))
+        elif period == 'custom' and start and end:
+            span_days = (end - start).days
+            if span_days <= 31:
+                for i in range(span_days + 1):
+                    d = start + timedelta(days=i)
+                    qs = Payment.objects.filter(payment_date__date=d, payment_status='paid', is_deleted=False)
+                    income = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                    expense = expense_total(expense_date=d)
+                    results.append(bucket(d.strftime('%d %b'), income, expense))
+            else:
+                import calendar
+                y, m = start.year, start.month
+                while (y, m) <= (end.year, end.month) and len(results) < self.MAX_CUSTOM_TREND_BUCKETS:
+                    qs = Payment.objects.filter(payment_date__year=y, payment_date__month=m, payment_status='paid', is_deleted=False)
+                    income = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                    expense = expense_total(expense_date__year=y, expense_date__month=m)
+                    label = f"{calendar.month_abbr[m]} {str(y)[2:]}"
+                    results.append(bucket(label, income, expense))
+                    m += 1
+                    if m > 12:
+                        m = 1
+                        y += 1
         else:
             import calendar
-            year, month = today.year, today.month
+            year = today.year
             num_months = 12
             for m in range(1, num_months + 1):
                 qs = Payment.objects.filter(payment_date__year=year, payment_date__month=m, payment_status='paid', is_deleted=False)
-                total = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
-                results.append({'label': calendar.month_abbr[m], 'value': float(total)})
+                income = qs.aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                expense = expense_total(expense_date__year=year, expense_date__month=m)
+                results.append(bucket(calendar.month_abbr[m], income, expense))
         return results
 
 
