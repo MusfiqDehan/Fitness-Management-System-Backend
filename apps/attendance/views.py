@@ -369,6 +369,18 @@ def _parse_int_query_param(value):
 
 
 def _apply_attendance_date_filters(queryset, query_params, *, default_mode="day"):
+	raw_from_date = (query_params.get("from_date") or "").strip()
+	raw_to_date = (query_params.get("to_date") or "").strip()
+	if raw_from_date or raw_to_date:
+		try:
+			if raw_from_date:
+				queryset = queryset.filter(check_in_time__date__gte=date.fromisoformat(raw_from_date))
+			if raw_to_date:
+				queryset = queryset.filter(check_in_time__date__lte=date.fromisoformat(raw_to_date))
+		except ValueError:
+			return queryset.none()
+		return queryset
+
 	raw_day = (query_params.get("day") or "").strip()
 	if raw_day:
 		try:

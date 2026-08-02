@@ -56,6 +56,9 @@ apply_direct_database_url
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
+echo "Repairing shared-schema migration drift (applied history, missing tables)..."
+python manage.py repair_shared_schema_drift
+
 echo "Running shared schema migrations (Tenant, Domain, auth, etc.)..."
 python manage.py migrate_schemas --shared --noinput
 

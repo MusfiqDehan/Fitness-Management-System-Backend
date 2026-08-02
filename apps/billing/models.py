@@ -102,3 +102,91 @@ class PaymentTransaction(BaseModel):
     def delete(self, using=None, keep_parents=False):
         """Financial records must not be soft-deleted — hard-delete instead."""
         super().hard_delete(using=using, keep_parents=keep_parents)
+
+
+# ===============================================================
+# Expense Manager
+# ===============================================================
+
+class ExpenseCategory(BaseModel):
+    """Tenant-wide expense category (e.g. Utilities, Rent)."""
+
+    name = models.CharField(max_length=150)
+    description = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["name", "id"]
+        verbose_name_plural = "expense categories"
+
+    def __str__(self):
+        return self.name
+
+
+class Expense(BaseModel):
+    """A single company expense, optionally tagged to a branch."""
+
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default="")
+    receiver = models.CharField(max_length=255, blank=True, default="")
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    expense_date = models.DateField()
+    voucher_no = models.CharField(
+        max_length=40,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="Expense voucher number assigned on create (e.g. EXP-000001).",
+    )
+    category = models.ForeignKey(
+        ExpenseCategory,
+        on_delete=models.PROTECT,
+        related_name="expenses",
+    )
+    branch = models.ForeignKey(
+        "gym_branch.Branch",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="expenses",
+    )
+
+    class Meta:
+        ordering = ["-expense_date", "-id"]
+        indexes = [
+            models.Index(fields=["expense_date", "id"], name="idx_expense_date_id"),
+            models.Index(fields=["category", "expense_date"], name="idx_expense_cat_date"),
+            models.Index(fields=["branch", "expense_date"], name="idx_expense_branch_date"),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.amount})"
+
+
+class ExpenseAttachment(BaseModel):
+    """Receipt or supporting file metadata for an expense (URL after upload)."""
+
+    KIND_RECEIPT = "receipt"
+    KIND_ATTACHMENT = "attachment"
+    KIND_CHOICES = [
+        (KIND_RECEIPT, "Receipt"),
+        (KIND_ATTACHMENT, "Attachment"),
+    ]
+
+    expense = models.ForeignKey(
+        Expense,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    file_url = models.CharField(max_length=1000)
+    file_name = models.CharField(max_length=255, blank=True, default="")
+    kind = models.CharField(
+        max_length=20,
+        choices=KIND_CHOICES,
+        default=KIND_ATTACHMENT,
+    )
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"{self.kind}:{self.file_name or self.file_url}"
