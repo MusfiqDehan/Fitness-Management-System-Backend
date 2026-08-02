@@ -47,6 +47,9 @@ PREDEFINED_TENANT_ROLES = {
             "classes.bookings": "edit",
             "payments": "edit",
             "payments.invoices": "view",
+            # POS checkout goes through the payment API, so `pos` is only useful
+            # to a role that also has `payments` at edit. Managers do.
+            "pos": "edit",
             "subscriptions": "view",
             "crm.contacts": "edit",
             "crm.inquiries": "edit",
@@ -126,6 +129,7 @@ FULL_ACCESS_FEATURE_KEYS = [
     "instructors",
     "classes", "classes.bookings",
     "payments", "payments.invoices", "payments.gateways",
+    "pos",
     "subscriptions",
     "crm.contacts", "crm.inquiries",
     "cms.banners", "cms.blogs",
