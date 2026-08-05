@@ -63,7 +63,7 @@ class PlatformPublicBrandingApiTests(APITestCase):
                 pk=1,
                 defaults={
                     "gym_name": "Fitssort Platform",
-                    "email": "contact@fitssort.com",
+                    "email": "contact@fitness.musfiqdehan.com",
                     "phone": "+8801000000000",
                     "logo_url": "https://cdn.example.com/logo.png",
                     "logo_width": 140,

@@ -98,7 +98,7 @@ class PublicSchemaCmsApiTests(APITestCase):
                 pk=1,
                 defaults={
                     "gym_name": "Fitssort Platform",
-                    "email": "contact@fitssort.com",
+                    "email": "contact@fitness.musfiqdehan.com",
                     "phone": "+8801000000000",
                 },
             )

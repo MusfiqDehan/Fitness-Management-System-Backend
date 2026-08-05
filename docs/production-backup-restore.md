@@ -59,8 +59,8 @@ Retention: 7 daily + 4 weekly copies (configured in the script).
 5. Smoke test:
 
    ```bash
-   curl -fsS https://fitssort.com/api/v1/health/ready/
-   curl -fsS http://tenant.fitssort.com/iclock/cdata?SN=YOUR_DEVICE_SN
+   curl -fsS https://fitness.musfiqdehan.com/api/v1/health/ready/
+   curl -fsS http://tenant.fitness.musfiqdehan.com/iclock/cdata?SN=YOUR_DEVICE_SN
    ```
 
 ## Production triage quick reference

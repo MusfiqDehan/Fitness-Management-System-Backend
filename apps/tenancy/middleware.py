@@ -4,7 +4,7 @@ mobile app).
 
 The default django-tenants ``TenantMainMiddleware`` resolves the active tenant
 purely from the request hostname (the subdomain). Native mobile clients call
-the API on a single, subdomain-less host (e.g. ``api.fitssort.com`` or the
+the API on a single, subdomain-less host (e.g. ``api.fitness.musfiqdehan.com`` or the
 Android emulator's ``10.0.2.2``), so the hostname alone cannot identify the
 tenant.
 

@@ -18,8 +18,14 @@ from django_tenants.utils import get_public_schema_name, schema_context
 
 logger = logging.getLogger(__name__)
 
-# Platform hosts are covered by the Hostinger DNS-01 ``letsencrypt`` resolver.
-_PLATFORM_SUFFIXES = ("fitssort.com",)
+def _platform_suffixes() -> tuple[str, ...]:
+    """Platform hosts covered by the DNS-01 ``letsencrypt`` resolver."""
+    domain = (
+        getattr(settings, "PUBLIC_DOMAIN", "")
+        or getattr(settings, "TENANT_BASE_DOMAIN", "")
+        or "fitness.musfiqdehan.com"
+    ).strip().lower().rstrip(".")
+    return (domain,) if domain else ("fitness.musfiqdehan.com",)
 
 _DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)([a-z0-9-]{1,63}\.)+[a-z]{2,63}$"
@@ -54,7 +60,7 @@ def _output_path() -> Path:
 
 def _is_platform_domain(domain: str) -> bool:
     d = (domain or "").strip().lower().rstrip(".")
-    return any(d == s or d.endswith("." + s) for s in _PLATFORM_SUFFIXES)
+    return any(d == s or d.endswith("." + s) for s in _platform_suffixes())
 
 
 def _normalize_domain(domain: str) -> str:

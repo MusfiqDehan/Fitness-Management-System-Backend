@@ -182,7 +182,7 @@ if _cors_allowed_origin_regexes:
     CORS_ALLOWED_ORIGIN_REGEXES = _cors_allowed_origin_regexes
 elif not DEBUG:
     # Production-friendly default to allow wildcard tenant subdomains.
-    root_domain = os.environ.get('TENANT_ROOT_DOMAIN', 'fitssort.com').strip().replace('.', r'\.')
+    root_domain = os.environ.get('TENANT_ROOT_DOMAIN', 'fitness.musfiqdehan.com').strip().replace('.', r'\.')
     CORS_ALLOWED_ORIGIN_REGEXES = [
         rf'^https://([a-z0-9-]+\.)?{root_domain}$',
     ]
@@ -521,7 +521,7 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', 15))
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', os.environ.get('EMAIL_HOST_USER', 'noreply@example.com'))
 # Recipient address for contact-form query notifications
-CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', os.environ.get('EMAIL_HOST_USER', 'contact@fitssort.com'))
+CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', os.environ.get('EMAIL_HOST_USER', 'contact@fitness.musfiqdehan.com'))
 
 # ADMS device logging
 LOGGING = {

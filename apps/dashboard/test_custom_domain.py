@@ -7,7 +7,7 @@ These cover the security-critical pieces without requiring a tenant database:
 """
 from unittest import mock
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from apps.dashboard.custom_domain_views import _validate_domain
 from apps.tenancy.dns_verification import (
@@ -39,8 +39,9 @@ class DomainValidationTests(SimpleTestCase):
         _, error = _validate_domain("   ")
         self.assertNotEqual(error, "")
 
+    @override_settings(PUBLIC_DOMAIN="fitness.musfiqdehan.com")
     def test_rejects_platform_domain(self):
-        _, error = _validate_domain("acme.fitssort.com")
+        _, error = _validate_domain("acme.fitness.musfiqdehan.com")
         self.assertNotEqual(error, "")
 
     def test_accepts_apex_domain(self):
@@ -149,9 +150,9 @@ class RoutingCheckTests(SimpleTestCase):
     def test_cname_match_is_ready(self):
         from apps.tenancy.dns_verification import check_domain_routing
 
-        with self._patch_resolver(cname="fitssort.com."):
+        with self._patch_resolver(cname="fitness.musfiqdehan.com."):
             ok, error = check_domain_routing(
-                "gym.example.com", cname_target="fitssort.com", a_target="1.2.3.4"
+                "gym.example.com", cname_target="fitness.musfiqdehan.com", a_target="1.2.3.4"
             )
         self.assertTrue(ok)
         self.assertEqual(error, "")
@@ -163,7 +164,7 @@ class RoutingCheckTests(SimpleTestCase):
         with self._patch_resolver(cname_exc=dns.resolver.NoAnswer(), a="185.202.223.12"):
             ok, error = check_domain_routing(
                 "gym.example.com",
-                cname_target="fitssort.com",
+                cname_target="fitness.musfiqdehan.com",
                 a_target="185.202.223.12",
             )
         self.assertTrue(ok)
@@ -179,7 +180,7 @@ class RoutingCheckTests(SimpleTestCase):
         ):
             ok, error = check_domain_routing(
                 "gym.example.com",
-                cname_target="fitssort.com",
+                cname_target="fitness.musfiqdehan.com",
                 a_target="185.202.223.12",
             )
         self.assertFalse(ok)

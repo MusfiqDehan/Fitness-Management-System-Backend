@@ -26,7 +26,7 @@ x-backend-image: &backend-image
     - backend_static:/app/staticfiles
     - backend_media:/app/media
     # Traefik watches this dir; backend writes Host() routers for custom-domain ACME.
-    - /opt/shared/traefik/dynamic:/traefik-dynamic
+    - /srv/shared/traefik/dynamic:/traefik-dynamic
   networks:
     - app_network
     - traefik_proxy
@@ -63,7 +63,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" http://127.0.0.1:8021/api/v1/health/live/ > /dev/null",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitness.musfiqdehan.com}\" http://127.0.0.1:8021/api/v1/health/live/ > /dev/null",
         ]
       interval: 30s
       timeout: 10s
@@ -74,18 +74,18 @@ services:
       - "traefik.docker.network=traefik_proxy"
 
       # ── HTTPS API (rate limited) — platform hosts
-      - "traefik.http.routers.backend-api.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/api`) || PathPrefix(`/admin`) || PathPrefix(`/media`) || PathPrefix(`/static`))"
+      - "traefik.http.routers.backend-api.rule=(Host(`fitness.musfiqdehan.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitness\\.musfiqdehan\\.com$`)) && (PathPrefix(`/api`) || PathPrefix(`/ninja`) || PathPrefix(`/media`) || PathPrefix(`/static`))"
       - "traefik.http.routers.backend-api.entrypoints=websecure"
       - "traefik.http.routers.backend-api.tls=true"
       - "traefik.http.routers.backend-api.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.backend-api.tls.domains[0].main=fitssort.com"
-      - "traefik.http.routers.backend-api.tls.domains[0].sans=*.fitssort.com"
+      - "traefik.http.routers.backend-api.tls.domains[0].main=fitness.musfiqdehan.com"
+      - "traefik.http.routers.backend-api.tls.domains[0].sans=*.fitness.musfiqdehan.com"
       - "traefik.http.routers.backend-api.priority=100"
       - "traefik.http.routers.backend-api.middlewares=security-headers@file,compress@file,api-ratelimit@file"
       - "traefik.http.routers.backend-api.service=backend"
 
       # ── HTTPS API — tenant custom domains
-      - "traefik.http.routers.backend-custom-api.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/admin`) || PathPrefix(`/media`) || PathPrefix(`/static`))"
+      - "traefik.http.routers.backend-custom-api.rule=HostRegexp(`^.+$`) && !Host(`fitness.musfiqdehan.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitness\\.musfiqdehan\\.com$`) && (PathPrefix(`/api`) || PathPrefix(`/ninja`) || PathPrefix(`/media`) || PathPrefix(`/static`))"
       - "traefik.http.routers.backend-custom-api.entrypoints=websecure"
       - "traefik.http.routers.backend-custom-api.tls=true"
       - "traefik.http.routers.backend-custom-api.tls.certresolver=customdomains"
@@ -95,7 +95,7 @@ services:
 
       - "traefik.http.services.backend.loadbalancer.server.port=8021"
       - "traefik.http.services.backend.loadbalancer.healthcheck.path=/api/v1/health/live/"
-      - "traefik.http.services.backend.loadbalancer.healthcheck.hostname=fitssort.com"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.hostname=fitness.musfiqdehan.com"
       - "traefik.http.services.backend.loadbalancer.healthcheck.interval=15s"
       - "traefik.http.services.backend.loadbalancer.healthcheck.timeout=5s"
     command: ["/bin/sh", "/app/scripts/run-api-prod.sh"]
@@ -113,7 +113,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" http://127.0.0.1:8023/api/v1/health/live/ > /dev/null",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitness.musfiqdehan.com}\" http://127.0.0.1:8023/api/v1/health/live/ > /dev/null",
         ]
       interval: 30s
       timeout: 10s
@@ -124,18 +124,18 @@ services:
       - "traefik.docker.network=traefik_proxy"
 
       # ── HTTPS WebSocket — platform hosts
-      - "traefik.http.routers.backend-ws.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && PathPrefix(`/ws`)"
+      - "traefik.http.routers.backend-ws.rule=(Host(`fitness.musfiqdehan.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitness\\.musfiqdehan\\.com$`)) && PathPrefix(`/ws`)"
       - "traefik.http.routers.backend-ws.entrypoints=websecure"
       - "traefik.http.routers.backend-ws.tls=true"
       - "traefik.http.routers.backend-ws.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.backend-ws.tls.domains[0].main=fitssort.com"
-      - "traefik.http.routers.backend-ws.tls.domains[0].sans=*.fitssort.com"
+      - "traefik.http.routers.backend-ws.tls.domains[0].main=fitness.musfiqdehan.com"
+      - "traefik.http.routers.backend-ws.tls.domains[0].sans=*.fitness.musfiqdehan.com"
       - "traefik.http.routers.backend-ws.priority=100"
       - "traefik.http.routers.backend-ws.middlewares=security-headers@file,ws-headers@file"
       - "traefik.http.routers.backend-ws.service=backend-ws"
 
       # ── HTTPS WebSocket — tenant custom domains
-      - "traefik.http.routers.backend-custom-ws.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && PathPrefix(`/ws`)"
+      - "traefik.http.routers.backend-custom-ws.rule=HostRegexp(`^.+$`) && !Host(`fitness.musfiqdehan.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitness\\.musfiqdehan\\.com$`) && PathPrefix(`/ws`)"
       - "traefik.http.routers.backend-custom-ws.entrypoints=websecure"
       - "traefik.http.routers.backend-custom-ws.tls=true"
       - "traefik.http.routers.backend-custom-ws.tls.certresolver=customdomains"
@@ -171,7 +171,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitssort.com}\" http://127.0.0.1:8022/api/v1/health/live/ > /dev/null",
+          "curl -fsS -H \"Host: $${PUBLIC_DOMAIN:-fitness.musfiqdehan.com}\" http://127.0.0.1:8022/api/v1/health/live/ > /dev/null",
         ]
       interval: 30s
       timeout: 5s
@@ -182,14 +182,14 @@ services:
       - "traefik.docker.network=traefik_proxy"
 
       # ── HTTP-only ADMS devices — platform hosts (port 80, no TLS)
-      - "traefik.http.routers.backend-adms.rule=(Host(`fitssort.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`)) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
+      - "traefik.http.routers.backend-adms.rule=(Host(`fitness.musfiqdehan.com`) || HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitness\\.musfiqdehan\\.com$`)) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
       - "traefik.http.routers.backend-adms.entrypoints=web"
       - "traefik.http.routers.backend-adms.priority=100"
       - "traefik.http.routers.backend-adms.middlewares=adms-http-headers@file"
       - "traefik.http.routers.backend-adms.service=backend-adms"
 
       # ── HTTP-only ADMS — tenant custom domains
-      - "traefik.http.routers.backend-custom-adms.rule=HostRegexp(`^.+$`) && !Host(`fitssort.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitssort\\.com$`) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
+      - "traefik.http.routers.backend-custom-adms.rule=HostRegexp(`^.+$`) && !Host(`fitness.musfiqdehan.com`) && !HostRegexp(`^[a-z0-9][a-z0-9-]*\\.fitness\\.musfiqdehan\\.com$`) && (PathPrefix(`/iclock`) || PathPrefix(`/cdata`) || PathPrefix(`/getrequest`) || PathPrefix(`/devicecmd`))"
       - "traefik.http.routers.backend-custom-adms.entrypoints=web"
       - "traefik.http.routers.backend-custom-adms.priority=100"
       - "traefik.http.routers.backend-custom-adms.middlewares=adms-http-headers@file"
@@ -197,7 +197,7 @@ services:
 
       - "traefik.http.services.backend-adms.loadbalancer.server.port=8022"
       - "traefik.http.services.backend-adms.loadbalancer.healthcheck.path=/api/v1/health/live/"
-      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.hostname=fitssort.com"
+      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.hostname=fitness.musfiqdehan.com"
       - "traefik.http.services.backend-adms.loadbalancer.healthcheck.interval=15s"
       - "traefik.http.services.backend-adms.loadbalancer.healthcheck.timeout=5s"
     command: ["/bin/sh", "/app/scripts/run-adms-prod.sh"]

@@ -583,8 +583,8 @@ class TenancyApiTests(APITestCase):
 		}
 
 		with self.settings(
-			PUBLIC_FRONTEND_URL="https://fitssort.com",
-			TENANT_FRONTEND_BASE_DOMAIN="fitssort.com",
+			PUBLIC_FRONTEND_URL="https://fitness.musfiqdehan.com",
+			TENANT_FRONTEND_BASE_DOMAIN="fitness.musfiqdehan.com",
 			TENANT_FRONTEND_SCHEME="https",
 			TENANT_FRONTEND_PORT="",
 		):
@@ -597,7 +597,7 @@ class TenancyApiTests(APITestCase):
 
 		self.assertEqual(res.status_code, status.HTTP_201_CREATED)
 		email_log = EmailQueue.objects.get(to_email="owner@prodgym.test", purpose=EmailQueue.PURPOSE_VERIFICATION)
-		self.assertTrue(email_log.context["verification_url"].startswith("https://prodgym.fitssort.com/SetTenantPassword?token="))
+		self.assertTrue(email_log.context["verification_url"].startswith("https://prodgym.fitness.musfiqdehan.com/SetTenantPassword?token="))
 
 	def test_invitation_email_uses_https_tenant_subdomain_in_production_mode(self):
 		self.client.force_authenticate(user=self.public_user)
@@ -608,8 +608,8 @@ class TenancyApiTests(APITestCase):
 		}
 
 		with self.settings(
-			PUBLIC_FRONTEND_URL="https://fitssort.com",
-			TENANT_FRONTEND_BASE_DOMAIN="fitssort.com",
+			PUBLIC_FRONTEND_URL="https://fitness.musfiqdehan.com",
+			TENANT_FRONTEND_BASE_DOMAIN="fitness.musfiqdehan.com",
 			TENANT_FRONTEND_SCHEME="https",
 			TENANT_FRONTEND_PORT="",
 		):
@@ -622,7 +622,7 @@ class TenancyApiTests(APITestCase):
 
 		self.assertEqual(res.status_code, status.HTTP_201_CREATED)
 		email_log = EmailQueue.objects.get(to_email="admin@prodinvite.test", purpose=EmailQueue.PURPOSE_INVITATION)
-		self.assertTrue(email_log.context["invitation_url"].startswith("https://prodinvite.fitssort.com/accept-invite?token="))
+		self.assertTrue(email_log.context["invitation_url"].startswith("https://prodinvite.fitness.musfiqdehan.com/accept-invite?token="))
 
 	def test_token_validation_rejects_wrong_tenant_host(self):
 		raw_token, _ = Invitation.issue_token(
@@ -646,7 +646,7 @@ class TenancyApiTests(APITestCase):
 		self.assertEqual(res.data["detail"], "Token does not belong to this tenant domain.")
 
 	def test_token_validation_allows_www_public_host(self):
-		with override_settings(PUBLIC_DOMAIN="fitssort.com"):
+		with override_settings(PUBLIC_DOMAIN="fitness.musfiqdehan.com"):
 			raw_token, _ = Invitation.issue_token(
 				token_type=Invitation.TOKEN_TYPE_INVITATION,
 				tenant=self.tenant,
@@ -661,7 +661,7 @@ class TenancyApiTests(APITestCase):
 				"/api/v1/tenancy/tokens/validate/",
 				{"token": raw_token},
 				format="json",
-				HTTP_HOST="www.fitssort.com",
+				HTTP_HOST="www.fitness.musfiqdehan.com",
 			)
 
 		self.assertEqual(res.status_code, status.HTTP_200_OK)

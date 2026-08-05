@@ -39,8 +39,16 @@ _DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)([a-z0-9-]{1,63}\.)+[a-z]{2,63}$"
 )
 
-# Hostnames the platform reserves for itself / cannot be claimed by tenants.
-_BLOCKED_SUFFIXES = ("fitssort.com",)
+def _blocked_suffixes() -> tuple[str, ...]:
+    """Hostnames the platform reserves for itself / cannot be claimed by tenants."""
+    from django.conf import settings
+
+    domain = (
+        getattr(settings, "PUBLIC_DOMAIN", "")
+        or getattr(settings, "TENANT_BASE_DOMAIN", "")
+        or "fitness.musfiqdehan.com"
+    ).strip().lower().rstrip(".")
+    return (domain,) if domain else ("fitness.musfiqdehan.com",)
 
 
 def _normalize_domain(value: str) -> str:
@@ -58,7 +66,7 @@ def _validate_domain(value: str) -> tuple[str, str]:
         return "", "Enter a valid domain such as gym.yourcompany.com."
     if not _DOMAIN_RE.match(domain):
         return "", "Enter a valid domain such as gym.yourcompany.com."
-    if any(domain == s or domain.endswith("." + s) for s in _BLOCKED_SUFFIXES):
+    if any(domain == s or domain.endswith("." + s) for s in _blocked_suffixes()):
         return "", "This domain is managed by the platform and cannot be used."
     return domain, ""
 

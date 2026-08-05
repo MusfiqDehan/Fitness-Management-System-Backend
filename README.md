@@ -303,7 +303,7 @@ Backups: [docs/production-backup-restore.md](docs/production-backup-restore.md).
 Devices use **HTTP** on port 80 (not HTTPS). Firmware URL pattern:
 
 ```text
-http://{tenant}.fitssort.com/iclock/cdata
+http://{tenant}.fitness.musfiqdehan.com/iclock/cdata
 ```
 
 See [traefik/README.md](../traefik/README.md) for routing.

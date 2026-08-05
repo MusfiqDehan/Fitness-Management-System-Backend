@@ -16,7 +16,7 @@
 //   - VPS_PORT           : SSH port (default: 22)
 //   - VPS_USER           : SSH login username
 //   - VPS_BACKEND_PATH   : Absolute path on VPS (e.g. /opt/gym/backend)
-//   - PUBLIC_DOMAIN      : Your domain (e.g. fitssort.com)
+//   - PUBLIC_DOMAIN      : Your domain (e.g. fitness.musfiqdehan.com)
 
 pipeline {
     agent any

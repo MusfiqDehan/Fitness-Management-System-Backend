@@ -8,8 +8,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TRAEFIK_DIR="${TRAEFIK_DIR:-/opt/shared/traefik}"
-FRONTEND_DIR="${FRONTEND_DIR:-/opt/apps/gym_app_new_frontend}"
+TRAEFIK_DIR="${TRAEFIK_DIR:-/srv/shared/traefik}"
+FRONTEND_DIR="${FRONTEND_DIR:-/srv/fullstacks/Fitness-Management-System/frontend}"
 
 echo "==> Starting Traefik..."
 docker compose --env-file "${TRAEFIK_DIR}/.env" \
@@ -36,4 +36,4 @@ until docker compose -f docker-compose.prod.yml ps backend | grep -q healthy; do
 done
 
 echo "==> Production stack is up."
-curl -fsS "https://fitssort.com/api/v1/health/live/" >/dev/null && echo "[OK] Public API is reachable."
+curl -fsS "https://fitness.musfiqdehan.com/api/v1/health/live/" >/dev/null && echo "[OK] Public API is reachable."

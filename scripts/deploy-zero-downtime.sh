@@ -26,8 +26,8 @@ echo "==> Deploying backend image tag: ${IMAGE_TAG}"
 
 if [[ "$SKIP_GIT_PULL" != "1" ]]; then
   echo "==> Pulling latest code from production branch..."
-  git fetch origin production
-  git reset --hard origin/production
+  git fetch origin main
+  git reset --hard origin/main
   export IMAGE_TAG="$(git rev-parse --short HEAD)"
   echo "==> Image tag after pull: ${IMAGE_TAG}"
 fi
