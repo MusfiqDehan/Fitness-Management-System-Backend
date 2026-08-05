@@ -22,7 +22,7 @@ from apps.dashboard.settings_views import PublicGymBrandingView
 
 urlpatterns = [
     # Django Admin
-    path('admin/', admin.site.urls),
+    path('ninja/', admin.site.urls),
 
     # Health Check
     path('api/v1/health/tenant/', tenant_health, name='tenant-health'),
