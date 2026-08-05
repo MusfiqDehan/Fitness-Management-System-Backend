@@ -495,7 +495,7 @@ AUTH_USER_MODEL = 'identity.User'
 
 # drf-spectacular settings
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Gym Management System API',
+    'TITLE': 'Fitness Management System API',
     'DESCRIPTION': 'API documentation for the Fitness Management System',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
