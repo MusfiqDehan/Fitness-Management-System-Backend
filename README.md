@@ -1,8 +1,8 @@
-# FitSSort — Backend
+# Fitness Management System - Backend
 
-Django REST API for the Fitssort / FitHive gym management SaaS platform.
+Django REST API for the Fitness Management System SaaS platform.
 
-Schema-based multi-tenancy (`django-tenants` + PostgreSQL), JWT auth, Celery background jobs, Channels WebSockets, and ZKTeco ADMS device integration. In production the API is served with Hypercorn behind Traefik.
+Schema-based multi-tenancy (`django-tenants` + PostgreSQL), JWT auth, Celery background jobs, Channels WebSockets, and ZKTeco ADMS device integration. In production, the API is served with Hypercorn behind Traefik.
 
 ---
 
