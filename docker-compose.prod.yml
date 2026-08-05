@@ -94,10 +94,6 @@ services:
       - "traefik.http.routers.backend-custom-api.service=backend"
 
       - "traefik.http.services.backend.loadbalancer.server.port=8021"
-      - "traefik.http.services.backend.loadbalancer.healthcheck.path=/api/v1/health/live/"
-      - "traefik.http.services.backend.loadbalancer.healthcheck.hostname=fitness.musfiqdehan.com"
-      - "traefik.http.services.backend.loadbalancer.healthcheck.interval=15s"
-      - "traefik.http.services.backend.loadbalancer.healthcheck.timeout=5s"
     command: ["/bin/sh", "/app/scripts/run-api-prod.sh"]
 
   backend_ws:
@@ -196,10 +192,6 @@ services:
       - "traefik.http.routers.backend-custom-adms.service=backend-adms"
 
       - "traefik.http.services.backend-adms.loadbalancer.server.port=8022"
-      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.path=/api/v1/health/live/"
-      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.hostname=fitness.musfiqdehan.com"
-      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.interval=15s"
-      - "traefik.http.services.backend-adms.loadbalancer.healthcheck.timeout=5s"
     command: ["/bin/sh", "/app/scripts/run-adms-prod.sh"]
 
   celery_worker:
