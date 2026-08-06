@@ -565,8 +565,21 @@ class PaymentGatewaySerializer(serializers.ModelSerializer):
     has_platform_credentials = serializers.SerializerMethodField(read_only=True)
 
     def get_has_platform_credentials(self, obj) -> bool:
-        creds = obj.platform_credentials or {}
-        return bool(creds)
+        from apps.billing.services.gateway_resolve import gateway_credentials_complete
+
+        return gateway_credentials_complete(obj, obj.platform_credentials or {})
+
+    def update(self, instance, validated_data):
+        # Merge credential updates so blank fields keep existing secrets.
+        new_creds = validated_data.pop("platform_credentials", None)
+        if new_creds is not None:
+            merged = dict(instance.platform_credentials or {})
+            for key, value in (new_creds or {}).items():
+                text = str(value or "").strip()
+                if text:
+                    merged[key] = text
+            validated_data["platform_credentials"] = merged
+        return super().update(instance, validated_data)
 
     class Meta:
         model = PaymentGateway
@@ -595,6 +608,17 @@ class TenantPaymentGatewaySerializer(serializers.ModelSerializer):
     """
 
     credentials = serializers.JSONField(write_only=True, required=False, default=dict)
+
+    def update(self, instance, validated_data):
+        new_creds = validated_data.pop("credentials", None)
+        if new_creds is not None:
+            merged = dict(instance.credentials or {})
+            for key, value in (new_creds or {}).items():
+                text = str(value or "").strip()
+                if text:
+                    merged[key] = text
+            validated_data["credentials"] = merged
+        return super().update(instance, validated_data)
 
     class Meta:
         model = TenantPaymentGateway
@@ -817,4 +841,7 @@ class AvailableGatewaySerializer(serializers.Serializer):
 
     slug = serializers.CharField()
     name = serializers.CharField()
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+    config_schema = serializers.JSONField(required=False, default=list)
     is_configured = serializers.BooleanField()
+    is_sandbox = serializers.BooleanField(required=False, default=True)
