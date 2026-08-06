@@ -228,6 +228,16 @@ TRAEFIK_CUSTOM_DOMAINS_PATH = os.environ.get(
 # Production: set BACKEND_BASE_URL=https://api.yourdomain.com in .env.prod
 BACKEND_BASE_URL = os.environ.get('BACKEND_BASE_URL', 'http://localhost:8021').strip().rstrip('/')
 
+# Stripe platform credentials (used to seed / fallback platform gateway config).
+# Prefer storing credentials on PaymentGateway.platform_credentials via Platform Billing UI.
+# Test keys use pk_test_ / sk_test_; live keys use pk_live_ / sk_live_.
+STRIPE_PUBLISHABLE_KEY = (
+    os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
+    or os.environ.get('STRIPE_PUBLISHABLE_KEYS', '')
+).strip()
+STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '').strip()
+STRIPE_API_VERSION = os.environ.get('STRIPE_API_VERSION', '').strip()
+
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
