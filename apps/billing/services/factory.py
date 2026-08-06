@@ -1,6 +1,7 @@
 """Factory: return the correct gateway service for a given slug."""
 from .base import AbstractPaymentGateway
 from .sslcommerz import SSLCommerzService
+from .stripe_gateway import StripeService
 
 
 def get_gateway(
@@ -24,10 +25,23 @@ def get_gateway(
     Raises:
         ValueError: If the slug is not a known/supported gateway.
     """
+    credentials = credentials or {}
+
     if slug == "sslcommerz":
         return SSLCommerzService(
             store_id=credentials.get("store_id", ""),
             store_password=credentials.get("store_password", ""),
+            is_sandbox=is_sandbox,
+            success_url=success_url,
+            fail_url=fail_url,
+            cancel_url=cancel_url,
+            ipn_url=ipn_url,
+        )
+
+    if slug == "stripe":
+        return StripeService(
+            secret_key=credentials.get("secret_key", ""),
+            publishable_key=credentials.get("publishable_key", ""),
             is_sandbox=is_sandbox,
             success_url=success_url,
             fail_url=fail_url,
