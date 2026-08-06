@@ -17,6 +17,7 @@ from .views import (
     UnifiedClassListAPIView,
     UnifiedScheduleListAPIView,
     PublicMemberRegistrationAPIView,
+    PublicAvailableGatewaysAPIView,
     PublicPackageListAPIView,
     PublicPackageRetrieveAPIView,
     PublicGymClassListAPIView,
@@ -90,6 +91,7 @@ urlpatterns = [
 
     # ========== PUBLIC (Landing Page) ==========
     path('public/register/', PublicMemberRegistrationAPIView.as_view(), name='public-register'),
+    path('public/available-gateways/', PublicAvailableGatewaysAPIView.as_view(), name='public-available-gateways'),
     path('public/packages/', PublicPackageListAPIView.as_view(), name='public-packages-list'),
     path('public/packages/<int:pk>/', PublicPackageRetrieveAPIView.as_view(), name='public-packages-detail'),
     path('public/verify-invitation/', VerifyInvitationAPIView.as_view(), name='verify-invitation'),
