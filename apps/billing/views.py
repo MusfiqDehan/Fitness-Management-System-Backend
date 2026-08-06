@@ -1283,8 +1283,10 @@ class PaymentGatewayToggleAPIView(APIView):
 class PaymentGatewaySetDefaultView(APIView):
     """POST /api/v1/billing/gateways/<slug>/set-default-subscription/
 
-    Marks one gateway as the default for SaaS subscription billing.
-    Clears the flag on all other gateways atomically.
+    Deprecated: the platform no longer uses an implicit default gateway.
+    Callers must pass gateway_slug explicitly. This endpoint now clears the
+    default flag on all gateways (including the requested slug) so legacy
+    clients cannot re-introduce a default.
     """
 
     permission_classes = GATEWAY_EDIT_PERMS
@@ -1292,9 +1294,10 @@ class PaymentGatewaySetDefaultView(APIView):
     def post(self, request, slug):
         gateway = get_object_or_404(PaymentGateway, slug=slug)
         with transaction.atomic():
-            PaymentGateway.objects.exclude(slug=slug).update(is_default_for_subscriptions=False)
-            gateway.is_default_for_subscriptions = True
-            gateway.save(update_fields=["is_default_for_subscriptions", "updated_at"])
+            PaymentGateway.objects.filter(is_default_for_subscriptions=True).update(
+                is_default_for_subscriptions=False
+            )
+            gateway.refresh_from_db()
         return Response(PaymentGatewaySerializer(gateway).data)
 
 
@@ -1582,8 +1585,18 @@ def _process_subscription_callback(request, *, tran_id=None):
                 })
                 return invoice, f"{public_frontend}/subscription/success?{_params}"
 
-            val_id = request.POST.get("val_id") or request.GET.get("val_id", "")
+            val_id = (
+                request.POST.get("val_id")
+                or request.GET.get("val_id")
+                or request.POST.get("session_id")
+                or request.GET.get("session_id")
+                or ""
+            )
             new_status = TenantSubscriptionInvoice.STATUS_FAILED
+
+            if not val_id and invoice.gateway_slug == "stripe":
+                gw_resp = invoice.gateway_response if isinstance(invoice.gateway_response, dict) else {}
+                val_id = str(gw_resp.get("id") or invoice.val_id or "").strip()
 
             if val_id:
                 try:
@@ -1787,12 +1800,9 @@ class TenantGatewayConfigView(ModelCRUDView):
 
 
 def _is_gateway_credentials_complete(gateway: PaymentGateway, credentials: dict) -> bool:
-    required_keys = [
-        field.get("key")
-        for field in (gateway.config_schema or [])
-        if field.get("required") and field.get("key")
-    ]
-    return all(str((credentials or {}).get(key, "")).strip() for key in required_keys)
+    from apps.billing.services.gateway_resolve import gateway_credentials_complete
+
+    return gateway_credentials_complete(gateway, credentials)
 
 
 def _build_tenant_backend_base_url(request) -> str:
@@ -1820,6 +1830,25 @@ def _build_tenant_backend_base_url(request) -> str:
 # Tenant: available gateways (for AddPaymentDialog dropdown)
 # ===============================================================
 
+
+class SubscriptionAvailableGatewaysView(APIView):
+    """GET /api/v1/billing/subscription/available-gateways/
+
+    Lists platform gateways that have complete platform credentials and can
+    be used for SaaS subscription payments. No gateway is default — callers
+    must choose a slug explicitly.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        from apps.billing.services.gateway_resolve import serialize_subscription_ready_gateways
+
+        with schema_context("public"):
+            return Response(serialize_subscription_ready_gateways())
+
+
 class AvailableGatewaysView(APIView):
     """GET /api/v1/billing/payments/available-gateways/
 
@@ -1846,12 +1875,19 @@ class AvailableGatewaysView(APIView):
             {
                 "slug": gateway.slug,
                 "name": gateway.name,
+                "description": gateway.description or "",
+                "config_schema": gateway.config_schema or [],
                 "is_configured": (
                     gateway.slug in configured_rows
                     and _is_gateway_credentials_complete(
                         gateway,
                         configured_rows[gateway.slug].credentials,
                     )
+                ),
+                "is_sandbox": (
+                    configured_rows[gateway.slug].is_sandbox
+                    if gateway.slug in configured_rows
+                    else True
                 ),
             }
             for gateway in enabled_gateways
@@ -1982,10 +2018,13 @@ class PaymentInitiateView(APIView):
 # ===============================================================
 
 def _process_gateway_callback(tran_id: str, val_id: str, raw_amount: str) -> PaymentTransaction | None:
-    """Shared logic: validate with SSLCommerz and update transaction + payment.
+    """Shared logic: validate with the payment gateway and update transaction + payment.
 
     Uses select_for_update to prevent IPN/success callback race conditions.
     Returns the updated PaymentTransaction or None if tran_id is not found.
+
+    For Stripe, ``val_id`` is the Checkout Session ID (``session_id`` query param).
+    For SSLCommerz, ``val_id`` is the SSLCommerz validation id.
     """
     try:
         with transaction.atomic():
@@ -2006,6 +2045,24 @@ def _process_gateway_callback(tran_id: str, val_id: str, raw_amount: str) -> Pay
             except TenantPaymentGateway.DoesNotExist:
                 return tx
 
+            # Stripe Checkout may omit val_id on redirect; fall back to stored session id.
+            effective_val_id = (val_id or "").strip()
+            if not effective_val_id and tx.gateway_slug == "stripe":
+                effective_val_id = str(
+                    (existing_gateway_response or {}).get("id")
+                    or tx.val_id
+                    or ""
+                ).strip()
+
+            if not effective_val_id:
+                tx.status = PaymentTransaction.STATUS_FAILED
+                tx.gateway_response = {
+                    **existing_gateway_response,
+                    "error": "Missing validation id / session id",
+                }
+                tx.save(update_fields=["status", "gateway_response", "updated_at"])
+                return tx
+
             svc = get_gateway(
                 tx.gateway_slug,
                 tenant_gw.credentials,
@@ -2014,7 +2071,7 @@ def _process_gateway_callback(tran_id: str, val_id: str, raw_amount: str) -> Pay
             )
 
             try:
-                validation = svc.validate(val_id)
+                validation = svc.validate(effective_val_id)
             except ValueError:
                 tx.status = PaymentTransaction.STATUS_FAILED
                 tx.save(update_fields=["status", "updated_at"])
@@ -2032,7 +2089,7 @@ def _process_gateway_callback(tran_id: str, val_id: str, raw_amount: str) -> Pay
 
             if is_valid and amount_ok:
                 tx.status = PaymentTransaction.STATUS_SUCCESS
-                tx.val_id = val_id
+                tx.val_id = effective_val_id
                 tx.validated_at = timezone.now()
                 tx.gateway_response = {
                     **existing_gateway_response,
@@ -2088,6 +2145,14 @@ def _request_value(request, key: str, default: str = "") -> str:
     return str(value)
 
 
+def _callback_val_id(request) -> str:
+    """Resolve gateway validation id from SSLCommerz (val_id) or Stripe (session_id)."""
+    return (
+        _request_value(request, "val_id", "")
+        or _request_value(request, "session_id", "")
+    )
+
+
 def _build_tenant_frontend_base_url(request) -> str:
     """Build frontend base URL using tenant primary domain when available."""
     tenant = getattr(request, "tenant", None)
@@ -2121,30 +2186,45 @@ def _payment_result_redirect_url(request, tx: PaymentTransaction | None, outcome
 
 
 class PaymentIPNView(APIView):
-    """POST /api/v1/billing/payments/ipn/ — SSLCommerz server-to-server IPN.
+    """POST /api/v1/billing/payments/ipn/ — gateway server-to-server notification.
 
-    Must be AllowAny because SSLCommerz hits it directly without auth headers.
-    The transaction is validated against the SSLCommerz API (not just IPN data)
+    Must be AllowAny because gateways hit it directly without auth headers.
+    The transaction is validated against the gateway API (not just IPN data)
     before any status update is applied.
+
+    SSLCommerz sends ``tran_id`` / ``val_id`` / ``amount``.
+    Stripe Checkout primarily relies on the success redirect; this endpoint
+    also accepts Stripe-style ``session_id`` when present.
     """
 
     authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
-        tran_id = request.data.get("tran_id", "")
-        val_id = request.data.get("val_id", "")
+        tran_id = (
+            request.data.get("tran_id")
+            or request.data.get("client_reference_id")
+            or ""
+        )
+        # Stripe webhook-ish payloads may nest data.object
+        if not tran_id and isinstance(request.data.get("data"), dict):
+            obj = (request.data.get("data") or {}).get("object") or {}
+            tran_id = obj.get("client_reference_id") or (obj.get("metadata") or {}).get("tran_id") or ""
+            if not request.data.get("session_id") and obj.get("id"):
+                request.data["session_id"] = obj.get("id")
+
+        val_id = request.data.get("val_id") or request.data.get("session_id") or ""
         raw_amount = request.data.get("amount", "0")
 
         if not tran_id:
             return Response({"detail": "Missing tran_id"}, status=status.HTTP_400_BAD_REQUEST)
 
-        _process_gateway_callback(tran_id, val_id, raw_amount)
+        _process_gateway_callback(str(tran_id), str(val_id), str(raw_amount))
         return Response({"status": "received"})
 
 
 class PaymentSuccessView(APIView):
-    """POST /api/v1/billing/payments/success/ — browser redirect after successful payment."""
+    """GET|POST /api/v1/billing/payments/success/ — browser redirect after successful payment."""
 
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -2157,7 +2237,7 @@ class PaymentSuccessView(APIView):
 
     def _handle(self, request):
         tran_id = _request_value(request, "tran_id", "")
-        val_id = _request_value(request, "val_id", "")
+        val_id = _callback_val_id(request)
         raw_amount = _request_value(request, "amount", "0")
 
         tx = _process_gateway_callback(tran_id, val_id, raw_amount)
@@ -2272,11 +2352,17 @@ class TenantInitiateSubscriptionChangeView(APIView):
 
         package_slug = (request.data.get("package_slug") or "").strip()
         billing_cycle = (request.data.get("billing_cycle") or "monthly").strip()
+        gateway_slug = (request.data.get("gateway_slug") or "").strip().lower()
 
         if not package_slug:
             return Response({"detail": "package_slug is required."}, status=status.HTTP_400_BAD_REQUEST)
         if billing_cycle not in ("monthly", "yearly"):
             return Response({"detail": "billing_cycle must be 'monthly' or 'yearly'."}, status=status.HTTP_400_BAD_REQUEST)
+        if not gateway_slug:
+            return Response(
+                {"detail": "gateway_slug is required. Choose a payment gateway."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         public_schema = get_public_schema_name()
         with schema_context(public_schema):
@@ -2285,6 +2371,7 @@ class TenantInitiateSubscriptionChangeView(APIView):
                 PlatformSettings,
                 TenantSubscriptionInvoice,
             )
+            from apps.billing.services.gateway_resolve import resolve_subscription_gateway
             from utils.currency import convert_currency
 
             # Re-fetch tenant to get live subscription state.
@@ -2329,13 +2416,10 @@ class TenantInitiateSubscriptionChangeView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Get platform payment gateway for subscription billing.
-            gateway = PaymentGateway.objects.filter(is_default_for_subscriptions=True).first()
-            if gateway is None or not (gateway.platform_credentials or {}):
-                return Response(
-                    {"detail": "No subscription payment gateway is configured. Please contact the platform administrator."},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
+            try:
+                gateway = resolve_subscription_gateway(gateway_slug)
+            except ValueError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
             # Convert price to platform display currency.
             ps = PlatformSettings.objects.filter(pk=1).first()
@@ -2372,6 +2456,12 @@ class TenantInitiateSubscriptionChangeView(APIView):
                 )
                 result = svc.initiate(invoice)
                 gateway_url = result.get("gateway_url", "")
+                if result.get("raw"):
+                    invoice.gateway_response = {
+                        **(invoice.gateway_response or {}),
+                        **(result.get("raw") or {}),
+                    }
+                    invoice.save(update_fields=["gateway_response", "updated_at"])
             except Exception:
                 invoice.status = TenantSubscriptionInvoice.STATUS_CANCELLED
                 invoice.save(update_fields=["status", "updated_at"])
@@ -2660,6 +2750,7 @@ class PlatformGatewaySubscriptionView(APIView):
         tenant_id = request.data.get("tenant_id")
         package_slug = (request.data.get("package_slug") or "").strip()
         billing_cycle = (request.data.get("billing_cycle") or "monthly").strip()
+        gateway_slug = (request.data.get("gateway_slug") or "").strip().lower()
         notify_channels = request.data.get("notify_channels") or []
         payment_type = (request.data.get("payment_type") or TenantSubscriptionInvoice.PAYMENT_TYPE_PACKAGE).strip()
         adjustment_type = (
@@ -2673,6 +2764,11 @@ class PlatformGatewaySubscriptionView(APIView):
         if billing_cycle not in ("monthly", "yearly"):
             return Response(
                 {"detail": "billing_cycle must be 'monthly' or 'yearly'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not gateway_slug:
+            return Response(
+                {"detail": "gateway_slug is required. Choose a payment gateway."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if payment_type != TenantSubscriptionInvoice.PAYMENT_TYPE_PACKAGE:
@@ -2704,6 +2800,7 @@ class PlatformGatewaySubscriptionView(APIView):
                     package_slug=package_slug,
                     billing_cycle=billing_cycle,
                     request=request,
+                    gateway_slug=gateway_slug,
                     notify_channels=notify_channels,
                     initiated_by_platform=True,
                     payment_type=payment_type,
