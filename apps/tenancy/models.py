@@ -721,7 +721,10 @@ class PaymentGateway(models.Model):
     )
     is_default_for_subscriptions = models.BooleanField(
         default=False,
-        help_text="This gateway is used by the platform to bill tenants for SaaS subscriptions.",
+        help_text=(
+            "Deprecated: no gateway is used as an implicit default. "
+            "Callers must choose a gateway_slug explicitly for each payment."
+        ),
     )
     sort_order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
