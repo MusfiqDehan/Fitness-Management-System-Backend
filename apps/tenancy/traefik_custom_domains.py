@@ -112,13 +112,19 @@ def render_custom_domains_yaml(domains: list[str]) -> str:
         "",
     ]
     if not domains:
-        # Traefik rejects `routers: {}` ("cannot be a standalone element") and
-        # a broken file provider config drops ALL @file middlewares, so every
-        # Docker router that references them returns 404.
+        # Traefik's file provider rejects empty typed maps (`http: {}` /
+        # `routers: {}`) and aborts loading ALL dynamic files, which drops
+        # middlewares.yml and makes every Docker router that references
+        # `@file` middlewares return 404. Keep a harmless placeholder.
         lines.extend(
             [
                 "# No verified custom domains.",
-                "http: {}",
+                "http:",
+                "  middlewares:",
+                "    custom-domains-placeholder:",
+                "      headers:",
+                "        customResponseHeaders:",
+                "          X-Custom-Domains: none",
                 "",
             ]
         )
