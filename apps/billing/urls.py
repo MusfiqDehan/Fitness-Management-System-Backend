@@ -8,6 +8,7 @@ from .expense_views import (
 )
 from .views import (
     AvailableGatewaysView,
+    SubscriptionAvailableGatewaysView,
     FeatureListAPIView,
     PackageDetailAPIView,
     PackageFeaturesAPIView,
@@ -62,6 +63,7 @@ urlpatterns = [
     path('subscription/invoices/', SubscriptionInvoiceListView.as_view(), name='subscription-invoice-list'),
     path('subscription/invoices/<int:pk>/invoice/', SubscriptionInvoicePdfView.as_view(), name='subscription-invoice-pdf'),
     # Tenant subscription plan change & admin invoice view (no payments feature gate)
+    path('subscription/available-gateways/', SubscriptionAvailableGatewaysView.as_view(), name='subscription-available-gateways'),
     path('subscription/initiate-change/', TenantInitiateSubscriptionChangeView.as_view(), name='subscription-initiate-change'),
     path('subscription/admin-invoices/', TenantSubscriptionInvoiceAdminView.as_view(), name='subscription-admin-invoices'),
     path(
