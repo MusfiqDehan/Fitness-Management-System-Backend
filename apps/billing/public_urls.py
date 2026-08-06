@@ -15,6 +15,7 @@ from .views import (
     PlatformManualSubscriptionView,
     PlatformSubscriptionPaymentDetailView,
     PlatformSubscriptionPaymentsView,
+    SubscriptionAvailableGatewaysView,
     SubscriptionPaymentCancelView,
     SubscriptionPaymentFailView,
     SubscriptionPaymentIPNView,
@@ -35,6 +36,7 @@ urlpatterns = [
     path('gateways/<slug:slug>/toggle/', PaymentGatewayToggleAPIView.as_view(), name='gateway-toggle'),
     path('gateways/<slug:slug>/set-default-subscription/', PaymentGatewaySetDefaultView.as_view(), name='gateway-set-default'),
     # Subscription payment callbacks (public schema, called by SSLCommerz)
+    path('subscription/available-gateways/', SubscriptionAvailableGatewaysView.as_view(), name='subscription-available-gateways'),
     path('subscription/ipn/', SubscriptionPaymentIPNView.as_view(), name='subscription-ipn'),
     path('subscription/success/', SubscriptionPaymentSuccessView.as_view(), name='subscription-success'),
     path('subscription/fail/', SubscriptionPaymentFailView.as_view(), name='subscription-fail'),
