@@ -11,7 +11,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django_tenants.utils import get_public_schema_name, schema_context
 
-from apps.tenancy.models import PaymentGateway, PlatformPackage, PlatformSettings, TenantSubscriptionInvoice
+from apps.tenancy.models import PlatformPackage, PlatformSettings, TenantSubscriptionInvoice
 from utils.currency import convert_currency
 
 from apps.billing.services import get_gateway
@@ -381,6 +381,7 @@ def initiate_for_tenant(
     package_slug: str,
     billing_cycle: str,
     request,
+    gateway_slug: str | None = None,
     notify_channels: list[str] | None = None,
     initiated_by_platform: bool = False,
     payment_type: str = TenantSubscriptionInvoice.PAYMENT_TYPE_PACKAGE,
@@ -395,6 +396,7 @@ def initiate_for_tenant(
     public_schema = get_public_schema_name()
     with schema_context(public_schema):
         from apps.tenancy.models import Tenant as PublicTenant
+        from apps.billing.services.gateway_resolve import resolve_subscription_gateway
 
         live_tenant = PublicTenant.objects.get(pk=tenant.pk)
         pkg = PlatformPackage.objects.filter(slug=package_slug, is_active=True).first()
@@ -422,9 +424,7 @@ def initiate_for_tenant(
         if amount <= Decimal("0"):
             raise ValueError("Free plans cannot be processed as a payment.")
 
-        gateway = PaymentGateway.objects.filter(is_default_for_subscriptions=True).first()
-        if gateway is None or not (gateway.platform_credentials or {}):
-            raise RuntimeError("No subscription payment gateway is configured.")
+        gateway = resolve_subscription_gateway(gateway_slug)
 
         prefix = "SUB" if not initiated_by_platform else "PLT"
         tran_id = f"{prefix}-{live_tenant.schema_name.upper()}-{uuid.uuid4().hex[:12].upper()}"
@@ -473,6 +473,13 @@ def initiate_for_tenant(
             invoice.status = TenantSubscriptionInvoice.STATUS_CANCELLED
             invoice.save(update_fields=["status", "updated_at"])
             raise RuntimeError("Failed to initiate payment with the gateway.")
+
+        if result.get("raw"):
+            invoice.gateway_response = {
+                **(invoice.gateway_response or {}),
+                **(result.get("raw") or {}),
+            }
+            invoice.save(update_fields=["gateway_response", "updated_at"])
 
         return gateway_url, tran_id, invoice
 
