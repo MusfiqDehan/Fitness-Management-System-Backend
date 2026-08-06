@@ -845,6 +845,46 @@ class PublicPackageRetrieveAPIView(APIView):
 # PUBLIC MEMBER REGISTRATION (from landing page)
 # =============================================================================
 
+class PublicAvailableGatewaysAPIView(APIView):
+    """GET /api/v1/membership/public/available-gateways/
+
+    Returns platform-enabled gateways that this tenant has configured,
+    for public member checkout gateway selection.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from apps.billing.models import TenantPaymentGateway
+        from apps.billing.views import _is_gateway_credentials_complete
+        from apps.tenancy.models import PaymentGateway
+
+        with schema_context('public'):
+            enabled = list(
+                PaymentGateway.objects.filter(is_enabled_for_tenants=True)
+                .order_by('sort_order', 'name')
+            )
+
+        configured = {
+            row.gateway_slug: row
+            for row in TenantPaymentGateway.objects.filter(is_active=True)
+        }
+
+        result = []
+        for gateway in enabled:
+            row = configured.get(gateway.slug)
+            if row is None:
+                continue
+            if not _is_gateway_credentials_complete(gateway, row.credentials):
+                continue
+            result.append({
+                'slug': gateway.slug,
+                'name': gateway.name,
+                'description': gateway.description or '',
+                'is_sandbox': row.is_sandbox,
+            })
+        return Response(result)
+
+
 class PublicMemberRegistrationAPIView(APIView):
     """POST /api/v1/membership/public/register/ — public member self-registration."""
     permission_classes = [AllowAny]
@@ -854,11 +894,11 @@ class PublicMemberRegistrationAPIView(APIView):
             return Response({'error': 'Email is required for registration'}, status=status.HTTP_400_BAD_REQUEST)
 
         start_checkout = str(request.data.get('start_checkout', '')).strip().lower() in ('1', 'true', 'yes')
-        gateway_slug = str(request.data.get('gateway_slug', 'sslcommerz')).strip().lower() or 'sslcommerz'
+        gateway_slug = str(request.data.get('gateway_slug', '')).strip().lower()
 
-        if start_checkout and gateway_slug != 'sslcommerz':
+        if start_checkout and not gateway_slug:
             return Response(
-                {'detail': "Only 'sslcommerz' is supported for public package checkout."},
+                {'detail': "gateway_slug is required when start_checkout is true."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1007,7 +1047,7 @@ class PublicMemberRegistrationAPIView(APIView):
                     if package_payment is None:
                         raise ValueError('Could not prepare package payment for checkout.')
 
-                    package_payment.payment_method = 'sslcommerz'
+                    package_payment.payment_method = gateway_slug
                     package_payment.payment_status = Payment.STATUS_DUE
                     package_payment.is_paid = False
                     package_payment.save(update_fields=['payment_method', 'payment_status', 'is_paid', 'updated_at'])
@@ -1067,7 +1107,7 @@ class PublicMemberRegistrationAPIView(APIView):
             tx.gateway_response = {
                 'flow': 'public_member_signup',
                 'member_id': member.id,
-                'raw': result.get('raw', {}),
+                **(result.get('raw') or {}),
             }
             tx.save(update_fields=['status', 'gateway_response', 'updated_at'])
 
