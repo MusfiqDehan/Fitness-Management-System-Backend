@@ -31,7 +31,7 @@ from apps.tenancy.platform_settings_views import (
 
 urlpatterns = [
     # Django admin (manages Tenant + Domain records)
-    path('admin/', admin.site.urls),
+    path('ninja/', admin.site.urls),
 
     # Tenant routing health check
     path('api/v1/health/tenant/', tenant_health, name='tenant-health'),

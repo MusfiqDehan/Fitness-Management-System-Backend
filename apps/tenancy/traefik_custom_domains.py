@@ -33,7 +33,7 @@ _DOMAIN_RE = re.compile(
 
 _FRONTEND_EXCLUDES = (
     "!PathPrefix(`/api`)",
-    "!PathPrefix(`/admin`)",
+    "!PathPrefix(`/ninja`)",
     "!PathPrefix(`/media`)",
     "!PathPrefix(`/static`)",
     "!PathPrefix(`/ws`)",
@@ -45,7 +45,7 @@ _FRONTEND_EXCLUDES = (
 
 _API_PATHS = (
     "PathPrefix(`/api`)",
-    "PathPrefix(`/admin`)",
+    "PathPrefix(`/ninja`)",
     "PathPrefix(`/media`)",
     "PathPrefix(`/static`)",
 )
@@ -112,11 +112,13 @@ def render_custom_domains_yaml(domains: list[str]) -> str:
         "",
     ]
     if not domains:
+        # Traefik rejects `routers: {}` ("cannot be a standalone element") and
+        # a broken file provider config drops ALL @file middlewares, so every
+        # Docker router that references them returns 404.
         lines.extend(
             [
                 "# No verified custom domains.",
-                "http:",
-                "  routers: {}",
+                "http: {}",
                 "",
             ]
         )
