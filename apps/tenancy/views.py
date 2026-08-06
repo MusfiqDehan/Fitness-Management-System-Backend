@@ -350,57 +350,96 @@ def _maybe_initiate_subscription_payment(
 	plan_slug: str,
 	request,
 	*,
+	gateway_slug: str = "",
 	contact_phone: str = "",
 	contact_email: str = "",
 	contact_name: str = "",
 ) -> dict:
 	"""Initiate a SaaS subscription payment for a newly created tenant.
 
-	Returns a dict with `payment_url` (str or None) and `trial_days` (int).
+	Returns a dict with `payment_url` (str or None), `trial_days`, and when
+	payment is required, `available_gateways` so the client can choose.
+
 	Only initiates payment when:
 	  - The package has price_monthly > 0
 	  - The package has trial_days == 0 (no free trial)
-	  - The platform has a default gateway with credentials configured
+	  - A gateway_slug is provided and that gateway has platform credentials
 
-	When trial_days > 0, no payment is initiated — the tenant is billed
-	after the trial period ends (via a separate renewal flow).
+	There is no default gateway — callers must choose explicitly.
 	"""
+	from apps.billing.services.gateway_resolve import (
+		resolve_subscription_gateway,
+		serialize_subscription_ready_gateways,
+	)
+
 	public_schema = get_public_schema_name()
 	with schema_context(public_schema):
 		pkg = PlatformPackage.objects.filter(slug=plan_slug, is_active=True).first()
 		if pkg is None:
-			return {"payment_url": None, "trial_days": 14, "is_trial": True}
+			return {"payment_url": None, "trial_days": 14, "is_trial": True, "available_gateways": []}
 
 		trial_days = max(0, pkg.trial_days)
 
 		if trial_days > 0:
 			# Free trial — no immediate payment required
-			return {"payment_url": None, "trial_days": trial_days, "is_trial": True}
+			return {
+				"payment_url": None,
+				"trial_days": trial_days,
+				"is_trial": True,
+				"available_gateways": [],
+			}
 
 		from decimal import Decimal
 		if pkg.price_monthly <= Decimal("0"):
 			# Free plan — no charge
-			return {"payment_url": None, "trial_days": 0, "is_trial": False}
+			return {
+				"payment_url": None,
+				"trial_days": 0,
+				"is_trial": False,
+				"available_gateways": [],
+			}
 
-		# Paid plan with no trial — initiate payment now
-		gateway = PaymentGateway.objects.filter(
-			is_default_for_subscriptions=True,
-		).first()
-		if gateway is None or not (gateway.platform_credentials or {}):
+		available_gateways = serialize_subscription_ready_gateways()
+		if not available_gateways:
 			# No gateway configured yet — let them in anyway (admin can collect payment manually)
-			return {"payment_url": None, "trial_days": 0, "is_trial": False}
+			return {
+				"payment_url": None,
+				"trial_days": 0,
+				"is_trial": False,
+				"available_gateways": [],
+			}
+
+		slug = (gateway_slug or "").strip().lower()
+		if not slug:
+			# Payment required but no gateway chosen yet — return options for the client.
+			return {
+				"payment_url": None,
+				"trial_days": 0,
+				"is_trial": False,
+				"payment_required": True,
+				"available_gateways": available_gateways,
+			}
+
+		try:
+			gateway = resolve_subscription_gateway(slug)
+		except ValueError:
+			return {
+				"payment_url": None,
+				"trial_days": 0,
+				"is_trial": False,
+				"payment_required": True,
+				"available_gateways": available_gateways,
+				"detail": f"Invalid or unconfigured gateway '{slug}'.",
+			}
 
 		from apps.billing.services import get_gateway
 		from apps.tenancy.models import TenantSubscriptionInvoice, PlatformSettings
 		from utils.currency import convert_currency
 		import uuid as _uuid
 
-		# Determine the currency dynamically
-		# System currency -> PlatformSettings.default_currency, otherwise fallback to "BDT" or "USD"
 		ps = PlatformSettings.objects.filter(pk=1).first()
 		target_currency = ps.default_currency if ps else "USD"
 
-		# Package price is defined in USD. Let's convert to target currency
 		original_amount = pkg.price_monthly
 		converted_amount = convert_currency(original_amount, "USD", target_currency)
 
@@ -420,8 +459,6 @@ def _maybe_initiate_subscription_payment(
 			is_trial=False,
 		)
 
-		# Pass onboarding contact info to the gateway payload builder.
-		# These are transient attributes used only for this initiate() call.
 		invoice.customer_phone = (contact_phone or "").strip()
 		invoice.customer_email = (contact_email or "").strip()
 		invoice.customer_name = (contact_name or "").strip()
@@ -437,17 +474,29 @@ def _maybe_initiate_subscription_payment(
 				ipn_url=f"{backend_base}/api/v1/billing/subscription/ipn/",
 			)
 			result = svc.initiate(invoice)
+			if result.get("raw"):
+				invoice.gateway_response = result.get("raw") or {}
+				invoice.save(update_fields=["gateway_response", "updated_at"])
 			return {
 				"payment_url": result.get("gateway_url"),
 				"tran_id": tran_id,
 				"trial_days": 0,
 				"is_trial": False,
+				"payment_required": True,
+				"available_gateways": available_gateways,
 			}
 		except Exception:
 			# If payment initiation fails, don't block tenant creation; admin can follow up
 			invoice.status = TenantSubscriptionInvoice.STATUS_FAILED
 			invoice.save(update_fields=["status", "updated_at"])
-			return {"payment_url": None, "trial_days": 0, "is_trial": False}
+			return {
+				"payment_url": None,
+				"trial_days": 0,
+				"is_trial": False,
+				"payment_required": True,
+				"available_gateways": available_gateways,
+			}
+
 
 
 def _create_tenant_with_domains(
@@ -584,12 +633,18 @@ def _password_setup_success_response(invitation, *, domain, message="Password co
 		"login_url": _build_login_url(subdomain=invitation.subdomain, domain=domain),
 	}
 	if payment_info:
+		payment_required = bool(
+			payment_info.get("payment_required")
+			or payment_info.get("payment_url")
+			or payment_info.get("available_gateways")
+		) and not payment_info.get("is_trial", True)
 		data.update({
-			"payment_required": bool(payment_info.get("payment_url")),
+			"payment_required": payment_required,
 			"payment_url": payment_info.get("payment_url"),
 			"tran_id": payment_info.get("tran_id"),
 			"is_trial": payment_info.get("is_trial", True),
 			"trial_days": payment_info.get("trial_days", 0),
+			"available_gateways": payment_info.get("available_gateways") or [],
 			"trial_ends_at": (
 				tenant.trial_ends_at.isoformat() if tenant and tenant.trial_ends_at else None
 			),
@@ -1186,10 +1241,12 @@ class PasswordSetupAPIView(APIView):
 		payment_info = None
 		if plan_slug and is_owner_setup and not is_member_invite:
 			contact_phone = str((metadata or {}).get("contact_phone", "") or "").strip()
+			gateway_slug = str(request.data.get("gateway_slug", "") or "").strip().lower()
 			payment_info = _maybe_initiate_subscription_payment(
 				tenant,
 				plan_slug,
 				request,
+				gateway_slug=gateway_slug,
 				contact_phone=contact_phone,
 				contact_email=email,
 				contact_name=(invitation.invitee_full_name or tenant.name or "Customer"),
