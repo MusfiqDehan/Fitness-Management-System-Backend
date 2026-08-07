@@ -62,7 +62,7 @@ class PlatformPublicBrandingApiTests(APITestCase):
             PlatformGymProfile.objects.update_or_create(
                 pk=1,
                 defaults={
-                    "gym_name": "Fitssort Platform",
+                    "gym_name": "FitPulse Platform",
                     "email": "contact@fitness.musfiqdehan.com",
                     "phone": "+8801000000000",
                     "logo_url": "https://cdn.example.com/logo.png",
@@ -80,7 +80,7 @@ class PlatformPublicBrandingApiTests(APITestCase):
             HTTP_HOST="testserver",
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data["company_name"], "Fitssort Platform")
+        self.assertEqual(res.data["company_name"], "FitPulse Platform")
         self.assertEqual(res.data["logo_url"], "https://cdn.example.com/logo.png")
         self.assertEqual(res.data["discount_enabled"], False)
 
@@ -106,7 +106,7 @@ class PlatformPublicBrandingApiTests(APITestCase):
             HTTP_HOST="testserver",
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data["gym_name"], "Fitssort Platform")
+        self.assertEqual(res.data["gym_name"], "FitPulse Platform")
 
     def test_platform_user_without_settings_edit_cannot_patch_gym_profile(self):
         self.client.force_authenticate(user=self.staff)
@@ -117,6 +117,42 @@ class PlatformPublicBrandingApiTests(APITestCase):
             HTTP_HOST="testserver",
         )
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_public_site_settings_exposes_brand_colors(self):
+        with schema_context("public"):
+            PlatformGymProfile.objects.filter(pk=1).update(
+                primary_color="#2f6feb",
+                secondary_color="#12b886",
+            )
+
+        res = self.client.get(
+            "/api/v1/cms/public/site-settings/",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["primary_color"], "#2f6feb")
+        self.assertEqual(res.data["secondary_color"], "#12b886")
+
+    def test_public_site_settings_defaults_brand_colors_to_empty(self):
+        # Empty means "no override" — the frontend keeps its stock palette,
+        # so the keys must always be present rather than missing.
+        res = self.client.get(
+            "/api/v1/cms/public/site-settings/",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.data["primary_color"], "")
+        self.assertEqual(res.data["secondary_color"], "")
+
+        with schema_context("public"):
+            PlatformGymProfile.objects.filter(pk=1).delete()
+        cache.clear()
+
+        res = self.client.get(
+            "/api/v1/cms/public/site-settings/",
+            HTTP_HOST="testserver",
+        )
+        self.assertEqual(res.data["primary_color"], "")
+        self.assertEqual(res.data["secondary_color"], "")
 
     def test_platform_gym_profile_save_invalidates_public_branding_cache(self):
         key = public_branding_key("public")
