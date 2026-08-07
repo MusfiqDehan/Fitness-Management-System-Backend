@@ -590,7 +590,7 @@ class DeviceCredentialListAndLinkTests(TestCase):
             listed_ids = {row["id"] for row in list_response.data["results"]}
             self.assertIn(device_user.id, listed_ids)
 
-    def test_delete_ack_success_removes_from_fitssort(self):
+    def test_delete_ack_success_removes_from_fitpulse(self):
         with schema_context(self.tenant.schema_name):
             device = AccessDevice.objects.create(
                 name="ADMS Gate",
