@@ -2,6 +2,7 @@ from django.urls import path
 
 from apps.identity.views import LogoutAPIView
 
+from .platform_overview_views import PlatformOverviewAPIView
 from .views import (
 	TenantSelfRegistrationAPIView,
 	SuperadminInvitationAPIView,
@@ -88,6 +89,7 @@ urlpatterns = [
 	path('admin/invitations/', SuperadminInvitationAPIView.as_view(), name='tenant-admin-invite'),
 	path('admin/invitations/<int:pk>/', TenantAdminInvitationDetailView.as_view(), name='tenant-admin-invitation-detail'),
 	path('admin/overview/', TenantAdminOverviewAPIView.as_view(), name='tenant-admin-overview'),
+	path('admin/platform-overview/', PlatformOverviewAPIView.as_view(), name='platform-overview'),
 	path('admin/tenants/', TenantAdminListAPIView.as_view(), name='tenant-admin-list'),
 	path('admin/tenants/<int:pk>/', TenantAdminDetailAPIView.as_view(), name='tenant-admin-detail'),
 	path('admin/tenants/<int:tenant_id>/activation/', TenantAdminActivationAPIView.as_view(), name='tenant-admin-activation'),
