@@ -191,7 +191,7 @@ class CustomDomainRequest(models.Model):
 
     # Hostname (without scheme) tenants must point at the platform, e.g.
     # "gym.theircompany.com". The TXT challenge record name is derived from this.
-    VERIFICATION_RECORD_PREFIX = "_fitssort-verify"
+    VERIFICATION_RECORD_PREFIX = "_fitpulse-verify"
 
     tenant = models.ForeignKey(
         Tenant,
@@ -915,6 +915,9 @@ class PlatformGymProfile(models.Model):
     logo_url = models.URLField(max_length=1000, blank=True, default="")
     logo_width = models.PositiveIntegerField(default=120)
     logo_height = models.PositiveIntegerField(default=40)
+    # Brand colours as #rrggbb. Empty means "use the built-in palette".
+    primary_color = models.CharField(max_length=7, blank=True, default="")
+    secondary_color = models.CharField(max_length=7, blank=True, default="")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
