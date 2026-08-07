@@ -531,7 +531,7 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', 15))
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', os.environ.get('EMAIL_HOST_USER', 'noreply@example.com'))
 # Recipient address for contact-form query notifications
-CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', os.environ.get('EMAIL_HOST_USER', 'contact@fitness.musfiqdehan.com'))
+CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', os.environ.get('EMAIL_HOST_USER', 'hi@musfiqdehan.com'))
 
 # ADMS device logging
 LOGGING = {
