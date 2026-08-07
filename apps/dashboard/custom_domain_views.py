@@ -74,8 +74,8 @@ def _validate_domain(value: str) -> tuple[str, str]:
 def _relative_txt_host(domain: str) -> str:
     """DNS Name field relative to a typical zone (last two labels).
 
-    Example: ``gym.example.com`` → ``_fitssort-verify.gym``;
-    ``example.com`` → ``_fitssort-verify``.
+    Example: ``gym.example.com`` → ``_fitpulse-verify.gym``;
+    ``example.com`` → ``_fitpulse-verify``.
     Providers that want the FQDN should use ``verification_record_name``.
     """
     prefix = CustomDomainRequest.VERIFICATION_RECORD_PREFIX
