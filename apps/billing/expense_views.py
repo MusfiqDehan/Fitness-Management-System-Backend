@@ -113,7 +113,7 @@ class ExpenseVoucherPdfAPIView(APIView):
         expense = get_object_or_404(queryset, pk=pk)
 
         tenant_name = (
-            getattr(getattr(request, "tenant", None), "name", None) or "Fithive Gym"
+            getattr(getattr(request, "tenant", None), "name", None) or "FitPulse Gym"
         )
         generated_by = getattr(request.user, "full_name", "") or getattr(
             request.user, "email", "System"
