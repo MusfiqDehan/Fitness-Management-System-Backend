@@ -6,7 +6,7 @@ from apps.quick_action.models import (
     ClassBooking,
     Category,
     Contact,
-    FitHiveSupport,
+    PlatformSupport,
     Package,
     GymSchedule,
 )
@@ -15,7 +15,7 @@ from apps.quick_action.serializers import (
     ClassBookingSerializer,
     CategorySerializer,
     ContactDashboardSerializer,
-    FitHiveSupportDashboardSerializer,
+    PlatformSupportDashboardSerializer,
     PackageSerializer,
     GymScheduleSerializer,
 )
@@ -311,11 +311,11 @@ class DashboardContactRespondedListAPIView(UnpaginatedListModelAPIView, Dashboar
         return Contact.objects.filter(status=Contact.STATUS_RESPONDED).order_by('-created_at')
 
 
-# Fithive Support
-class DashboardFitHiveSupportBaseAPIView(GenericAPIView):
+# Platform Support
+class DashboardPlatformSupportBaseAPIView(GenericAPIView):
     feature_key = 'crm.inquiries'
-    queryset = FitHiveSupport.objects.all().order_by("-created_at")
-    serializer_class = FitHiveSupportDashboardSerializer
+    queryset = PlatformSupport.objects.all().order_by("-created_at")
+    serializer_class = PlatformSupportDashboardSerializer
     permission_classes = [HasFeatureMethodPermission]
 
     filter_backends = [
@@ -337,33 +337,33 @@ class DashboardFitHiveSupportBaseAPIView(GenericAPIView):
     ordering = ["-created_at"]
 
 
-class DashboardFitHiveSupportListAPIView(ListModelAPIView, DashboardFitHiveSupportBaseAPIView):
+class DashboardPlatformSupportListAPIView(ListModelAPIView, DashboardPlatformSupportBaseAPIView):
     pass
 
 
-class DashboardFitHiveSupportCreateAPIView(CreateModelAPIView, DashboardFitHiveSupportBaseAPIView):
+class DashboardPlatformSupportCreateAPIView(CreateModelAPIView, DashboardPlatformSupportBaseAPIView):
     pass
 
 
-class DashboardFitHiveSupportRetrieveAPIView(RetrieveModelAPIView, DashboardFitHiveSupportBaseAPIView):
+class DashboardPlatformSupportRetrieveAPIView(RetrieveModelAPIView, DashboardPlatformSupportBaseAPIView):
     pass
 
 
-class DashboardFitHiveSupportUpdateAPIView(UpdateModelAPIView, DashboardFitHiveSupportBaseAPIView):
+class DashboardPlatformSupportUpdateAPIView(UpdateModelAPIView, DashboardPlatformSupportBaseAPIView):
     pass
 
 
-class DashboardFitHiveSupportDeleteAPIView(DestroyModelAPIView, DashboardFitHiveSupportBaseAPIView):
+class DashboardPlatformSupportDeleteAPIView(DestroyModelAPIView, DashboardPlatformSupportBaseAPIView):
     pass
 
 
-class DashboardFitHiveSupportMarkAsReadAPIView(StatusTransitionAPIView, DashboardFitHiveSupportBaseAPIView):
-    status_value = FitHiveSupport.STATUS_READ
+class DashboardPlatformSupportMarkAsReadAPIView(StatusTransitionAPIView, DashboardPlatformSupportBaseAPIView):
+    status_value = PlatformSupport.STATUS_READ
     success_message = 'Marked as read'
 
 
-class DashboardFitHiveSupportMarkAsRespondedAPIView(StatusTransitionAPIView, DashboardFitHiveSupportBaseAPIView):
-    status_value = FitHiveSupport.STATUS_RESPONDED
+class DashboardPlatformSupportMarkAsRespondedAPIView(StatusTransitionAPIView, DashboardPlatformSupportBaseAPIView):
+    status_value = PlatformSupport.STATUS_RESPONDED
     success_message = 'Marked as responded'
 
 
