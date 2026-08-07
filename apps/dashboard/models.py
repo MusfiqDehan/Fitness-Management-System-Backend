@@ -11,6 +11,10 @@ class GymProfile(models.Model):
     logo_url = models.URLField(max_length=1000, blank=True, default="")
     logo_width = models.PositiveIntegerField(default=120)
     logo_height = models.PositiveIntegerField(default=40)
+    # Brand colours as #rrggbb. Empty means "use the built-in palette", so a
+    # gym that never opens the picker keeps the stock look.
+    primary_color = models.CharField(max_length=7, blank=True, default="")
+    secondary_color = models.CharField(max_length=7, blank=True, default="")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

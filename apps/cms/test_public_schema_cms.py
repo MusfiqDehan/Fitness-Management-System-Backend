@@ -97,7 +97,7 @@ class PublicSchemaCmsApiTests(APITestCase):
             PlatformGymProfile.objects.update_or_create(
                 pk=1,
                 defaults={
-                    "gym_name": "Fitssort Platform",
+                    "gym_name": "FitPulse Platform",
                     "email": "contact@fitness.musfiqdehan.com",
                     "phone": "+8801000000000",
                 },
@@ -180,5 +180,5 @@ class PublicSchemaCmsApiTests(APITestCase):
             HTTP_HOST="testserver",
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data.get("company_name"), "Fitssort Platform")
+        self.assertEqual(res.data.get("company_name"), "FitPulse Platform")
         self.assertFalse(res.data.get("discount_enabled"))

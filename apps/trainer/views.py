@@ -828,7 +828,7 @@ def _send_trainer_invitation_email(invitation, request, force_new_token=False) -
     html_body = render_to_string('trainer/emails/trainer_invitation_email.html', context)
     fallback_text = (
         f"Hi,\n\n"
-        f"{invited_by_name} has invited you to join {company_name} as a Trainer on Fitssort.\n\n"
+        f"{invited_by_name} has invited you to join {company_name} as a Trainer on FitPulse.\n\n"
         f"Complete your registration here:\n{invite_url}\n\n"
         f"This link expires on {invitation.invitation_expires_at}."
     )

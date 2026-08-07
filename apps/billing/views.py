@@ -202,7 +202,7 @@ def _render_payment_invoice_pdf(payment: Payment, tenant_name: str, generated_by
     member_name = _pdf_clean_text(member.full_name or "Unknown Member")
     member_phone = _pdf_clean_text(member.phone_number)
     generated_by_name = _pdf_clean_text(generated_by or "System")
-    tenant_label = _pdf_clean_text(tenant_name or "Fithive")
+    tenant_label = _pdf_clean_text(tenant_name or "FitPulse")
     payment_item = payment.get_payment_type_display()
     payment_method = payment.get_payment_method_display()
     payment_status = payment.get_payment_status_display()
@@ -840,7 +840,7 @@ class PaymentInvoicePdfAPIView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        tenant_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'Fithive Gym'
+        tenant_name = getattr(getattr(request, 'tenant', None), 'name', None) or 'FitPulse Gym'
         generated_by = getattr(request.user, 'full_name', '') or getattr(request.user, 'email', 'System')
 
         pdf_bytes = _render_payment_invoice_pdf(payment, tenant_name, generated_by)
@@ -1146,7 +1146,7 @@ def _render_subscription_invoice_pdf(invoice, generated_by: str) -> bytes:
     pdf.drawCentredString(
         width / 2,
         7.5 * mm,
-        "This is a system-generated subscription invoice. Thank you for choosing Fitssort.",
+        "This is a system-generated subscription invoice. Thank you for choosing FitPulse.",
     )
 
     pdf.showPage()

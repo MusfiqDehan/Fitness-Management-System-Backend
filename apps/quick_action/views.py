@@ -9,7 +9,7 @@ from .models import (
     ClassSchedule,
     GymSchedule,
     Contact,
-    FitHiveSupport,
+    PlatformSupport,
     Package,
 )
 from .serializers import (
@@ -19,7 +19,7 @@ from .serializers import (
     ClassScheduleSerializer,
     GymScheduleSerializer,
     ContactCreateSerializer,
-    FitHiveSupportCreateSerializer,
+    PlatformSupportCreateSerializer,
     PackageSerializer,
 )
 
@@ -116,10 +116,10 @@ class ContactCreateAPIView(generics.CreateAPIView):
     permission_classes = [permissions.AllowAny]
 
 
-# Fithive support
-class FitHiveSupportCreateAPIView(generics.CreateAPIView):
-    queryset = FitHiveSupport.objects.all()
-    serializer_class = FitHiveSupportCreateSerializer
+# Platform support
+class PlatformSupportCreateAPIView(generics.CreateAPIView):
+    queryset = PlatformSupport.objects.all()
+    serializer_class = PlatformSupportCreateSerializer
     permission_classes = [permissions.AllowAny]
 
 

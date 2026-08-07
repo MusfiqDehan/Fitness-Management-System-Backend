@@ -2,7 +2,7 @@
 
 ## Cursor Cloud specific instructions
 
-This is the Django REST API for the Fitssort / FitHive multi-tenant gym SaaS
+This is the Django REST API for the FitPulse multi-tenant gym SaaS
 (schema-per-tenant via `django-tenants`, JWT auth, Celery, Channels/WebSockets).
 It is developed here **natively (no Docker)** against a locally-installed
 PostgreSQL and Redis. The web frontend lives in a sibling repo
@@ -62,7 +62,7 @@ schema (landing pages, platform admin, superadmin login at
 `/etc/hosts` (and Chrome resolves `.localhost` to loopback automatically).
 
 Seed data already present (for manual testing / demos):
-- Superadmin (public schema): `admin@fitssort.local` / `Admin@12345`
+- Superadmin (public schema): `admin@fitpulse.local` / `Admin@12345`
 - Demo tenant `hellogym` (subdomain `hellogym.localhost`), owner
   `owner@hellogym.test` / `Owner@12345`
 - Default tenant `gym_local` (`local-gym.localhost`) auto-created on bootstrap.

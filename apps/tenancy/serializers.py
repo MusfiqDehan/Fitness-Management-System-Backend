@@ -9,6 +9,7 @@ from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework import serializers
 
 from apps.identity.models import User
+from utils.brand_colors import normalize_brand_color
 from .models import (
     Tenant, Domain, Invitation, PlatformRole, PlatformUserRole, PlatformSettings,
     PlatformGymProfile, PlatformGymPreferences, PlatformNotificationPreferences,
@@ -322,11 +323,25 @@ class PlatformGymProfileSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Enter a valid URL.") from exc
         return normalized
 
+    def validate_primary_color(self, value):
+        return self._validate_brand_color(value)
+
+    def validate_secondary_color(self, value):
+        return self._validate_brand_color(value)
+
+    @staticmethod
+    def _validate_brand_color(value):
+        try:
+            return normalize_brand_color(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
     class Meta:
         model = PlatformGymProfile
         fields = [
             "id", "gym_name", "email", "phone", "website", "address", "timezone",
-            "logo_url", "logo_width", "logo_height", "updated_at",
+            "logo_url", "logo_width", "logo_height",
+            "primary_color", "secondary_color", "updated_at",
         ]
         read_only_fields = ["id", "updated_at"]
 

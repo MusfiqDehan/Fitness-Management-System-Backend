@@ -54,6 +54,15 @@ class Command(BaseCommand):
         repaired: list[str] = []
         with schema_context(public_schema):
             existing_tables = set(connection.introspection.table_names())
+            if "django_migrations" not in existing_tables:
+                self.stdout.write(
+                    self.style.WARNING(
+                        "Migration history table does not exist yet; "
+                        "skipping shared-schema drift repair."
+                    )
+                )
+                return
+
             for app_label in shared_labels:
                 expected = self._expected_tables(app_label)
                 if not expected:

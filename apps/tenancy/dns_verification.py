@@ -1,7 +1,7 @@
 """DNS verification helpers for tenant custom domains.
 
 A tenant proves control of a custom domain by publishing a TXT record at
-``_fitssort-verify.<domain>`` whose value matches the generated token. This is
+``_fitpulse-verify.<domain>`` whose value matches the generated token. This is
 non-disruptive: it never affects the live site at the apex/host while the tenant
 keeps using their existing subdomain.
 
@@ -139,6 +139,6 @@ def check_domain_routing(
         hint = f"Add an A record pointing to {expected_a}."
 
     return False, (
-        "Ownership is verified, but this domain does not point at Fitssort yet. "
+        "Ownership is verified, but this domain does not point at FitPulse yet. "
         f"{hint}"
     )

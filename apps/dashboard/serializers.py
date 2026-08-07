@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.core.validators import URLValidator
 from django.core.exceptions import ValidationError as DjangoValidationError
+from utils.brand_colors import normalize_brand_color
 from .models import GymProfile, NotificationPreferences, GymPreferences, ReminderTemplate, Reminder
 
 
@@ -25,11 +26,25 @@ class GymProfileSerializer(serializers.ModelSerializer):
 
         return normalized
 
+    def validate_primary_color(self, value):
+        return self._validate_brand_color(value)
+
+    def validate_secondary_color(self, value):
+        return self._validate_brand_color(value)
+
+    @staticmethod
+    def _validate_brand_color(value):
+        try:
+            return normalize_brand_color(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
     class Meta:
         model = GymProfile
         fields = [
             "id", "gym_name", "email", "phone", "website", "address", "timezone",
             "logo_url", "logo_width", "logo_height",
+            "primary_color", "secondary_color",
             "updated_at",
         ]
         read_only_fields = ["id", "updated_at"]

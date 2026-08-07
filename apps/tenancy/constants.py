@@ -6,6 +6,7 @@ because adding a new platform module requires shipping new views.
 """
 
 # Platform module keys — used by PlatformRolePermission.module_key
+PLATFORM_MODULE_OVERVIEW = "platform.overview"
 PLATFORM_MODULE_TENANTS = "platform.tenants"
 PLATFORM_MODULE_TENANT_MANAGEMENT = "platform.tenant_management"
 PLATFORM_MODULE_PACKAGES = "platform.packages"
@@ -22,6 +23,7 @@ PLATFORM_MODULE_CMS_BLOGS = "platform.cms.blogs"
 PLATFORM_MODULE_CMS_BANNERS = "platform.cms.banners"
 
 PLATFORM_MODULES = {
+    PLATFORM_MODULE_OVERVIEW: "Overview",
     PLATFORM_MODULE_TENANTS: "Tenants",
     PLATFORM_MODULE_TENANT_MANAGEMENT: "Tenant Management",
     PLATFORM_MODULE_PACKAGES: "Platform Packages",
@@ -54,6 +56,7 @@ PREDEFINED_PLATFORM_ROLE_PERMISSIONS = {
         key: "full" for key in PLATFORM_MODULE_KEYS
     },
     PLATFORM_ROLE_PLATFORM_MANAGER: {
+        PLATFORM_MODULE_OVERVIEW: "view",
         PLATFORM_MODULE_TENANTS: "full",
         PLATFORM_MODULE_TENANT_MANAGEMENT: "full",
         PLATFORM_MODULE_PACKAGES: "edit",
@@ -69,6 +72,7 @@ PREDEFINED_PLATFORM_ROLE_PERMISSIONS = {
         PLATFORM_MODULE_CMS_BANNERS: "edit",
     },
     PLATFORM_ROLE_SUPPORT_AGENT: {
+        PLATFORM_MODULE_OVERVIEW: "view",
         PLATFORM_MODULE_TENANTS: "view",
         PLATFORM_MODULE_TENANT_MANAGEMENT: "none",
         PLATFORM_MODULE_PACKAGES: "view",

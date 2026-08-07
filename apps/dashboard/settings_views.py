@@ -58,6 +58,8 @@ def serialize_gym_branding(profile) -> dict:
             "address": "",
             "website": "",
             "timezone": "",
+            "primary_color": "",
+            "secondary_color": "",
             "navbar_pages": [],
             "footer_pages": [],
             "updated_at": None,
@@ -67,6 +69,9 @@ def serialize_gym_branding(profile) -> dict:
         "logo_width": profile.logo_width or 120,
         "logo_height": profile.logo_height or 40,
         "company_name": profile.gym_name or "",
+        # Empty strings mean "no override" — the frontend keeps its stock palette.
+        "primary_color": profile.primary_color or "",
+        "secondary_color": profile.secondary_color or "",
         "phone": profile.phone or "",
         "email": profile.email or "",
         "address": profile.address or "",

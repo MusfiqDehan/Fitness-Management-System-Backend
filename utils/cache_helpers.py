@@ -109,6 +109,11 @@ def stats_key(schema_name: str, view_name: str, scope: str) -> str:
     return f"stats:{schema_name}:{view_name}:{scope}"
 
 
+def platform_overview_key() -> str:
+    """Cache key for the Platform Admin overview dashboard payload."""
+    return "platform:overview"
+
+
 def tenant_overview_key() -> str:
     return "platform:tenant_overview:v1"
 
@@ -222,6 +227,7 @@ def invalidate_platform_settings() -> None:
 
 def invalidate_tenant_overview() -> None:
     cache.delete(tenant_overview_key())
+    cache.delete(platform_overview_key())
 
 
 def get_platform_settings_cached() -> dict[str, Any] | None:

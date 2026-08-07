@@ -8,7 +8,7 @@ from apps.attendance.services.realtime import publish_attendance_event
 
 
 class DeviceUserDeleteService:
-    """Queue hardware delete first; commit Fitssort delete only after device ACK success."""
+    """Queue hardware delete first; commit FitPulse delete only after device ACK success."""
 
     ACTION = "delete_user"
 

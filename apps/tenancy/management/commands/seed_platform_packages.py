@@ -166,7 +166,7 @@ PACKAGES = {
         "sort_order": 3,
         "badge_label": "",
         "cta_label": "Chat with Us",
-        "cta_url": "http://wa.me/+8801341869125",
+        "cta_url": "http://wa.me/+8801945475300",
         "setup_fee": "Tk. 9,990",
         "original_setup_fee": "",
         "original_price_monthly": None,

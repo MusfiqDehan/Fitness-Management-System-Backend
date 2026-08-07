@@ -6,7 +6,7 @@ from .views import (
     GymClassDetailView,
     PublicGymScheduleListView,
     ContactCreateAPIView,
-    FitHiveSupportCreateAPIView,
+    PlatformSupportCreateAPIView,
 )
 
 app_name = 'quick_action'
@@ -18,5 +18,5 @@ urlpatterns = [
     path("classes/", GymClassListCreateView.as_view()),
     path("classes/<int:pk>/", GymClassDetailView.as_view()),
     path("contact/", ContactCreateAPIView.as_view(), name="contact-create"),
-    path("fithive-support/", FitHiveSupportCreateAPIView.as_view(), name="fithive-support-create"),
+    path("platform-support/", PlatformSupportCreateAPIView.as_view(), name="platform-support-create"),
 ]

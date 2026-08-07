@@ -39,6 +39,17 @@ class RegistryItem(TypedDict, total=False):
 # Keys here MUST exist in `apps.tenancy.constants.PLATFORM_MODULES`.
 PLATFORM_REGISTRY: list[RegistryItem] = [
     {
+        "group": "Overview",
+        "children": [
+            {
+                "key": "platform.overview",
+                "name": "Overview",
+                "route": "/platform/overview",
+                "icon": "LayoutGrid",
+            },
+        ],
+    },
+    {
         "group": "Platform Admin",
         "children": [
             {
