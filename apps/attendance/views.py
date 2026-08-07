@@ -697,7 +697,7 @@ class FingerprintDeleteAPIView(APIView):
 
 		return Response(
 			{
-				"detail": "Delete queued. Fitssort will remove this identity after the device confirms.",
+				"detail": "Delete queued. FitPulse will remove this identity after the device confirms.",
 				"device_user_id": device_user.id,
 				"status": DeviceUser.STATUS_PENDING_DELETE,
 				"queued_command_ids": [entry["id"] for entry in queued],
