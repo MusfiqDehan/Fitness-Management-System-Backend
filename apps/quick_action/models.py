@@ -90,8 +90,8 @@ class Contact(models.Model):
     def __str__(self):
         return f"{self.name} - {self.subject}"
 
-# -- FitHive Support --
-class FitHiveSupport(models.Model):
+# -- Platform Support --
+class PlatformSupport(models.Model):
 
     STATUS_NEW = "new"
     STATUS_READ = "read"
@@ -120,7 +120,7 @@ class FitHiveSupport(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["status", "created_at"], name="idx_fithive_status_created"),
+            models.Index(fields=["status", "created_at"], name="idx_platform_status_created"),
         ]
 
     def __str__(self):
