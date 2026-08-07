@@ -9,7 +9,7 @@ from .models import (
     Blog,
     BlogCategory,
     Contact,
-    FitHiveSupport,
+    PlatformSupport,
     ClassBooking,
     Package, 
     PackageFeature, 
@@ -158,10 +158,10 @@ class ContactAdmin(admin.ModelAdmin):
 
 
 # -----------------------------
-# FitHive Support Admin
+# Platform Support Admin
 # -----------------------------
-@admin.register(FitHiveSupport)
-class FitHiveSupportAdmin(admin.ModelAdmin):
+@admin.register(PlatformSupport)
+class PlatformSupportAdmin(admin.ModelAdmin):
     list_display = (
         "name",
         "email",
