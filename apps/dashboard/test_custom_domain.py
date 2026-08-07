@@ -52,10 +52,10 @@ class DomainValidationTests(SimpleTestCase):
     def test_relative_txt_host(self):
         from apps.dashboard.custom_domain_views import _relative_txt_host
 
-        self.assertEqual(_relative_txt_host("example.com"), "_fitssort-verify")
+        self.assertEqual(_relative_txt_host("example.com"), "_fitpulse-verify")
         self.assertEqual(
             _relative_txt_host("hello-gym.musfiqdehan.com"),
-            "_fitssort-verify.hello-gym",
+            "_fitpulse-verify.hello-gym",
         )
 
     def test_rejects_bare_tld(self):
@@ -92,13 +92,13 @@ class DnsVerificationTests(SimpleTestCase):
     def test_matching_token_succeeds(self):
         token = "abc123"
         with self._patch_resolver(answers=[_fake_answer(token)]):
-            ok, error = verify_txt_record("_fitssort-verify.gym.example.com", token)
+            ok, error = verify_txt_record("_fitpulse-verify.gym.example.com", token)
         self.assertTrue(ok)
         self.assertEqual(error, "")
 
     def test_mismatched_token_fails(self):
         with self._patch_resolver(answers=[_fake_answer("wrong-value")]):
-            ok, error = verify_txt_record("_fitssort-verify.gym.example.com", "abc123")
+            ok, error = verify_txt_record("_fitpulse-verify.gym.example.com", "abc123")
         self.assertFalse(ok)
         self.assertNotEqual(error, "")
 
@@ -106,12 +106,12 @@ class DnsVerificationTests(SimpleTestCase):
         import dns.resolver
 
         with self._patch_resolver(exc=dns.resolver.NXDOMAIN()):
-            ok, error = verify_txt_record("_fitssort-verify.gym.example.com", "abc123")
+            ok, error = verify_txt_record("_fitpulse-verify.gym.example.com", "abc123")
         self.assertFalse(ok)
         self.assertNotEqual(error, "")
 
     def test_empty_token_rejected(self):
-        ok, error = verify_txt_record("_fitssort-verify.gym.example.com", "")
+        ok, error = verify_txt_record("_fitpulse-verify.gym.example.com", "")
         self.assertFalse(ok)
         self.assertNotEqual(error, "")
 
