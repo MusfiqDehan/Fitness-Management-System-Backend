@@ -1733,7 +1733,7 @@ class TenantMemberInviteAPIView(APIView):
 			tenant=tenant,
 			to_email=email,
 			purpose=EmailQueue.PURPOSE_INVITATION,
-			subject=f"You've been invited to {company_name} on Fithive",
+			subject=f"You've been invited to {company_name} on FitPulse",
 			template_name="tenancy/emails/member_invitation_email.html",
 			context={
 				"company_name": company_name,
