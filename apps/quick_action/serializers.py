@@ -7,7 +7,7 @@ from .models import (
     Blog,
     BlogCategory,
     Contact,
-    FitHiveSupport,
+    PlatformSupport,
     ClassBooking,
     Package,
     PackageFeature,
@@ -263,10 +263,10 @@ class ContactDashboardSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-# --- FitHive Support Serializer ---
-class FitHiveSupportCreateSerializer(serializers.ModelSerializer):
+# --- Platform Support Serializer ---
+class PlatformSupportCreateSerializer(serializers.ModelSerializer):
     class Meta:
-        model = FitHiveSupport
+        model = PlatformSupport
         fields = [
             "id",
             "name",
@@ -276,9 +276,9 @@ class FitHiveSupportCreateSerializer(serializers.ModelSerializer):
         ]
 
 
-class FitHiveSupportDashboardSerializer(serializers.ModelSerializer):
+class PlatformSupportDashboardSerializer(serializers.ModelSerializer):
     class Meta:
-        model = FitHiveSupport
+        model = PlatformSupport
         fields = "__all__"
 
 
