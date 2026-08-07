@@ -54,7 +54,7 @@ def render_expense_voucher_pdf(
     )
     description = _pdf_clean_text(expense.description or "No additional notes.")
     generated_by_name = _pdf_clean_text(generated_by or "System")
-    tenant_label = _pdf_clean_text(tenant_name or "Fithive")
+    tenant_label = _pdf_clean_text(tenant_name or "FitPulse")
     attachment_count = expense.attachments.count() if hasattr(expense, "attachments") else 0
 
     buffer = BytesIO()
